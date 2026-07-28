@@ -23,9 +23,9 @@ from design import DEFAULT_FACTOR_SPACE
 from audio_pipeline import apply_rir, mix_at_snr
 import conditions as C
 from conditions import (
-    Condition, AssetLibrary, RirAsset, NoiseAsset,
+    Condition, AssetLibrary, DiskAssetLibrary, RirAsset, NoiseAsset,
     apply_condition, apply_mic_rolloff, apply_codec,
-    MissingAssetError, CodecUnavailableError, _stable_seed,
+    MissingAssetError, CodecUnavailableError, _stable_seed, _rt60_schroeder,
 )
 
 FS = 16000
@@ -198,6 +198,62 @@ def test_codec_fails_loudly_without_ffmpeg():
     print("OK 7: AMR/Opus without ffmpeg -> loud CodecUnavailableError (tells you to install)")
 
 
+# --- 8: disk-backed library scans data/rirs + data/noise --------------------
+
+def test_disk_library_scans_and_resolves(tmp_root=None):
+    """Write tiny real wavs to a temp tree, scan them, and confirm the disk
+    library recovers RT60, groups noise by subdirectory, resamples to target_fs,
+    and drives apply_condition end-to-end (codec 'none', so no ffmpeg needed)."""
+    import tempfile, os
+    import soundfile as sf
+
+    with tempfile.TemporaryDirectory() as root:
+        rir_dir = os.path.join(root, "rirs")
+        os.makedirs(rir_dir)
+        # two exponential-decay RIRs at DIFFERENT source rates (exercise resample)
+        for rt, sr in ((0.3, 48000), (0.8, 16000)):
+            L = int(rt * sr)
+            decay = np.exp(-6.9 * (np.arange(L) / sr) / rt)
+            h = (np.random.default_rng(int(rt * 10)).standard_normal(L) * decay)
+            h[0] = 1.0
+            sf.write(os.path.join(rir_dir, f"room_rt{rt}.wav"), h, sr)
+        # noise grouped by subdirectory name = noise_type
+        for ntype in ("babble", "engine"):
+            nd = os.path.join(root, "noise", ntype)
+            os.makedirs(nd)
+            for i in range(2):
+                sf.write(os.path.join(nd, f"{ntype}_{i}.wav"),
+                         np.random.default_rng(i).standard_normal(FS), FS)
+
+        lib = DiskAssetLibrary(root=root, target_fs=FS)
+
+        # RT60 recovered close to truth, and the closest-match rule works
+        rts = sorted(r.rt60 for r in lib.rirs)
+        assert abs(rts[0] - 0.3) < 0.12 and abs(rts[1] - 0.8) < 0.15, rts
+        assert lib.pick_rir(0.85).rt60 == rts[1], "closest-RT60 pick wrong"
+        # noise typed by folder; road absent -> loud failure preserved
+        assert {n.noise_type for n in lib.noise} == {"babble", "engine"}
+        try:
+            lib.pick_noise("road", "seed")
+            assert False, "road noise should be missing"
+        except MissingAssetError:
+            pass
+        # loaded assets are at target_fs and mono
+        h, hfs = lib.load_rir(lib.pick_rir(0.3))
+        assert hfs == FS and h.ndim == 1
+        # full compose runs off disk assets (codec 'none')
+        out = apply_condition(make_clean(), Condition(0.3, 12.0, "babble", "none", 0.2), lib, FS)
+        assert len(out) == 3 * FS
+        # absent directory fails loudly
+        try:
+            DiskAssetLibrary(root=os.path.join(root, "nope"), target_fs=FS)
+            assert False, "missing data dir should raise"
+        except MissingAssetError:
+            pass
+    print("OK 8: DiskAssetLibrary scans data/rirs+data/noise, recovers RT60, "
+          "resamples, groups noise by folder, composes end-to-end")
+
+
 if __name__ == "__main__":
     test_schema_matches_factor_space()
     test_name_stable_and_roundtrips()
@@ -206,5 +262,6 @@ if __name__ == "__main__":
     test_deterministic_resolution()
     test_missing_asset_raises()
     test_codec_fails_loudly_without_ffmpeg()
+    test_disk_library_scans_and_resolves()
     print("\nAll condition tests passed — named, reproducible degradations compose "
           "the trap functions in the one correct order.")

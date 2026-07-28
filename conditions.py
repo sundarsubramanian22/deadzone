@@ -217,6 +217,128 @@ class AssetLibrary:
 
 
 # ---------------------------------------------------------------------------
+# Disk-backed library — scans data/rirs and data/noise
+# ---------------------------------------------------------------------------
+
+_AUDIO_EXTS = (".wav", ".flac", ".ogg", ".mp3")
+
+
+def _rt60_schroeder(h: np.ndarray, fs: int) -> float:
+    """
+    Estimate RT60 from a RIR via Schroeder backward integration (T20 extrapolated
+    to 60 dB). This is how we get a *measured* RT60 to key the closest-match rule
+    off — real RIR files carry no RT60 in-band. Standard method (ISO 3382 style):
+    fit the energy-decay curve between -5 and -25 dB, extrapolate the slope to 60.
+    """
+    h = np.asarray(h, dtype=np.float64)
+    h = h[np.argmax(np.abs(h)):]                     # start at the direct-path peak
+    energy = h ** 2
+    edc = np.cumsum(energy[::-1])[::-1]              # backward energy integral
+    edc = edc / (edc[0] + 1e-20)
+    edc_db = 10.0 * np.log10(edc + 1e-20)
+    # T20 window: -5 dB down to -25 dB
+    try:
+        i5 = int(np.argmax(edc_db <= -5.0))
+        i25 = int(np.argmax(edc_db <= -25.0))
+    except ValueError:
+        return float("nan")
+    if i25 <= i5:                                    # too short / no clean decay
+        return float("nan")
+    t = np.arange(i5, i25) / fs
+    slope = np.polyfit(t, edc_db[i5:i25], 1)[0]      # dB per second (negative)
+    if slope >= 0:
+        return float("nan")
+    return float(-60.0 / slope)
+
+
+class DiskAssetLibrary(AssetLibrary):
+    """
+    Populate the library from disk (SPEC §8 assets), then reuse AssetLibrary's
+    deterministic selection rules unchanged. Layout scanned:
+
+        data/rirs/*.wav|flac        measured RIRs; RT60 computed per file
+        data/noise/<type>/*.wav     noise clips, type = subdirectory name
+        data/noise/<type>_*.wav     (fallback) flat files, type = filename prefix
+
+    All assets are resampled ON LOAD to `target_fs` so the composer sees one rate
+    (real corpora — BUT ReverbDB, MUSAN, DEMAND — arrive at mixed rates). Fails
+    loudly if a directory is absent or empty, never silently degrades to nothing.
+    """
+
+    def __init__(self, root="data", target_fs=16000,
+                 rir_subdir="rirs", noise_subdir="noise"):
+        self.root = Path(root)
+        self.target_fs = int(target_fs)
+        self._cache: dict[str, np.ndarray] = {}      # key -> resampled samples
+        rirs = self._scan_rirs(self.root / rir_subdir)
+        noise = self._scan_noise(self.root / noise_subdir)
+        super().__init__(rirs=rirs, noise=noise)
+
+    # --- scanning ----------------------------------------------------------
+    @staticmethod
+    def _audio_files(d: Path):
+        return sorted(p for p in d.rglob("*")
+                      if p.is_file() and p.suffix.lower() in _AUDIO_EXTS)
+
+    def _scan_rirs(self, d: Path) -> list[RirAsset]:
+        if not d.is_dir():
+            raise MissingAssetError(
+                f"RIR directory {d} does not exist — download measured RIRs "
+                f"(BUT ReverbDB) into it (SPEC §8), or use an in-memory library"
+            )
+        assets = []
+        for p in self._audio_files(d):
+            h, fs = self._read(p)
+            rt = _rt60_schroeder(h, fs)
+            if not np.isfinite(rt):                  # unusable RIR — say so, skip
+                print(f"[DiskAssetLibrary] WARN: RT60 unestimable for {p} — skipped")
+                continue
+            key = str(p)
+            self._cache[key] = h                     # already at target_fs
+            assets.append(RirAsset(key=key, rt60=rt, data=None, fs=self.target_fs))
+        if not assets:
+            raise MissingAssetError(f"no usable RIRs found under {d}")
+        return assets
+
+    def _scan_noise(self, d: Path) -> list[NoiseAsset]:
+        if not d.is_dir():
+            raise MissingAssetError(
+                f"noise directory {d} does not exist — download noise (MUSAN, "
+                f"DEMAND) into data/noise/<type>/ (SPEC §8)"
+            )
+        assets = []
+        for p in self._audio_files(d):
+            parent = p.parent
+            ntype = parent.name if parent != d else p.stem.split("_")[0].split("-")[0]
+            x, _ = self._read(p)
+            key = str(p)
+            self._cache[key] = x
+            assets.append(NoiseAsset(key=key, noise_type=ntype,
+                                     data=None, fs=self.target_fs))
+        if not assets:
+            raise MissingAssetError(f"no noise clips found under {d}")
+        return assets
+
+    # --- IO: read + resample to target_fs, mono -----------------------------
+    def _read(self, path: Path) -> tuple[np.ndarray, int]:
+        import soundfile as sf
+        x, fs = sf.read(str(path), dtype="float64")
+        if x.ndim > 1:
+            x = x.mean(axis=1)                        # collapse to mono
+        if fs != self.target_fs:
+            import librosa
+            x = librosa.resample(x, orig_sr=fs, target_sr=self.target_fs)
+        return np.asarray(x, dtype=np.float64), self.target_fs
+
+    # --- overrides: serve cached (already-resampled) samples ----------------
+    def load_rir(self, asset: RirAsset) -> tuple[np.ndarray, int]:
+        return self._cache[asset.key], self.target_fs
+
+    def load_noise(self, asset: NoiseAsset) -> tuple[np.ndarray, int]:
+        return self._cache[asset.key], self.target_fs
+
+
+# ---------------------------------------------------------------------------
 # Channel stages: mic frequency-response rolloff, then codec
 # ---------------------------------------------------------------------------
 
