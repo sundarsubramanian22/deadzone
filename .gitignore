@@ -1,0 +1,14 @@
+# Environments
+.venv/
+.env
+
+# Data & results (large / gitignored per SPEC §13)
+data/
+results/
+
+# Audio
+*.wav
+
+# Python
+__pycache__/
+*.py[cod]
