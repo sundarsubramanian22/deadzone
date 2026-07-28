@@ -100,6 +100,10 @@ report the **sim-vs-real gap** as its own finding (proves sim2real awareness).
 
 ## 5. Findings / analysis layers
 
+> *Model arms:* general-commercial **Nova-3** (spine) vs open **Whisper** now;
+> domain-tuned **nova-2-drivethru** is a planned third arm — not built, but a
+> one-line model-literal swap later given the matched adapter shape (see §7).
+
 1. **HEADLINE — confidence–accuracy gap (silent-failure map).** Deepgram returns
    word-level confidence for free. Plot confidence vs actual WER per condition;
    the deliverable is the **danger zone** — conditions where the model stays

@@ -17,6 +17,9 @@ Deps: numpy, scipy only. Text alignment is pure-python (cross-check against
 """
 
 from __future__ import annotations
+import os
+import time
+import math
 import re
 import numpy as np
 from scipy.signal import fftconvolve
@@ -237,33 +240,243 @@ def classify_errors(reference: str, hypothesis: str) -> dict:
     return {"wer": wer, "n_ref": nr, "counts": counts, "edits": edits}
 
 
-# ----------------------------------------------------------------------------
-# transcribe() adapter — NOT unit-tested here (needs your Deepgram key).
-# The important bit: pull BOTH the transcript and the per-word CONFIDENCE,
-# because the confidence-vs-accuracy danger-zone map is the headline finding.
-# ----------------------------------------------------------------------------
+# ============================================================================
+# TRANSCRIPTION ADAPTERS — one shape for every ASR model, so WERs compare.
+# ============================================================================
+#
+# CONTRACT. Every adapter returns exactly these keys, so Nova-3 and Whisper
+# outputs are drop-in interchangeable everywhere downstream:
+#
+#     {
+#       "transcript":       str,          # RAW model output (see normalization note)
+#       "word_confidences": list[float],  # per-word confidence, in transcript order
+#       "mean_conf":        float,        # mean of word_confidences (nan if none)
+#       "utterance_conf":   float,        # single utterance-level aggregate signal
+#     }
+#
+# On a persistent Deepgram failure the adapter returns a SENTINEL with the same
+# keys but ``transcript is None`` (plus an ``"error"`` string). The grid caller
+# checks ``result["transcript"] is None`` and logs+skips that clip instead of
+# crashing a several-hundred-clip run. Use ``is_failed()`` for the check.
+#
+# NORMALIZATION PARITY (why cross-model WER is meaningful).
+# ``transcript`` is the model's RAW text. It is never scored as-is: scoring goes
+# through classify_errors(), which runs BOTH reference and hypothesis through
+# the SAME normalize_text() before aligning. That is the single place text is
+# canonicalized, so Deepgram and Whisper are judged on identical rules. Two
+# reinforcing guarantees keep them comparable:
+#   1. Deepgram formatting is turned OFF (smart_format / punctuate / numerals =
+#      False) so its raw output is word-form ("fifty", not "50"), matching how
+#      Whisper is scored — normalize_text() strips punctuation/case but does NOT
+#      map digits<->words, so a formatted "50" vs "fifty" would survive as a
+#      spurious substitution. Killing formatting at the source prevents that.
+#   2. Both adapters feed the same classify_errors() path; neither pre-normalizes
+#      privately, so no adapter can canonicalize differently from the other.
+# ============================================================================
 
-def transcribe_deepgram(audio_path: str, api_key: str,
-                        model: str = "nova-3") -> dict:
+
+def _empty_confidence_result(transcript=None, error=None) -> dict:
+    """The failure sentinel (and shared empty shape). transcript=None => failed."""
+    return {
+        "transcript": transcript,
+        "word_confidences": [],
+        "mean_conf": float("nan"),
+        "utterance_conf": float("nan"),
+        "error": error,
+    }
+
+
+def is_failed(result: dict) -> bool:
+    """True if a transcribe adapter returned the skip-me sentinel."""
+    return result.get("transcript") is None
+
+
+# ---------------------------------------------------------------------------
+# Deepgram (spine — word confidence is the headline signal)
+# ---------------------------------------------------------------------------
+
+def _deepgram_kwargs(model: str) -> dict:
     """
-    Returns {'transcript': str, 'word_confidences': [float], 'mean_conf': float}.
+    The exact keyword args handed to the SDK's transcribe_file().
 
-    Requires `pip install deepgram-sdk`. Kept out of the tested core so the DSP
-    layer runs offline. Swap in Whisper with an equivalent return shape for your
-    open baseline.
+    Factored out so a test can assert, deterministically and offline, that raw
+    output is requested. smart_format/punctuate/numerals MUST stay False: we
+    score against normalize_text(), which does not reconcile "50" vs "fifty",
+    so formatted output would inflate WER as pure formatting noise.
     """
-    from deepgram import DeepgramClient, PrerecordedOptions   # lazy import
+    return {
+        "model": model,
+        "smart_format": False,
+        "punctuate": False,
+        "numerals": False,
+    }
 
-    dg = DeepgramClient(api_key)
-    with open(audio_path, "rb") as f:
-        payload = {"buffer": f.read()}
-    opts = PrerecordedOptions(model=model, smart_format=True, punctuate=True)
-    resp = dg.listen.prerecorded.v("1").transcribe_file(payload, opts)
-    alt = resp["results"]["channels"][0]["alternatives"][0]
-    words = alt.get("words", [])
-    confs = [w.get("confidence", float("nan")) for w in words]
+
+def _response_to_wire_dict(resp) -> dict:
+    """
+    Normalize a Deepgram response to the plain wire-JSON dict our parser expects.
+
+    The SDK (v7+) returns a pydantic model; model_dump(by_alias=True) reproduces
+    the standard `results.channels[].alternatives[]` JSON. A canned dict (real
+    saved response, used in tests) passes straight through. So one pure-dict
+    parser serves both the live call and the offline tests.
+    """
+    if hasattr(resp, "model_dump"):
+        return resp.model_dump(by_alias=True, mode="json", exclude_none=True)
+    if isinstance(resp, dict):
+        return resp
+    raise TypeError(f"unexpected Deepgram response type: {type(resp)!r}")
+
+
+def _parse_deepgram_response(wire: dict) -> dict:
+    """Pure: standard Deepgram wire JSON -> the adapter contract dict."""
+    alt = wire["results"]["channels"][0]["alternatives"][0]
+    words = alt.get("words") or []
+    confs = [float(w["confidence"]) for w in words if w.get("confidence") is not None]
+    utt = alt.get("confidence")
     return {
         "transcript": alt.get("transcript", ""),
         "word_confidences": confs,
-        "mean_conf": float(np.nanmean(confs)) if confs else float("nan"),
+        "mean_conf": float(np.mean(confs)) if confs else float("nan"),
+        # utterance-level aggregate: a fallback signal for heavily degraded clips
+        # where per-word confidence may be sparse or missing entirely.
+        "utterance_conf": float(utt) if utt is not None else float("nan"),
     }
+
+
+# --- Deepgram SDK path (verified live, don't rediscover) --------------------
+# deepgram-sdk 7.6.0 is a FERN-REWRITTEN client — nothing like the 3.x/4.x docs.
+# WORKING call path (live-verified against the API):
+#     dg = DeepgramClient(api_key=key)
+#     resp = dg.listen.v1.media.transcribe_file(request=<bytes>, model="nova-3",
+#                                               smart_format=False, ...)
+#   * options are KEYWORD ARGS to transcribe_file, not a PrerecordedOptions obj.
+#   * resp is a pydantic model; resp.model_dump(by_alias=True) => standard wire
+#     JSON (results.channels[].alternatives[].{transcript,confidence,words[]}).
+#   * valid model literals include "nova-3" and "nova-2-drivethru" (domain-tuned).
+# DEAD — do NOT trust these (they raise ImportError/TypeError on 7.6.0):
+#     from deepgram import PrerecordedOptions          # gone
+#     dg.listen.prerecorded.v("1").transcribe_file(...) # gone
+#     DeepgramClient(key)  # positional arg rejected; use api_key=key
+def transcribe_deepgram(audio_path: str, api_key: str | None = None,
+                        model: str = "nova-3", max_retries: int = 3,
+                        backoff_base: float = 1.0, _transcribe_fn=None) -> dict:
+    """
+    Transcribe one file with Deepgram Nova-3, returning the adapter contract dict
+    (see the TRANSCRIPTION ADAPTERS banner). word_confidences is the headline
+    signal for the confidence-gap map.
+
+    Robustness for grid runs:
+      * API key comes from the DEEPGRAM_API_KEY env var (or the api_key arg);
+        never hardcode it.
+      * Up to `max_retries` attempts with exponential backoff
+        (backoff_base * 2**attempt seconds) so one flaky call doesn't kill a
+        multi-hundred-clip run.
+      * On persistent failure returns the sentinel (transcript=None) — check with
+        is_failed() and skip — rather than raising.
+
+    Raw output only: smart_format/punctuate/numerals are False (see
+    _deepgram_kwargs) so WER isn't polluted by formatting differences vs Whisper.
+
+    `_transcribe_fn` is a test seam: a zero-arg callable returning a response
+    (pydantic model or wire dict). Left None, the real SDK call is built.
+    """
+    api_key = api_key if api_key is not None else os.environ.get("DEEPGRAM_API_KEY")
+    if not api_key:
+        raise ValueError(
+            "DEEPGRAM_API_KEY not set (pass api_key= or export the env var)"
+        )
+
+    if _transcribe_fn is None:
+        def _transcribe_fn():
+            from deepgram import DeepgramClient          # lazy import
+            dg = DeepgramClient(api_key=api_key)
+            with open(audio_path, "rb") as f:
+                buf = f.read()
+            return dg.listen.v1.media.transcribe_file(
+                request=buf, **_deepgram_kwargs(model)
+            )
+
+    last_err = None
+    for attempt in range(max_retries):
+        try:
+            resp = _transcribe_fn()
+            return _parse_deepgram_response(_response_to_wire_dict(resp))
+        except Exception as e:          # noqa: BLE001 — grid resilience by design
+            last_err = e
+            if attempt < max_retries - 1:
+                time.sleep(backoff_base * (2 ** attempt))
+
+    return _empty_confidence_result(
+        error=f"deepgram failed after {max_retries} attempts: {last_err!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Whisper (open baseline — proves the study isn't API-locked)
+# ---------------------------------------------------------------------------
+
+def _parse_whisper_result(result: dict) -> dict:
+    """
+    Pure: an openai-whisper transcribe() result -> the adapter contract dict.
+
+    CONFIDENCE CAVEAT (read before comparing to Deepgram). Whisper exposes no
+    calibrated confidence. With word_timestamps=True each word carries a
+    `probability` (the decoder's token softmax prob) — we surface those as
+    word_confidences. They are NOT on the same scale as Deepgram's acoustic
+    confidence, so treat confidence WITHIN a model (Nova-3 vs itself across
+    conditions), not as an absolute cross-model number.
+
+    If per-word probabilities are absent (word_timestamps off / unsupported), we
+    do NOT fabricate them — word_confidences stays empty and mean_conf falls back
+    to the segment-level proxy exp(avg_logprob). utterance_conf is always that
+    segment proxy: mean over segments of exp(avg_logprob).
+    """
+    text = (result.get("text") or "").strip()
+    segments = result.get("segments") or []
+
+    word_confs: list[float] = []
+    for seg in segments:
+        for w in (seg.get("words") or []):
+            p = w.get("probability")
+            if p is not None:
+                word_confs.append(float(p))
+
+    seg_probs = [math.exp(seg["avg_logprob"])
+                 for seg in segments if seg.get("avg_logprob") is not None]
+    utt = float(np.mean(seg_probs)) if seg_probs else float("nan")
+
+    if word_confs:
+        mean_conf = float(np.mean(word_confs))
+    else:
+        # per-word confidence not exposed -> proxy, don't fake per-word values
+        mean_conf = utt
+
+    return {
+        "transcript": text,
+        "word_confidences": word_confs,
+        "mean_conf": mean_conf,
+        "utterance_conf": utt,
+    }
+
+
+def transcribe_whisper(audio_path: str, model_name: str = "base",
+                       _result=None) -> dict:
+    """
+    Transcribe one file with local openai-whisper, returning the SAME adapter
+    contract dict as transcribe_deepgram (see banner) so the two are directly
+    comparable. Read the confidence caveat in _parse_whisper_result.
+
+    Requires `pip install openai-whisper` (heavy: pulls torch); imported lazily
+    so the rest of the module stays light. faster-whisper users: adapt the call
+    to build the same {"text","segments":[{"avg_logprob","words":[{"probability"}]}]}
+    shape and reuse _parse_whisper_result.
+
+    `_result` is a test seam: a canned transcribe() result dict. Left None, the
+    model is loaded and run for real.
+    """
+    if _result is None:
+        import whisper                                   # lazy import
+        model = whisper.load_model(model_name)
+        _result = model.transcribe(audio_path, word_timestamps=True)
+    return _parse_whisper_result(_result)
