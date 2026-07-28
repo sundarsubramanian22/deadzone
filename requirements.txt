@@ -4,6 +4,7 @@ soundfile
 librosa
 pyroomacoustics
 deepgram-sdk
+SALib
 
 # Open baseline. Heavy (pulls torch); needed only to RUN transcribe_whisper.
 # Tests mock it, so it is not required to run the suite. Install when you wire

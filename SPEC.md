@@ -125,6 +125,17 @@ report the **sim-vs-real gap** as its own finding (proves sim2real awareness).
      (Choose if you'd rather analyze.)
 4. **SIM-VS-REAL gap** (see §4) — synthetic vs measured RIRs, quantified.
 
+> *Track-C design notes (from the synthetic-validation harness, `design.py`):*
+> - **Pre-registered expectation:** `rt60 × snr_db` (reverb × noise) is predicted
+>   to compound — a genuine 2-way interaction — *before* seeing any real data.
+>   Registering it now makes its confirmation (or absence) on the real grid a
+>   real result, not a post-hoc story.
+> - **S2 is noisy; lead with the ST−S1 gap.** Even with a strong *planted*
+>   interaction at N=1024, the second-order S2 bootstrap CI crossed zero. On the
+>   real grid, run the second-order pass at a **higher N**, and treat the
+>   **ST−S1 gap as the primary interaction evidence**, using S2 only to say
+>   *which* pair interacts, not *how much*.
+
 *Optional stretch (only if time):* does degradation hurt **Flux's end-of-turn
 detection** more than Nova-3's transcription? The WER literature uses isolated
 utterances and misses turn-taking failure entirely. Higher cost, higher reward,
