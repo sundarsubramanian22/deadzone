@@ -168,6 +168,13 @@ moment audio lands.
   reliability-diagram data. Synthetic-validated: recovers a planted overconfidence
   that grows with reverb (ECE cut to ~1/5). *Needs real audio:* word-level
   correctness + confidence per condition to fit the real calibrator.
+- **L3 — Paralinguistic-parallel features** (`paralinguistic.py`): a dependency-
+  light (numpy/scipy, CPU) extractor of energy/pitch/spectral features run
+  alongside transcription, + an analysis that asks whether paralinguistic features
+  and lexical accuracy degrade at the same rate or DECOUPLE. Synthetic-validated:
+  recovers planted pitch + a feature degrading on a known noise schedule, and
+  detects coupling/decoupling. *Needs real audio:* the recorded clips (per
+  degradation level) to measure the real decoupling.
 
 ## 6. Method / experimental design
 
