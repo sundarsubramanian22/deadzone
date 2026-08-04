@@ -175,6 +175,13 @@ moment audio lands.
   recovers planted pitch + a feature degrading on a known noise schedule, and
   detects coupling/decoupling. *Needs real audio:* the recorded clips (per
   degradation level) to measure the real decoupling.
+- **L4 — Voice-agent eval scaffold** (`agent_eval.py`): task-completion metrics
+  (slot/entity accuracy, entity-error rate, critical-slot failure) that diverge
+  from WER, + a turn-taking-failure analyzer (false endpoints / missed turns /
+  barge-in) over timestamped events. Structure only — NO live STT->LLM->TTS agent,
+  no LLM/TTS calls. Synthetic-validated: entity-error and WER disagree as designed
+  and planted turn failures are flagged. *Needs real audio + a live agent:* real
+  transcripts/timelines to score; makes the agent reframe drop-in.
 
 ## 6. Method / experimental design
 
