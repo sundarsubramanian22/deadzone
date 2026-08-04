@@ -162,6 +162,12 @@ moment audio lands.
   families) and asks whether the confidence-vs-WER *shape* differs. Synthetic-
   validated: recovers a planted weaker-model region. *Needs real audio:* per-model
   grid results to name the real divergent regions.
+- **L2 — Learned confidence calibration** (`calibration.py`): temperature-scaling
+  baseline + a feature-conditioned calibrator (confidence logit + acoustic params)
+  that corrects condition-dependent overconfidence; reports ECE before/after +
+  reliability-diagram data. Synthetic-validated: recovers a planted overconfidence
+  that grows with reverb (ECE cut to ~1/5). *Needs real audio:* word-level
+  correctness + confidence per condition to fit the real calibrator.
 
 ## 6. Method / experimental design
 
