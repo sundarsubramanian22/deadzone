@@ -11,7 +11,7 @@ output (smart_format/punctuate/numerals off).
 import sys
 from audio_pipeline import transcribe_deepgram, is_failed
 
-path = sys.argv[1] if len(sys.argv) > 1 else "data/recordings/sample_order.wav"
+path = sys.argv[1] if len(sys.argv) > 1 else "data/recordings/sample.wav"
 out = transcribe_deepgram(path)          # key from DEEPGRAM_API_KEY env
 
 if is_failed(out):

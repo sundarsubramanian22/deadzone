@@ -38,15 +38,15 @@ def canned_deepgram_wire():
     return {
         "metadata": {"request_id": "canned", "duration": 2.1},
         "results": {"channels": [{"alternatives": [{
-            "transcript": "two cheeseburgers and a large fry",
+            "transcript": "call maria at four zero five",
             "confidence": 0.981,
             "words": [
-                {"word": "two",          "start": 0.10, "end": 0.28, "confidence": 0.995},
-                {"word": "cheeseburgers","start": 0.28, "end": 0.92, "confidence": 0.951},
-                {"word": "and",          "start": 0.92, "end": 1.05, "confidence": 0.889},
-                {"word": "a",            "start": 1.05, "end": 1.12, "confidence": 0.972},
-                {"word": "large",        "start": 1.12, "end": 1.44, "confidence": 0.934},
-                {"word": "fry",          "start": 1.44, "end": 1.80, "confidence": 0.907},
+                {"word": "call",  "start": 0.10, "end": 0.28, "confidence": 0.995},
+                {"word": "maria", "start": 0.28, "end": 0.92, "confidence": 0.951},
+                {"word": "at",    "start": 0.92, "end": 1.05, "confidence": 0.889},
+                {"word": "four",  "start": 1.05, "end": 1.12, "confidence": 0.972},
+                {"word": "zero",  "start": 1.12, "end": 1.44, "confidence": 0.934},
+                {"word": "five",  "start": 1.44, "end": 1.80, "confidence": 0.907},
             ],
         }]}]}
     }
@@ -55,16 +55,16 @@ def canned_deepgram_wire():
 def canned_whisper_result():
     """openai-whisper transcribe() result with word_timestamps=True."""
     return {
-        "text": " Two cheeseburgers, and a large fry.",   # note DG-vs-Whisper formatting
+        "text": " Call Maria, at four zero five.",   # note DG-vs-Whisper formatting
         "segments": [{
             "avg_logprob": -0.15,
             "words": [
-                {"word": " Two",           "probability": 0.98},
-                {"word": " cheeseburgers,","probability": 0.93},
-                {"word": " and",           "probability": 0.90},
-                {"word": " a",             "probability": 0.97},
-                {"word": " large",         "probability": 0.95},
-                {"word": " fry.",          "probability": 0.91},
+                {"word": " Call",   "probability": 0.98},
+                {"word": " Maria,", "probability": 0.93},
+                {"word": " at",     "probability": 0.90},
+                {"word": " four",   "probability": 0.97},
+                {"word": " zero",   "probability": 0.95},
+                {"word": " five.",  "probability": 0.91},
             ],
         }],
     }
@@ -106,7 +106,7 @@ def test_deepgram_requests_raw_output():
     assert captured.get("punctuate") is False, captured
     assert captured.get("numerals") is False, captured
     assert isinstance(captured.get("request"), (bytes, bytearray)), type(captured.get("request"))
-    assert out["transcript"] == "two cheeseburgers and a large fry"
+    assert out["transcript"] == "call maria at four zero five"
     print("OK 1: raw output requested AND smart_format/punctuate/numerals=False reach the SDK call")
 
 
@@ -115,7 +115,7 @@ def test_deepgram_requests_raw_output():
 def test_deepgram_parse_contract():
     out = _parse_deepgram_response(canned_deepgram_wire())
     assert set(out.keys()) == CONTRACT_KEYS, out.keys()
-    assert out["transcript"] == "two cheeseburgers and a large fry"
+    assert out["transcript"] == "call maria at four zero five"
     assert len(out["word_confidences"]) == 6
     assert all(isinstance(c, float) for c in out["word_confidences"])
     assert abs(out["mean_conf"] - float(np.mean([0.995,0.951,0.889,0.972,0.934,0.907]))) < 1e-9
@@ -128,7 +128,7 @@ def test_deepgram_parse_contract():
 def test_whisper_parse_contract():
     out = _parse_whisper_result(canned_whisper_result())
     assert set(out.keys()) == CONTRACT_KEYS, out.keys()
-    assert out["transcript"] == "Two cheeseburgers, and a large fry."
+    assert out["transcript"] == "Call Maria, at four zero five."
     assert len(out["word_confidences"]) == 6
     assert abs(out["mean_conf"] - float(np.mean([0.98,0.93,0.90,0.97,0.95,0.91]))) < 1e-9
     assert abs(out["utterance_conf"] - math.exp(-0.15)) < 1e-9   # exp(avg_logprob)
@@ -149,7 +149,7 @@ def test_identical_schema():
 # --- 5: Whisper confidence is honest when per-word probs are absent ----------
 
 def test_whisper_no_word_probs_is_not_faked():
-    result = {"text": "large fry",
+    result = {"text": "four zero five",
               "segments": [{"avg_logprob": -0.30}]}   # no 'words' -> no per-word probs
     out = _parse_whisper_result(result)
     assert out["word_confidences"] == [], out["word_confidences"]   # NOT fabricated
@@ -193,7 +193,7 @@ def test_retry_then_success():
                               backoff_base=0.0, _transcribe_fn=fail_twice_then_ok)
     assert calls["n"] == 3, calls
     assert not is_failed(out)
-    assert out["transcript"] == "two cheeseburgers and a large fry"
+    assert out["transcript"] == "call maria at four zero five"
     print("OK 7: two transient failures then success -> real result (retry recovered)")
 
 
@@ -219,12 +219,12 @@ def test_missing_key_raises():
 def test_normalization_parity():
     dg = _parse_deepgram_response(canned_deepgram_wire())
     wh = _parse_whisper_result(canned_whisper_result())
-    # DG "two cheeseburgers and a large fry" vs Whisper "Two cheeseburgers, and a large fry."
+    # DG "call maria at four zero five" vs Whisper "Call Maria, at four zero five."
     # differ only in case/punctuation -> must canonicalize to the SAME tokens.
     assert normalize_text(dg["transcript"]) == normalize_text(wh["transcript"])
 
     # and the scoring path proves it: identical WER against the same reference.
-    ref = "two cheeseburgers and a large fry"
+    ref = "call maria at four zero five"
     assert classify_errors(ref, dg["transcript"])["wer"] == 0.0
     assert classify_errors(ref, wh["transcript"])["wer"] == 0.0
     print("OK 9: raw DG vs Whisper transcripts canonicalize identically -> WERs comparable")

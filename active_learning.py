@@ -127,8 +127,8 @@ class GPSurrogate:
 # Acquisition strategies
 # ---------------------------------------------------------------------------
 
-# The failure boundary we care about: the WER contour separating "the agent can
-# take this order" from "it can't". 0.5 is a sensible default; it is a parameter.
+# The failure boundary we care about: the WER contour separating "the model can
+# handle this condition" from "it can't". 0.5 is a sensible default; a parameter.
 DEFAULT_THRESHOLD = 0.5
 STRADDLE_KAPPA = 1.96      # Bryan et al. 2005 level-set active learning
 
@@ -382,7 +382,7 @@ def make_pipeline_oracle(clean_audio, ref_text: str, assets, fs: int = 16000,
     Wrap the real chain  apply_condition -> transcribe -> classify_errors  into an
     ``oracle(sample) -> WER`` so swapping synthetic->real is one line:
 
-        oracle = make_pipeline_oracle(clean_wav, "two spicy chicken sandwiches",
+        oracle = make_pipeline_oracle(clean_wav, "call maria at four zero five",
                                       asset_library)
         traj   = active_learn(oracle, DEFAULT_FACTOR_SPACE, strategy="boundary")
 

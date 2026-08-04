@@ -122,7 +122,7 @@ class FactorSpace:
         return list(factor.levels)
 
 
-# The drive-thru factor space (SPEC §4/§6): three in-scope factor families.
+# The Deadzone factor space (SPEC §4/§6): three in-scope acoustic factor families.
 DEFAULT_FACTOR_SPACE = FactorSpace([
     Factor("rt60",        "continuous", low=0.2, high=1.0, degradation="up"),   # reverb/placement
     Factor("snr_db",      "continuous", low=0.0, high=25.0, degradation="down"),# noise level

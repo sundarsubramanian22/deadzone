@@ -70,10 +70,13 @@ def test_rir_alignment_and_level():
 
 # --- TRAP 3: aligned edit types, not just a WER scalar -----------------------
 def test_error_classification():
-    # ref vs hyp designed to contain exactly 1 sub, 1 del, 1 ins
-    ref = "two spicy chicken sandwiches and a large sprite"
-    hyp = "two spicy chicken sandwich a large diet sprite"
-    #        match match  match    SUB       DEL('and') match match INS('diet') match
+    # ref vs hyp designed to contain exactly 1 sub, 1 del, 1 ins.
+    # The del ('the') and ins ('next') sit far apart, so the shifted indel
+    # alignment (cost 3) strictly beats the positional all-sub path (cost 6) —
+    # the sub/del/ins breakdown is therefore unambiguous.
+    ref = "email daniel the report before noon this friday"
+    hyp = "email dan report before noon this next friday"
+    #        match  SUB   DEL('the') match  match match match INS('next') match
     out = classify_errors(ref, hyp)
     c = out["counts"]
     assert c["sub"] == 1, c
@@ -83,7 +86,7 @@ def test_error_classification():
     assert abs(out["wer"] - 3 / 8) < 1e-9, out["wer"]
 
     # perfect match -> 0 WER, and normalization ignores case/punctuation
-    perfect = classify_errors("Large Fry.", "large fry")
+    perfect = classify_errors("Room 4B.", "room 4b")
     assert perfect["wer"] == 0.0
     print("TRAP 3 ok: 1 sub / 1 del / 1 ins recovered, WER=3/8, norm robust")
 

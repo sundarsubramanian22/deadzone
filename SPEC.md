@@ -1,4 +1,4 @@
-# Drive-Thru ASR Silent-Failure Map — Project Spec
+# Deadzone — Streaming-ASR Silent-Failure Map — Project Spec
 
 > Self-contained brief. Anyone (human or agent) who reads only this file should
 > understand what we're building, why, what's done, and what to do next.
@@ -7,35 +7,37 @@
 
 ## 0. TL;DR
 
-Build a controlled instrument that maps **where a commercial voice model fails
-*silently*** in a drive-thru acoustic regime — i.e. conditions where it stays
+Deadzone is a controlled instrument that maps **where a streaming ASR model fails
+*silently*** under acoustic degradation — i.e. conditions where it stays
 *confident while being wrong* — plus **what kind of failure** each condition
 produces, and a **cheap early-warning signal** for it. Raw "how much does WER go
 up" attribution is the baseline layer, not the point. Deliverables: a runnable
 repo, a short technical write-up with an honest lit review + limitations, and an
-interactive dashboard. Target effort ~40 hrs (full version).
+interactive dashboard. It is domain-neutral: any streaming ASR model, any
+acoustic environment. Target effort ~40 hrs (full version).
 
 ---
 
 ## 1. Why this project exists (context)
 
-- **Goal.** Land a research-lens internship on Deepgram's **Applied AI Verticals**
-  team (headed by **Pranav Bachu**, with ex-**OfOne** engineers — OfOne was the
-  drive-thru voice-AI startup Deepgram acquired; now "Deepgram for Restaurants").
-- **The bar.** The project must prove three things: (a) can build & ship
-  independently, (b) is curious and reads the field, (c) knows where their own
-  instrument stops being trustworthy. It does **not** need to be novel research —
-  competence + judgment + fit-to-their-problem beats novelty.
-- **The two open problems Pranav named** (this project attacks both):
-  1. Their drive-thru mics (Popeyes, Krispy Kreme) sit at ~5% WER and **nobody
-     knows the cause** — mic type? placement? noise? codec? In real recordings
-     every factor moves at once, so causes are confounded and un-isolable.
-  2. Audio that **sounds clean to a human** is sometimes transcribed **badly** by
-     the model, and vice-versa — the human/model perception mismatch.
-- **Why a simulation, not real data.** We can't get their Popeyes recordings.
-  A controlled rig does the one thing real data *can't*: hold everything fixed
-  and turn one knob → **counterfactual isolation**. Fidelity is explicitly not
-  the goal; isolation is.
+- **The problem.** Streaming-ASR robustness is under-characterized. Models are
+  reported at an **aggregate WER**, but that single number hides *where* and *how*
+  a model fails — which acoustic conditions break it, what kind of error each one
+  produces, and whether the model *knows* it is failing. Deployments live and die
+  on exactly the tail conditions the aggregate averages away.
+- **The instrument.** Deadzone is a controlled rig for **causal attribution of
+  acoustic failure**: hold everything fixed, turn one acoustic knob, and measure
+  what moves. That is the one thing real-world recordings *can't* give you — in
+  the field every factor (mic, placement, noise, codec) moves at once, so causes
+  are confounded and un-isolable.
+- **Why a simulation, not field data.** A controlled rig does the one thing real
+  data can't: **counterfactual isolation** — vary a single factor with everything
+  else held constant. Fidelity to any one deployment is explicitly *not* the goal;
+  isolation is. (The sim-vs-real gap is then measured and reported honestly — §4.)
+- **The bar the project sets itself.** (a) build & ship an end-to-end instrument
+  independently, (b) engage honestly with the ASR-robustness literature, (c) know
+  exactly where the instrument stops being trustworthy. Competence + judgment +
+  honest boundaries over any claim of novelty.
 
 ## 2. Core idea / intellectual framing
 
@@ -45,11 +47,12 @@ Descriptive benchmarking is never interesting. Interesting work is **predictive*
 the same generated data.
 
 **The reframe that carries the project:** stop asking "how much does the model
-break?" Ask **"does the model *know* it's breaking?"** For a voice agent taking
-orders, a *confidently wrong* model is far more dangerous than one that knows
-it's struggling — confidence is what decides whether it says "one large fry" or
-"sorry, can you repeat that?" That turns a benchmark into a study of **silent
-failures**, which is product-critical and under-studied.
+break?" Ask **"does the model *know* it's breaking?"** For a streaming voice
+agent, a *confidently wrong* model is far more dangerous than one that knows it's
+struggling — confidence is what decides whether the system commits to a wrong
+transcript or asks the speaker to repeat. That turns a benchmark into a study of
+**silent failures** — the "dead zones" where the model is confidently wrong —
+which is product-critical and under-studied.
 
 ## 3. Prior work (position honestly — do NOT claim novelty)
 
@@ -70,18 +73,20 @@ the work reads as informed, not naive:
 - Far-field ASR lineage: RIR-augmentation (Ko et al. 2017), Google Home far-field
   (Kim et al. 2017), REVERB / CHiME challenges, pyroomacoustics (Scheibler 2018).
 
-**Where our contribution actually lives (not novelty of method):** the *specific
-applied domain* (drive-thru / QSR ordering), the *specific commercial models*
-(Deepgram Nova-3, Flux) that the literature — which uses Whisper/Conformer/
-wav2vec — doesn't test, and *actionable deployment guidance* rather than mere
-characterization.
+**Where the contribution actually lives (not novelty of method):** the framing
+shift from *how much* to *silently* (the confidence–accuracy gap as the headline
+deliverable), the mechanism layer (typed failure *fingerprints* rather than a
+scalar WER), the active-learning surrogate that maps the failure boundary in far
+fewer evaluations than a grid, and testing **commercial streaming models** that
+expose per-word confidence — where the literature mostly uses Whisper / Conformer
+/ wav2vec — with *actionable guidance* rather than mere characterization.
 
 ## 4. Scope
 
 **In scope:** three cleanly-modelable factor families —
 - **Reverb / placement** (via real measured RIRs; each RIR proxies a room+distance)
 - **Noise type × SNR** (real recorded engine/road/babble)
-- **Channel** (mic frequency-response filter + intercom codec/bitrate)
+- **Channel** (mic frequency-response filter + intercom/VoIP codec/bitrate)
 
 **Out of scope — and stated out loud as the honest boundary:**
 - **Behavioral / human factors we deliberately bracket out:** accent &
@@ -90,7 +95,7 @@ characterization.
   noise doesn't just mask the signal, it changes how it's *produced*). No acoustic
   simulator captures these because they're behaviors, not rooms. Naming this
   boundary is a bigger competence signal than any simulation detail. Framing:
-  "here's what I isolated in sim; these human factors are exactly where your real
+  "here's what I isolated in sim; these human factors are exactly where real field
   recordings would earn their keep."
 
 **Realism principle:** use *real* ingredients (measured RIRs, recorded noise),
@@ -100,29 +105,33 @@ report the **sim-vs-real gap** as its own finding (proves sim2real awareness).
 
 ## 5. Findings / analysis layers
 
-> *Model arms:* general-commercial **Nova-3** (spine) vs open **Whisper** now;
-> domain-tuned **nova-2-drivethru** is a planned third arm — not built, but a
-> one-line model-literal swap later given the matched adapter shape (see §7).
+> *Model arms:* a commercial streaming model exposing per-word confidence
+> (**Nova-3** in the reference adapter) is the spine, vs open **Whisper** as the
+> API-independent baseline. A domain-tuned model literal (e.g. `nova-2-drivethru`)
+> is a planned third arm — not built, but a one-line model-literal swap later
+> given the matched adapter shape (see §7).
 
-1. **HEADLINE — confidence–accuracy gap (silent-failure map).** Deepgram returns
-   word-level confidence for free. Plot confidence vs actual WER per condition;
-   the deliverable is the **danger zone** — conditions where the model stays
-   confident while failing. "Here are the exact drive-thru conditions where your
-   model is confidently wrong." Near-zero added cost.
+1. **HEADLINE — confidence–accuracy gap (silent-failure map).** A streaming model
+   that returns word-level confidence gives it up for free. Plot confidence vs
+   actual WER per condition; the deliverable is the **danger zone** — conditions
+   where the model stays confident while failing. "Here are the exact acoustic
+   conditions where the model is confidently wrong." Near-zero added cost.
 2. **MECHANISM — failure fingerprints.** Don't count errors, *classify* them from
    the aligned edits: reverb → deletions? babble → substitutions? codec → killed
-   menu proper-nouns? Each condition gets an error *signature*, and each signature
-   implies a fix (proper-noun subs under babble → keyword boosting; deletions
-   under reverb → dereverberation).
-3. **THIRD LEG — pick one (OPEN DECISION, see §12):**
-   - *Predictor:* regress WER from cheap acoustic params (C50, DRR, RT60, SNR,
-     spectral tilt) **without running the ASR** → real-time risk flag. Descriptive
-     → predictive. (Choose if you'd rather build.)
+   proper-nouns / entities? Each condition gets an error *signature*, and each
+   signature implies a fix (proper-noun subs under babble → keyword boosting;
+   deletions under reverb → dereverberation).
+3. **THIRD LEG — surrogate + interaction hunt (BUILT).**
+   - *Active-learning surrogate:* a lightweight GP predicts WER from condition
+     parameters and *actively chooses* which conditions to evaluate next
+     (straddle / boundary-seeking acquisition), mapping the failure boundary in
+     far fewer oracle calls than random/grid sampling. Descriptive → predictive.
+     (`active_learning.py`.)
    - *Interaction hunt:* find the non-monotonic / counterintuitive cells (mild
      denoise + reverb worse than either alone; a noise condition that *improves*
      WER by nudging toward the training distribution — the "denoising hinders"
      effect with a mechanism). One well-explained surprise > ten expected results.
-     (Choose if you'd rather analyze.)
+     (`design.py`.)
 4. **SIM-VS-REAL gap** (see §4) — synthetic vs measured RIRs, quantified.
 
 > *Track-C design notes (from the synthetic-validation harness, `design.py`):*
@@ -136,10 +145,10 @@ report the **sim-vs-real gap** as its own finding (proves sim2real awareness).
 >   **ST−S1 gap as the primary interaction evidence**, using S2 only to say
 >   *which* pair interacts, not *how much*.
 
-*Optional stretch (only if time):* does degradation hurt **Flux's end-of-turn
-detection** more than Nova-3's transcription? The WER literature uses isolated
-utterances and misses turn-taking failure entirely. Higher cost, higher reward,
-maps to their crown-jewel model. Flag as stretch, not spine.
+*Optional stretch (only if time):* does degradation hurt a streaming model's
+**end-of-turn / turn-taking detection** more than its transcription? The WER
+literature uses isolated utterances and misses turn-taking failure entirely.
+Higher cost, higher reward. Flag as stretch, not spine.
 
 ## 6. Method / experimental design
 
@@ -149,8 +158,9 @@ maps to their crown-jewel model. Flag as stretch, not spine.
 - **Sobol / Latin-hypercube sample** the survivors instead of a dense grid.
 - Report **variance-based sensitivity (Sobol indices)** — this *is* Finding-1
   attribution, stated more rigorously than ANOVA — with **bootstrap CIs** on WER.
-- Run every clip through **Nova-3** (spine; confidence is the headline signal)
-  **and Whisper** (open baseline — shows you benchmark, aren't API-dependent).
+- Run every clip through the **commercial streaming model** (spine; confidence is
+  the headline signal) **and Whisper** (open baseline — shows you benchmark, aren't
+  API-dependent).
 
 ## 7. Pipeline core — ALREADY BUILT & TESTED (`audio_pipeline.py`)
 
@@ -170,23 +180,25 @@ if subtly wrong, with no error message. Do **not** reintroduce these bugs:
   can't tell you *what kind* of error. Normalizes both ref & hyp identically
   (casing/punctuation swing WER by points otherwise).
 
-`transcribe_deepgram()` is the API adapter (needs your key; kept out of the
-tested core so DSP runs offline). It returns transcript **+ word_confidences** —
-the confidences are the headline; verify they come back non-empty on day one.
+`transcribe_deepgram()` is the streaming-ASR API adapter (needs your key; kept out
+of the tested core so DSP runs offline). It returns transcript **+
+word_confidences** — the confidences are the headline; verify they come back
+non-empty on day one.
 
 Tests live in `test_pipeline.py`, run fully offline on synthetic signals:
 `python3 test_pipeline.py` → all three verified.
 
 ## 8. Data assets + recording protocol
 
-- **Speech:** record ~40–50 short drive-thru orders with real menu proper-nouns
-  ("two spicy chicken sandwiches, a large Sprite, side of mac"). Proper-noun
-  handling is the interesting failure mode and Deepgram's entity focus. TTS is an
-  acceptable fallback; skip LibriSpeech (wrong domain, no menu vocab).
+- **Speech:** record ~40–50 short domain-neutral utterances loaded with the same
+  stress cases (proper nouns, personal names, addresses, alphanumeric codes,
+  varied length) so it exercises entity/number failure modes — the interesting
+  failure mode and where commercial models focus their entity handling. TTS is an
+  acceptable fallback; skip generic read-speech corpora (no entity/number stress).
 - **RIRs:** BUT ReverbDB (real measured) + pyroomacoustics (synthetic, for the gap).
 - **Noise:** MUSAN + a few real traffic/engine clips (e.g. DEMAND).
-- **Recording rules:** mono; 16 kHz or 48 kHz (resample-friendly); one order per
-  file; **quiet room** — source must be CLEAN, all degradation is added
+- **Recording rules:** mono; 16 kHz or 48 kHz (resample-friendly); one utterance
+  per file; **quiet room** — source must be CLEAN, all degradation is added
   synthetically, so captured room noise is contamination you can't remove.
   Transcribe each clip **as you record it** — batching later is where reference-
   transcript errors (the one bug tests can't catch) creep in.
@@ -198,9 +210,9 @@ that **consumes multiple assets together** is a join point and must wait.
 
 ```
 Track A  Data acquisition          ─┐  (fully parallel, START NOW, ~5h)
-  A1 record orders + transcripts    │
+  A1 record utterances + transcripts│
   A2 download RIRs / noise          │
-  A3 Deepgram key + confidence test │
+  A3 ASR key + confidence test      │
                                     │
 Track B  Pipeline core            ─┤  (parallel w/ A, ~8–12h)
   B1 trap functions [DONE]          │
@@ -222,7 +234,7 @@ Track C  Experiment design        ─┘  (parallel w/ B — test on SYNTHETIC
 Track D  Analysis (all read the SAME table, parallel w/ each other, ~10–14h)
   D1 confidence-gap map (HEADLINE)
   D2 failure fingerprints
-  D3 third leg (predictor | interactions)
+  D3 third leg (active-learning surrogate | interactions)
   D4 sim2real gap
             │
             ▼
@@ -255,8 +267,8 @@ bottlenecks.
 1. **Own the pipeline core.** Read `audio_pipeline.py`, run `test_pipeline.py`,
    understand *why* each trap function does what it does. Swap the energy VAD for
    `silero-vad` before trusting real data.
-2. **Start Track A now** (parallel, no code needed): record orders, download
-   RIRs/noise, get the Deepgram key and confirm word-confidences return non-empty.
+2. **Start Track A now** (parallel, no code needed): record utterances, download
+   RIRs/noise, get the ASR key and confirm word-confidences return non-empty.
 3. **Smoke test (JOIN 1):** one clip → `apply_rir` → `mix_at_snr` → save wav →
    `transcribe_deepgram` → `classify_errors` → one correct
    `(condition, wer, mean_conf, edit_counts)` row.
@@ -265,30 +277,28 @@ bottlenecks.
 
 ## 12. Open decisions / risks
 
-- **DECIDE: third leg** = predictor (build) or interaction hunt (analyze). Changes
-  D3 and part of C.
-- **VERIFY day one:** Deepgram returns per-word confidence on your plan. If empty,
-  the headline finding is blocked — resolve before building further.
+- **VERIFY day one:** the streaming ASR model returns per-word confidence on your
+  plan. If empty, the headline finding is blocked — resolve before building further.
 - **Risk:** ground-truth transcript errors are invisible to tests → transcribe
   carefully at record time.
-- **Risk:** simulation ≠ real drive-thru → this is *answered*, not hidden, by the
+- **Risk:** simulation ≠ real acoustics → this is *answered*, not hidden, by the
   sim2real gap finding + the §4 boundary section.
 
 ## 13. Suggested repo layout
 
 ```
-drivethru-asr/
+deadzone/
   CLAUDE.md              # persistent agent context (points here)
   SPEC.md               # this file
   audio_pipeline.py     # trap functions + adapters  [DONE]
   test_pipeline.py      # offline unit tests          [DONE]
   conditions.py         # B3: named degradation configs
   design.py             # C: factorial screen + Sobol + sensitivity
+  active_learning.py    # D3: active-learning surrogate + acquisition
   run_experiment.py     # ⋈2: loop → master results table (parquet/csv)
   analysis/
     confidence_gap.py   # D1 headline
     fingerprints.py     # D2 mechanism
-    third_leg.py        # D3 predictor | interactions
     sim2real.py         # D4
   dashboard/            # E2
   data/                 # gitignored: rirs/, noise/, recordings/

@@ -1,5 +1,5 @@
 """
-audio_pipeline.py — the correctness-critical core of the drive-thru WER testbed.
+audio_pipeline.py — the correctness-critical core of the Deadzone WER testbed.
 
 Three functions here are where silent bugs live. Each one produces clean-looking
 GARBAGE if you get it subtly wrong, with no error message. They are implemented
@@ -181,7 +181,7 @@ def normalize_text(s: str) -> list[str]:
     TRAP THIS AVOIDS: casing, punctuation, and number formatting swing WER by
     points. Normalize BOTH reference and hypothesis identically or your
     attribution ranks your own formatting bugs, not acoustics. Extend the
-    number map for menu vocab as needed ("2" vs "two", "lg" vs "large", ...).
+    number/symbol map for domain vocab as needed ("2" vs "two", "st" vs "street", ...).
     """
     s = s.lower()
     s = re.sub(r"[^\w\s]", " ", s)           # drop punctuation
@@ -353,7 +353,8 @@ def _parse_deepgram_response(wire: dict) -> dict:
 #   * options are KEYWORD ARGS to transcribe_file, not a PrerecordedOptions obj.
 #   * resp is a pydantic model; resp.model_dump(by_alias=True) => standard wire
 #     JSON (results.channels[].alternatives[].{transcript,confidence,words[]}).
-#   * valid model literals include "nova-3" and "nova-2-drivethru" (domain-tuned).
+#   * valid model literals include "nova-3" and "nova-2-drivethru" (a real
+#     domain-tuned model arm — kept as a swappable literal, not a project focus).
 # DEAD — do NOT trust these (they raise ImportError/TypeError on 7.6.0):
 #     from deepgram import PrerecordedOptions          # gone
 #     dg.listen.prerecorded.v("1").transcribe_file(...) # gone
