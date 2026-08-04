@@ -150,6 +150,19 @@ report the **sim-vs-real gap** as its own finding (proves sim2real awareness).
 literature uses isolated utterances and misses turn-taking failure entirely.
 Higher cost, higher reward. Flag as stretch, not spine.
 
+### Advanced layers (built + synthetic-validated; real path wired, awaiting audio)
+
+These consume the master results table / real recordings but their machinery is
+built and validated against planted synthetic structure now, so they drop in the
+moment audio lands.
+
+- **L1 — Multi-model comparison** (`model_compare.py`): a one-line-per-model
+  registry (Deepgram / Whisper / Vosk arms) + cross-model dead-zone comparison
+  that normalizes confidence *within* each model (scales aren't comparable across
+  families) and asks whether the confidence-vs-WER *shape* differs. Synthetic-
+  validated: recovers a planted weaker-model region. *Needs real audio:* per-model
+  grid results to name the real divergent regions.
+
 ## 6. Method / experimental design
 
 - Factors × levels across the three in-scope families.

@@ -481,3 +481,64 @@ def transcribe_whisper(audio_path: str, model_name: str = "base",
         model = whisper.load_model(model_name)
         _result = model.transcribe(audio_path, word_timestamps=True)
     return _parse_whisper_result(_result)
+
+
+# ---------------------------------------------------------------------------
+# Vosk (third arm — offline Kaldi model; a DIFFERENT model FAMILY on purpose)
+# ---------------------------------------------------------------------------
+# Adding a model = write a `_parse_*` + a `transcribe_*` in this shape, then add
+# one line to model_compare.MODEL_REGISTRY. Vosk is CPU-only and exposes per-word
+# confidence, so it is a genuine third confidence source — but on its OWN scale,
+# NOT comparable in absolute terms to Deepgram's or Whisper's (see model_compare).
+
+def _parse_vosk_result(result: dict) -> dict:
+    """
+    Pure: a Vosk KaldiRecognizer FinalResult() dict -> the adapter contract dict.
+
+    Vosk (with SetWords(True)) returns
+        {"text": "...", "result": [{"word": w, "conf": c, "start":.., "end":..}, ...]}
+    We surface each ``conf`` as a word confidence. Vosk has NO separate
+    utterance-level aggregate, so utterance_conf reuses the mean of the per-word
+    confidences (documented; never fabricated — nan when there are no words).
+    """
+    words = result.get("result") or []
+    confs = [float(w["conf"]) for w in words if w.get("conf") is not None]
+    mean_conf = float(np.mean(confs)) if confs else float("nan")
+    return {
+        "transcript": result.get("text", ""),
+        "word_confidences": confs,
+        "mean_conf": mean_conf,
+        "utterance_conf": mean_conf,     # Vosk exposes no separate utterance conf
+    }
+
+
+def transcribe_vosk(audio_path: str, model_path: str | None = None,
+                    _result=None) -> dict:
+    """
+    Transcribe one file with a local Vosk (Kaldi) model, returning the SAME
+    adapter contract dict as the other arms. Offline, CPU-only, dependency-light
+    (`pip install vosk`, download a small model). Imported lazily so the module
+    stays importable with zero ASR deps.
+
+    Confidence caveat: Vosk word ``conf`` is on its own scale — compare it WITHIN
+    Vosk across conditions, never as an absolute number against another family
+    (the whole point of model_compare's within-model normalization).
+
+    `_result` is a test seam: a canned FinalResult() dict. Left None, the model is
+    loaded and run over the wav's PCM frames for real.
+    """
+    if _result is None:
+        import json                                      # lazy imports
+        import wave
+        from vosk import Model, KaldiRecognizer
+        model = Model(model_path) if model_path else Model(lang="en-us")
+        with wave.open(audio_path, "rb") as wf:
+            rec = KaldiRecognizer(model, wf.getframerate())
+            rec.SetWords(True)
+            while True:
+                data = wf.readframes(4000)
+                if not data:
+                    break
+                rec.AcceptWaveform(data)
+            _result = json.loads(rec.FinalResult())
+    return _parse_vosk_result(_result)
