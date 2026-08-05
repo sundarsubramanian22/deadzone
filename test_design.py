@@ -71,7 +71,16 @@ def test_sobol_recovers_planted_interaction():
 
     top_pair = set(res["s2_ranked"][0]["pair"])
     assert top_pair == {"rt60", "snr_db"}, res["s2_ranked"][:3]
-    assert res["s2_ranked"][0]["S2"] > 0.02, res["s2_ranked"][0]
+    # NOT a magnitude threshold. SPEC §5: S2 says WHICH pair interacts, never HOW
+    # MUCH -- its bootstrap CI crossed zero even with this planted interaction at
+    # N=1024, so asserting a floor on its value would be testing noise. The
+    # ranking above is the only claim S2 is allowed to support; we check it is
+    # positive and that its own CI is reported as wide enough to bar a magnitude
+    # reading.
+    assert res["s2_ranked"][0]["S2"] > 0.0, res["s2_ranked"][0]
+    assert res["s2_ranked"][0]["S2_conf"] > res["s2_ranked"][0]["S2"], (
+        "if S2's CI ever tightens below its estimate, revisit SPEC §5's guidance "
+        "that S2 magnitude is unusable")
 
     # the two interactors carry the largest ST - S1 gaps; the pure main-effect
     # factors (noise/codec/mic) sit well below them.

@@ -335,7 +335,7 @@ def test_gap_distribution_and_correlation():
     # confidence is planted BLIND to reverb: within a fixed SNR the gap must grow
     # with rt60 while mean_conf stays put.
     snr_bins = [d for d in dist if d["factor"] == "snr_db"]
-    assert max(snr_bins, key=lambda d: d["mean_conf"])["span"][0] >= 18.0
+    assert max(snr_bins, key=lambda d: d["mean_conf"])["span"][0] >= 15.0
 
     # codec and mic_rolloff are CONSTANT in this table: a single bin holding 100%
     # of the conditions is the whole table, not a region, and must not be listed

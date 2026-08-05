@@ -125,7 +125,15 @@ class FactorSpace:
 # The Deadzone factor space (SPEC §4/§6): three in-scope acoustic factor families.
 DEFAULT_FACTOR_SPACE = FactorSpace([
     Factor("rt60",        "continuous", low=0.2, high=1.0, degradation="up"),   # reverb/placement
-    Factor("snr_db",      "continuous", low=0.0, high=25.0, degradation="down"),# noise level
+    # HIGH IS 20, NOT 25, AND THAT IS A MEASUREMENT NOT A PREFERENCE. The corpus's
+    # measured inherent SNR is ~25-28 dB (report/measurements.md): room noise
+    # already present in the recording is counted as SIGNAL by mix_at_snr, so a
+    # 25 dB request is delivered as ~22.5 dB while 20 dB is accurate to ~1 dB.
+    # Leaving the bound at 25 would let Sobol and the GP sample a range the
+    # capture chain cannot physically deliver, compressing several distinct
+    # x-coordinates onto the same real condition and biasing the sensitivity
+    # decomposition at the benign end.
+    Factor("snr_db",      "continuous", low=0.0, high=20.0, degradation="down"),# noise level
     Factor("noise_type",  "categorical", levels=("babble", "engine", "road")),  # noise character
     Factor("codec",       "categorical", levels=("none", "g726", "opus-lowrate")),# channel
     Factor("mic_rolloff", "continuous", low=0.0, high=1.0, degradation="up"),   # cheap-mic freq response

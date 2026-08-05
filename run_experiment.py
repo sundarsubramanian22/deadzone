@@ -172,13 +172,13 @@ DEFAULT_FS = 16000
 #             rt60 x snr expectation has a channel analogue here).
 
 _CORE_RT60 = (0.2, 0.45, 0.7, 1.0)
-_CORE_SNR = (0.0, 10.0, 25.0)
+_CORE_SNR = (0.0, 10.0, 20.0)
 _CORE_NOISE = ("babble", "engine", "road")
 
 # (rt60, snr_db) anchors for the channel arm — deliberately drawn FROM the core
 # grid values so block-2 cells share coordinates with block-1 cells and the two
 # blocks can be compared without interpolating.
-_CHANNEL_ANCHORS = ((0.2, 25.0), (0.45, 10.0), (1.0, 0.0))
+_CHANNEL_ANCHORS = ((0.2, 20.0), (0.45, 10.0), (1.0, 0.0))
 _CHANNEL_CODECS = ("none", "g726", "opus-lowrate")
 _CHANNEL_ROLLOFF = (0.0, 0.5, 1.0)
 
