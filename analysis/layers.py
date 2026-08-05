@@ -90,6 +90,9 @@ _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
+from audio_pipeline import (                  # noqa: E402
+    ConfidenceAlignmentError, align_confidences,
+)
 from calibration import (                     # noqa: E402
     FeatureCalibrator, TemperatureScaler, calibration_report,
     expected_calibration_error,
@@ -509,11 +512,27 @@ def word_records(rows: Sequence[Mapping], on_misalign: str = "raise") -> dict:
     n_del = n_ref = 0
     n_rows_used = 0
 
+    n_realigned = 0
     for r in rows:
         edits = _as_list(r.get("edits"))
         confs = [float(c) for c in _as_list(r.get("word_confidences"))]
         hyp_edits = [e for e in edits if len(e) >= 3 and e[2] is not None]
         row_del = sum(1 for e in edits if len(e) >= 3 and e[0] == "del")
+
+        # `confs` came back aligned to the RAW transcript tokens; `hyp_edits` are
+        # NORMALIZED tokens. Those agree in length only while normalization
+        # happens to preserve token count, which it does not (a hyphen splits,
+        # an orthographic compound merges, bare punctuation vanishes). Re-align
+        # through the SAME transformation the text went through instead of
+        # dropping the row. Measured on the real grid: recovers 1.75% of rows.
+        if len(hyp_edits) != len(confs):
+            transcript = r.get("transcript")
+            if transcript:
+                try:
+                    confs = align_confidences(transcript, confs)
+                    n_realigned += 1
+                except ConfidenceAlignmentError:
+                    pass          # fall through to the raise/skip path below
 
         if len(hyp_edits) != len(confs):
             info = {"clip_id": r.get("clip_id"),
@@ -560,6 +579,7 @@ def word_records(rows: Sequence[Mapping], on_misalign: str = "raise") -> dict:
         "n_words": len(records),
         "n_rows_used": n_rows_used,
         "n_misaligned_rows": len(misaligned),
+        "n_realigned_rows": n_realigned,
         "misaligned": misaligned,
         "n_conf_clipped": n_clipped,
         "n_deletions": n_del,

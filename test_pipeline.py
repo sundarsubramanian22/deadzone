@@ -7,6 +7,7 @@ import numpy as np
 from audio_pipeline import (
     mix_at_snr, measured_snr_db, active_speech_mask,
     apply_rir, rms, classify_errors, normalize_text,
+    align_confidences, ConfidenceAlignmentError,
 )
 
 fs = 16000
@@ -119,9 +120,47 @@ def test_normalization_orthographic_variants():
     print("TRAP 3b ok: orthographic variants score 0, real errors still count")
 
 
+# --- TRAP 3c: confidences must survive the same transform as the text ---------
+def test_confidence_alignment_follows_normalization():
+    """
+    word_confidences arrive aligned to RAW transcript tokens; scoring happens on
+    NORMALIZED tokens. Those lengths agree only while normalization happens to
+    preserve token count — and it does not. On the real 7040-row grid this hit
+    1.75% of rows. A zip() would bind every later confidence to the WRONG word,
+    which still trains and still scores, so nothing downstream could see it.
+    """
+    # SPLIT: one raw token becomes two — its confidence applies to both pieces
+    out = align_confidences("follow-up meeting", [0.9, 0.8])
+    assert normalize_text("follow-up meeting") == ["follow", "up", "meeting"]
+    assert out == [0.9, 0.9, 0.8], out
+
+    # MERGE: two raw tokens become one — the merged word's evidence is both
+    out = align_confidences("the wi fi is on", [0.9, 0.6, 0.8, 0.7, 0.5])
+    assert normalize_text("the wi fi is on") == ["the", "wifi", "is", "on"]
+    assert out == [0.9, 0.7, 0.7, 0.5], out          # 0.7 == mean(0.6, 0.8)
+
+    # DROP: a token that normalizes away contributes no confidence
+    out = align_confidences("hello -- world", [0.9, 0.5, 0.8])
+    assert out == [0.9, 0.8], out
+
+    # length ALWAYS matches the scored token list, which is the whole point
+    for text, confs in [("O'Brien and Nguyen", [0.95, 0.9, 0.85]),
+                        ("Room 4B, gate twelve-b.", [0.9, 0.8, 0.7, 0.6])]:
+        assert len(align_confidences(text, confs)) == len(normalize_text(text))
+
+    # a mismatch between raw tokens and confidences is an ERROR, never a guess
+    try:
+        align_confidences("one two three", [0.9, 0.8])
+        assert False, "expected ConfidenceAlignmentError on a raw-length mismatch"
+    except ConfidenceAlignmentError:
+        pass
+    print("TRAP 3c ok: confidences split, merge and drop with the text; never zipped")
+
+
 if __name__ == "__main__":
     test_snr_calibrated_on_active_speech()
     test_rir_alignment_and_level()
     test_error_classification()
     test_normalization_orthographic_variants()
+    test_confidence_alignment_follows_normalization()
     print("\nAll three trap functions verified.")

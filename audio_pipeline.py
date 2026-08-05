@@ -21,6 +21,8 @@ import os
 import time
 import math
 import re
+from collections.abc import Sequence
+
 import numpy as np
 from scipy.signal import fftconvolve
 
@@ -229,6 +231,90 @@ def normalize_text(s: str) -> list[str]:
     s = re.sub(r"[^\w\s]", " ", s)           # remaining punctuation -> space
     s = re.sub(r"\s+", " ", s).strip()
     return _merge_compounds(s.split())
+
+
+class ConfidenceAlignmentError(ValueError):
+    """Raised when per-word confidences cannot be aligned to normalized tokens."""
+
+
+def align_confidences(transcript: str, word_confidences: Sequence[float]) -> list[float]:
+    """
+    Re-align per-word confidences onto the tokens `normalize_text` produces.
+
+    THE TRAP THIS FIXES. `word_confidences` comes back from the ASR aligned 1:1
+    with the RAW transcript's whitespace tokens. `classify_errors` scores the
+    NORMALIZED tokens. Those two lists are the same length only while
+    normalization happens to preserve token count -- and it does not:
+
+        "follow-up"  -> ["follow", "up"]    1 raw token  -> 2 normalized  (SPLIT)
+        "wi" "fi"    -> ["wifi"]            2 raw tokens -> 1 normalized  (MERGE)
+        "--"         -> []                  1 raw token  -> 0 normalized  (DROP)
+
+    On the real 7040-row grid this hit 1.75% of rows. Zipping the two lists would
+    have bound every confidence after the first mismatch to the WRONG word, which
+    still trains, still scores, and is invisible downstream -- the calibration
+    layer would have learned from mislabelled data and reported a clean number.
+
+    The fix is to carry the confidences through the SAME transformation as the
+    text: a raw token that splits duplicates its confidence across its pieces
+    (each piece was heard with that confidence), and tokens that merge average
+    theirs (the merged word is one lexical item whose evidence is both). A token
+    that normalizes away contributes nothing.
+
+    Returns a list the same length as `normalize_text(transcript)`. Raises rather
+    than returning a mismatched list, because a silent mismatch here is exactly
+    the failure mode the function exists to remove.
+    """
+    raw = (transcript or "").split()
+    confs = [float(c) for c in word_confidences]
+    if len(raw) != len(confs):
+        raise ConfidenceAlignmentError(
+            f"{len(raw)} raw transcript tokens but {len(confs)} confidences — "
+            "these must come from the same adapter response"
+        )
+
+    # Stage 1: per-raw-token normalization, carrying each token's confidence onto
+    # every piece it produces. Done token-by-token so a SPLIT is representable.
+    pieces: list[str] = []
+    piece_conf: list[float] = []
+    for tok, c in zip(raw, confs):
+        parts = _normalize_one(tok)
+        pieces.extend(parts)
+        piece_conf.extend([c] * len(parts))
+
+    # Stage 2: the compound merge runs ACROSS token boundaries, so it has to be
+    # applied to the flattened stream, averaging the confidences it collapses.
+    out_tokens: list[str] = []
+    out_conf: list[float] = []
+    i = 0
+    while i < len(pieces):
+        if i + 1 < len(pieces) and (pieces[i], pieces[i + 1]) in _COMPOUNDS:
+            out_tokens.append(_COMPOUNDS[(pieces[i], pieces[i + 1])])
+            out_conf.append((piece_conf[i] + piece_conf[i + 1]) / 2.0)
+            i += 2
+        else:
+            out_tokens.append(pieces[i])
+            out_conf.append(piece_conf[i])
+            i += 1
+
+    expected = normalize_text(transcript)
+    if out_tokens != expected:
+        raise ConfidenceAlignmentError(
+            "per-token normalization did not reproduce normalize_text(): "
+            f"{out_tokens!r} != {expected!r}. The two paths have diverged; fix "
+            "align_confidences to mirror normalize_text before trusting any "
+            "word-level confidence analysis."
+        )
+    return out_conf
+
+
+def _normalize_one(token: str) -> list[str]:
+    """Normalize ONE raw token in isolation (no cross-token compound merge)."""
+    s = token.lower()
+    s = re.sub(f"[{re.escape(_APOSTROPHES)}]", "", s)
+    s = re.sub(r"[^\w\s]", " ", s)
+    s = re.sub(r"\s+", " ", s).strip()
+    return s.split()
 
 
 def classify_errors(reference: str, hypothesis: str) -> dict:
