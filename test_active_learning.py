@@ -30,7 +30,7 @@ from active_learning import (
 SPACE = DEFAULT_FACTOR_SPACE
 K_SHARP = 7.0                       # sigmoid steepness (sharp transition)
 _NOISE = {"babble": 0.06, "engine": 0.03, "road": 0.0}
-_CODEC = {"none": 0.0, "amr": 0.04, "opus-lowrate": 0.08}
+_CODEC = {"none": 0.0, "g726": 0.04, "opus-lowrate": 0.08}
 
 
 def _norm(x, lo, hi):
@@ -58,7 +58,7 @@ def test_planted_boundary_is_sharp():
     assert clean < 0.1 and fail > 0.9, (clean, fail)
     # on the line (r == q) WER sits near 0.5
     mid = planted_oracle({"rt60": 0.6, "snr_db": 12.5, "noise_type": "engine",
-                          "codec": "amr", "mic_rolloff": 0.5})
+                          "codec": "g726", "mic_rolloff": 0.5})
     assert abs(mid - 0.5) < 0.2, mid
     print(f"OK 0: planted boundary sharp — clean={clean:.3f}, on-line={mid:.3f}, "
           f"fail={fail:.3f}")

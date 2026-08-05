@@ -48,7 +48,7 @@ if __name__ == "__main__":
     print("  none          OK  exact passthrough")
 
     failures, unavailable = [], []
-    for codec in _CODEC_SPECS:                      # amr, opus-lowrate
+    for codec in _CODEC_SPECS:                      # g726, opus-lowrate
         try:
             run_one(x, codec)
         except CodecUnavailableError as e:

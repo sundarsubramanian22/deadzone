@@ -35,7 +35,7 @@ SPACE = DEFAULT_FACTOR_SPACE
 OVER_MAX = 0.30            # planted overconfidence at max reverb
 N = 8000
 NOISE = ("babble", "engine", "road")
-CODEC = ("none", "amr", "opus-lowrate")
+CODEC = ("none", "g726", "opus-lowrate")
 
 
 def make_population(seed=0):

@@ -69,7 +69,7 @@ def test_schema_matches_factor_space():
     assert list(Condition.__dataclass_fields__) == DEFAULT_FACTOR_SPACE.names
     # from_sample/to_sample bridges design.py samples <-> Condition
     sample = {"rt60": 0.5, "snr_db": 10.0, "noise_type": "babble",
-              "codec": "amr", "mic_rolloff": 0.3}
+              "codec": "g726", "mic_rolloff": 0.3}
     cond = Condition.from_sample(sample)
     assert cond.to_sample() == sample
     print("OK 1: Condition fields == DEFAULT_FACTOR_SPACE.names (imported, not redefined)")
@@ -78,10 +78,10 @@ def test_schema_matches_factor_space():
 # --- 2: stable, round-tripping name -----------------------------------------
 
 def test_name_stable_and_roundtrips():
-    cond = Condition(0.5, 10.0, "babble", "amr", 0.3)
-    assert cond.name == "rt60-0.5_snr-10_babble_amr_roll-0.3", cond.name
+    cond = Condition(0.5, 10.0, "babble", "g726", 0.3)
+    assert cond.name == "rt60-0.5_snr-10_babble_g726_roll-0.3", cond.name
     assert Condition.from_name(cond.name) == cond
-    assert cond.name == Condition(0.5, 10.0, "babble", "amr", 0.3).name    # stable
+    assert cond.name == Condition(0.5, 10.0, "babble", "g726", 0.3).name    # stable
     # hyphen in the codec value must survive the round-trip
     hy = Condition(0.5, 10.0, "babble", "opus-lowrate", 0.3)
     assert hy.name == "rt60-0.5_snr-10_babble_opus-lowrate_roll-0.3", hy.name
@@ -182,20 +182,20 @@ def test_codec_fails_loudly_without_ffmpeg():
     # force the "no ffmpeg" branch regardless of the host environment
     with mock.patch("conditions.shutil.which", return_value=None):
         try:
-            apply_codec(x, FS, "amr")
+            apply_codec(x, FS, "g726")
             assert False, "expected CodecUnavailableError when ffmpeg is missing"
         except CodecUnavailableError as e:
             assert "ffmpeg" in str(e).lower() and "install" in str(e).lower()
         # and the failure must surface through apply_condition, not be swallowed
         lib = make_library()
-        cond = Condition(0.5, 10.0, "babble", "amr", 0.0)
+        cond = Condition(0.5, 10.0, "babble", "g726", 0.0)
         try:
             apply_condition(make_clean(), cond, lib, FS)
             assert False, "expected apply_condition to surface CodecUnavailableError"
         except CodecUnavailableError:
             pass
     assert apply_codec(x, FS, "none") is not None    # 'none' still works
-    print("OK 7: AMR/Opus without ffmpeg -> loud CodecUnavailableError (tells you to install)")
+    print("OK 7: G.726/Opus without ffmpeg -> loud CodecUnavailableError (tells you to install)")
 
 
 # --- 8: disk-backed library scans data/rirs + data/noise --------------------

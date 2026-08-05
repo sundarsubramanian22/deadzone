@@ -33,7 +33,7 @@ K_INT = 0.40               # strength of the planted rt60 x snr interaction
 K_BUMP = 0.20              # depth of the planted non-monotonic dip
 
 _NOISE = {"babble": 0.10, "engine": 0.05, "road": 0.02}
-_CODEC = {"none": 0.00, "amr": 0.06, "opus-lowrate": 0.12}
+_CODEC = {"none": 0.00, "g726": 0.06, "opus-lowrate": 0.12}
 
 
 def _norm(x, lo, hi):

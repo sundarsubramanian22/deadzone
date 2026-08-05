@@ -127,7 +127,7 @@ DEFAULT_FACTOR_SPACE = FactorSpace([
     Factor("rt60",        "continuous", low=0.2, high=1.0, degradation="up"),   # reverb/placement
     Factor("snr_db",      "continuous", low=0.0, high=25.0, degradation="down"),# noise level
     Factor("noise_type",  "categorical", levels=("babble", "engine", "road")),  # noise character
-    Factor("codec",       "categorical", levels=("none", "amr", "opus-lowrate")),# channel
+    Factor("codec",       "categorical", levels=("none", "g726", "opus-lowrate")),# channel
     Factor("mic_rolloff", "continuous", low=0.0, high=1.0, degradation="up"),   # cheap-mic freq response
 ])
 

@@ -365,8 +365,17 @@ def apply_mic_rolloff(x: np.ndarray, fs: int, rolloff: float) -> np.ndarray:
 
 
 # ffmpeg codec params: (needs resample to codec-native rate, then back)
+#
+# WHY G.726 AND NOT AMR-NB. AMR-NB is the more obvious "cellular/intercom" codec
+# and was the original choice, but ffmpeg ships AMR-NB as DECODE-ONLY unless it
+# was built against libopencore-amrnb (stock Homebrew is not). Rather than make
+# the grid depend on a source build that may not exist on the next machine, the
+# narrowband slot uses G.726 32 kHz-era ADPCM at 16 kbit/s -- a genuine ITU-T
+# telephony codec, present in every stock ffmpeg, and aggressive enough at
+# 2 bits/sample to imprint real quantization artifacts. State the substitution
+# in the write-up's methods section; do not let it pass silently.
 _CODEC_SPECS = {
-    "amr": {"rate": 8000, "args": ["-c:a", "amr_nb", "-b:a", "7.4k", "-f", "amr"]},
+    "g726": {"rate": 8000, "args": ["-c:a", "adpcm_g726", "-b:a", "16k", "-f", "wav"]},
     "opus-lowrate": {"rate": 16000, "args": ["-c:a", "libopus", "-b:a", "8k", "-f", "opus"]},
 }
 
