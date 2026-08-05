@@ -197,6 +197,69 @@ def main_grid() -> list[Condition]:
     return dedupe_conditions(conds)
 
 
+# ---------------------------------------------------------------------------
+# THE REBALANCED GRID — allocation driven by a measured pre-grid probe
+# ---------------------------------------------------------------------------
+#
+# WHY main_grid() IS NOT WHAT WE RUN. Before spending the R4 budget we probed
+# one clip across the factor space (13 calls). Two measurements changed the
+# design:
+#
+#   1. SNR ALONE BARELY MOVES THE MODEL. At rt60=0.5, codec=none, rolloff=0.3,
+#      WER stayed ~0.00 from 0 dB to 25 dB SNR. Even 0 dB babble transcribed
+#      perfectly. A grid that spends its budget sweeping SNR at benign channel
+#      settings measures a flat surface.
+#   2. THE DAMAGE IS AN INTERACTION. At rt60=1.0 + g726 + rolloff=1.0, WER ran
+#      0.18-0.46 at EVERY SNR, with confidence still 0.59-0.92 -- and it was
+#      NON-MONOTONIC in SNR (WER 0.455 at 25 dB vs 0.273 at 5 dB). That is both
+#      the dead-zone signature and a counterintuitive-cell candidate.
+#
+# main_grid() put 42 of 60 cells at codec="none" and only 2 in the harsh-channel
+# region, so it would have spent ~70% of the budget on the flat surface. This
+# grid fully crosses the channel factors with reverb instead. main_grid() is kept
+# because its test pins it, but interaction_grid() is what R4 runs.
+#
+# NOTE this does NOT alter the pre-registration. SPEC §5 pre-registered
+# rt60 x snr_db and that stands exactly as written -- it gets confirmed or not on
+# the real grid. Reallocating where we SAMPLE is not the same as changing what we
+# PREDICTED, and the probe is reported alongside the verdict either way.
+
+_IG_RT60 = (0.2, 0.45, 0.7, 1.0)
+_IG_SNR = (0.0, 5.0, 10.0, 20.0)
+_IG_CODEC = ("none", "g726", "opus-lowrate")
+_IG_ROLLOFF = (0.0, 0.5, 1.0)
+_IG_NOISE_ARM_RT60 = (0.45, 1.0)
+_IG_NOISE_ARM_SNR = (0.0, 10.0)
+_IG_NOISE_ARM_CODEC = ("none", "g726")
+_IG_NOISE_ARM_ROLLOFF = (0.0, 1.0)
+
+
+def interaction_grid() -> list[Condition]:
+    """
+    The grid R4 actually runs: reverb x SNR x codec x rolloff fully crossed on
+    babble (144 cells), plus a noise-character arm at the corners (32 cells).
+
+    SNR tops out at 20 dB, not 25: the corpus's measured inherent SNR is
+    ~25-28 dB (report/measurements.md), so a 25 dB request under-delivers by
+    ~2.5 dB while 20 dB is accurate to ~1 dB. Asking for a condition the capture
+    chain cannot physically deliver would put a known-wrong x-coordinate on the
+    benign end of every plot.
+    """
+    conds: list[Condition] = []
+    for rt60 in _IG_RT60:                          # block 1: the interaction core
+        for snr in _IG_SNR:
+            for codec in _IG_CODEC:
+                for roll in _IG_ROLLOFF:
+                    conds.append(Condition(rt60, snr, "babble", codec, roll))
+    for rt60 in _IG_NOISE_ARM_RT60:                # block 2: noise character
+        for snr in _IG_NOISE_ARM_SNR:
+            for codec in _IG_NOISE_ARM_CODEC:
+                for roll in _IG_NOISE_ARM_ROLLOFF:
+                    for noise in ("engine", "road"):
+                        conds.append(Condition(rt60, snr, noise, codec, roll))
+    return dedupe_conditions(conds)
+
+
 def dedupe_conditions(conds: Sequence[Condition]) -> list[Condition]:
     """Drop repeats, keep first-seen order (blocks 1 and 2 overlap by design)."""
     seen: set[str] = set()
@@ -841,6 +904,8 @@ def build_argparser() -> argparse.ArgumentParser:
     p.add_argument("--fs", type=int, default=DEFAULT_FS)
     p.add_argument("--limit", type=int, default=None,
                    help="run only the first N cells of the plan (smoke runs)")
+    p.add_argument("--grid", default="interaction", choices=("interaction", "main"),
+                   help="interaction = rebalanced R4 grid (default); main = original 60-cell")
     p.add_argument("--dry-run", action="store_true",
                    help="print the full call plan + cost estimate and exit")
     p.add_argument("--verbose", action="store_true",
@@ -855,7 +920,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     manifest = load_manifest(args.manifest)
     clip_ids = select_clip_ids(args.clips, manifest)
-    conditions = main_grid()
+    conditions = {"interaction": interaction_grid, "main": main_grid}[args.grid]()
     models = [m.strip() for m in args.models.split(",") if m.strip()]
     cache = ResultCache(Path(args.results) / "cache.jsonl")
 
