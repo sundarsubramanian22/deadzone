@@ -1,0 +1,162 @@
+{
+  "u01": {
+    "slots": {"name": "daniel", "date": "friday"},
+    "critical": ["name"]
+  },
+  "u02": {
+    "slots": {"name": "maria", "phone": "four zero five nine one two seven seven"},
+    "critical": ["phone"]
+  },
+  "u03": {
+    "slots": {"location": "room four b"},
+    "critical": ["location"]
+  },
+  "u04": {
+    "slots": {"name": "priya nair", "date": "thursday"},
+    "critical": ["name"]
+  },
+  "u05": {
+    "slots": {"address": "fourteen hundred shattuck avenue", "location": "berkeley"},
+    "critical": ["address"]
+  },
+  "u06": {
+    "slots": {"code": "a seven x four two"},
+    "critical": ["code"]
+  },
+  "u07": {
+    "slots": {"name": "okafor", "time": "nine thirty"},
+    "critical": ["name", "time"]
+  },
+  "u08": {
+    "slots": {"location": "gate twelve b"},
+    "critical": ["location"]
+  },
+  "u09": {
+    "slots": {"amount": "three hundred dollars", "id": "six one four"},
+    "critical": ["amount", "id"]
+  },
+  "u10": {
+    "slots": {"code": "tango bravo seven seven zulu"},
+    "critical": ["code"]
+  },
+  "u11": {
+    "slots": {"name": "sofia martinez", "address": "eighty eight elm street"},
+    "critical": ["address"]
+  },
+  "u12": {
+    "slots": {"location": "highway one zero one"},
+    "critical": ["location"]
+  },
+  "u13": {
+    "slots": {"amount": "forty seven dollars and fifty cents"},
+    "critical": ["amount"]
+  },
+  "u14": {
+    "slots": {"name": "wei zhang", "time": "end of day"},
+    "critical": ["name"]
+  },
+  "u15": {
+    "slots": {"code": "b as in bravo one four"},
+    "critical": ["code"]
+  },
+  "u16": {
+    "slots": {"name": "fitzgerald", "amount": "six"},
+    "critical": ["name"]
+  },
+  "u17": {
+    "slots": {"code": "q nine j zero five"},
+    "critical": ["code"]
+  },
+  "u18": {
+    "slots": {"amount": "fifteen milligrams"},
+    "critical": ["amount"]
+  },
+  "u19": {
+    "slots": {"name": "ahmed", "location": "fifth and main"},
+    "critical": ["name", "location"]
+  },
+  "u20": {
+    "slots": {"amount": "twenty percent"},
+    "critical": ["amount"]
+  },
+  "u21": {
+    "slots": {"org": "accounting and legal", "date": "monday"},
+    "critical": ["org"]
+  },
+  "u22": {
+    "slots": {"code": "pound four nine two seven"},
+    "critical": ["code"]
+  },
+  "u23": {
+    "slots": {"id": "three three zero one"},
+    "critical": ["id"]
+  },
+  "u24": {
+    "slots": {"name": "nguyen and obrien", "time": "this morning"},
+    "critical": ["name"]
+  },
+  "u25": {
+    "slots": {"location": "route sixteen"},
+    "critical": ["location"]
+  },
+  "u26": {
+    "slots": {"name": "kowalski"},
+    "critical": ["name"]
+  },
+  "u27": {
+    "slots": {"date": "ninth of october"},
+    "critical": ["date"]
+  },
+  "u28": {
+    "slots": {"time": "two fifteen"},
+    "critical": ["time"]
+  },
+  "u29": {
+    "slots": {"id": "five five four two"},
+    "critical": ["id"]
+  },
+  "u30": {
+    "slots": {"name": "grandma", "address": "forty two rosewood lane"},
+    "critical": ["address"]
+  },
+  "u31": {
+    "slots": {"code": "falcon underscore two four"},
+    "critical": ["code"]
+  },
+  "u32": {
+    "slots": {"name": "alexander", "time": "seven pm"},
+    "critical": ["name"]
+  },
+  "u33": {
+    "slots": {"id": "one z nine nine a w five"},
+    "critical": ["id"]
+  },
+  "u34": {
+    "slots": {"amount": "eight hundred euros"},
+    "critical": ["amount"]
+  },
+  "u35": {
+    "slots": {"location": "terminal three level two"},
+    "critical": ["location"]
+  },
+  "u36": {
+    "slots": {"org": "henderson and sons incorporated"},
+    "critical": ["org"]
+  },
+  "u37": {
+    "slots": {"phone": "four zero nine", "org": "technical support"},
+    "critical": ["phone"]
+  },
+  "u38": {
+    "slots": {"location": "thirty seven north one two two west"},
+    "critical": ["location"]
+  },
+  "u39": {
+    "slots": {"code": "seven h d k nine one"},
+    "critical": ["code"]
+  },
+  "u40": {
+    "slots": {"name": "yamamoto", "id": "page twelve"},
+    "critical": ["name"]
+  }
+}
