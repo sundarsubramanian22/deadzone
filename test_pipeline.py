@@ -6,7 +6,7 @@ know the DSP core is trustworthy before wiring in real audio.
 import numpy as np
 from audio_pipeline import (
     mix_at_snr, measured_snr_db, active_speech_mask,
-    apply_rir, rms, classify_errors,
+    apply_rir, rms, classify_errors, normalize_text,
 )
 
 fs = 16000
@@ -91,8 +91,37 @@ def test_error_classification():
     print("TRAP 3 ok: 1 sub / 1 del / 1 ins recovered, WER=3/8, norm robust")
 
 
+# --- TRAP 3b: orthographic variants must not read as acoustic errors ---------
+def test_normalization_orthographic_variants():
+    """
+    Both cases below were measured on the REAL clean corpus, where they produced
+    4 of 11 errors. They are condition-independent, so they land in every grid
+    cell identically -- and a constant clean-condition error is indistinguishable
+    from a dead zone (confident + "wrong"). They must score as zero.
+    """
+    # apostrophes are deleted, not split on: "o'brien" is ONE token
+    assert normalize_text("O'Brien") == ["obrien"]
+    assert normalize_text("o’brien") == ["obrien"]        # curly quote from ASR
+    assert classify_errors("nguyen and obrien approved",
+                           "nguyen and o'brien approved")["wer"] == 0.0
+
+    # orthographic compounds collapse, in either direction and either spelling
+    assert normalize_text("wi fi") == ["wifi"]
+    assert normalize_text("Wi-Fi") == ["wifi"]
+    assert classify_errors("the wifi network is falcon",
+                           "the wi fi network is falcon")["wer"] == 0.0
+
+    # ...but REAL recognition errors must survive. The compound map is not a
+    # laundering mechanism: different words stay different.
+    assert classify_errors("priya nair", "priya nayar")["counts"]["sub"] == 1
+    assert classify_errors("the gate code", "the gait code")["counts"]["sub"] == 1
+    assert classify_errors("bravo one four", "bravo fourteen")["wer"] > 0.0
+    print("TRAP 3b ok: orthographic variants score 0, real errors still count")
+
+
 if __name__ == "__main__":
     test_snr_calibrated_on_active_speech()
     test_rir_alignment_and_level()
     test_error_classification()
+    test_normalization_orthographic_variants()
     print("\nAll three trap functions verified.")

@@ -174,6 +174,38 @@ def apply_rir(speech: np.ndarray, rir: np.ndarray,
 # TRAP 3 — text normalization + aligned edit classification
 # ----------------------------------------------------------------------------
 
+# Intra-word marks are DELETED rather than spaced (see normalize_text). Covers
+# the straight quote plus the curly/modifier variants ASR APIs actually emit.
+_APOSTROPHES = "'’ʼʻ`"
+
+# Orthographic compounds: the SAME spoken content written with or without a
+# space. Merged after tokenization, symmetrically on reference and hypothesis.
+#
+# DISCIPLINE: this map is for orthographic conventions only -- cases where both
+# spellings render identical speech. It is NOT a place to absorb real recognition
+# errors. "nair"/"nayar" and "gate"/"gait" are different words and MUST stay
+# errors; adding them here would launder model failures into the normalizer and
+# quietly delete the exact signal this project measures. Every entry needs a
+# one-line justification and belongs in the write-up's methods section.
+_COMPOUNDS: dict[tuple[str, ...], str] = {
+    ("wi", "fi"): "wifi",        # "wi fi" / "wi-fi" / "wifi" are one spoken word
+}
+
+
+def _merge_compounds(tokens: list[str]) -> list[str]:
+    """Collapse adjacent tokens listed in _COMPOUNDS into their joined form."""
+    out: list[str] = []
+    i = 0
+    while i < len(tokens):
+        if i + 1 < len(tokens) and (tokens[i], tokens[i + 1]) in _COMPOUNDS:
+            out.append(_COMPOUNDS[(tokens[i], tokens[i + 1])])
+            i += 2
+        else:
+            out.append(tokens[i])
+            i += 1
+    return out
+
+
 def normalize_text(s: str) -> list[str]:
     """
     Canonicalize a transcript to a token list before scoring.
@@ -182,11 +214,21 @@ def normalize_text(s: str) -> list[str]:
     points. Normalize BOTH reference and hypothesis identically or your
     attribution ranks your own formatting bugs, not acoustics. Extend the
     number/symbol map for domain vocab as needed ("2" vs "two", "st" vs "street", ...).
+
+    APOSTROPHES ARE DELETED, NOT SPLIT ON. Replacing them with a space turns
+    "o'brien" into TWO tokens, which against a one-token reference scores as an
+    insertion plus a substitution -- 2 errors for a perfect transcription. That
+    offset is condition-INDEPENDENT, so it lands identically in every grid cell,
+    and a constant clean-condition error looks exactly like a dead zone: the
+    model is confident and "wrong". Measured on the real corpus, apostrophe and
+    compound handling accounted for 4 of 11 clean-condition errors (WER 3.03% ->
+    1.93%). Deleting the mark is also the standard WER-scoring convention.
     """
     s = s.lower()
-    s = re.sub(r"[^\w\s]", " ", s)           # drop punctuation
+    s = re.sub(f"[{re.escape(_APOSTROPHES)}]", "", s)   # delete, do NOT space
+    s = re.sub(r"[^\w\s]", " ", s)           # remaining punctuation -> space
     s = re.sub(r"\s+", " ", s).strip()
-    return s.split()
+    return _merge_compounds(s.split())
 
 
 def classify_errors(reference: str, hypothesis: str) -> dict:
