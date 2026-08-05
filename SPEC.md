@@ -738,7 +738,16 @@ credibility of every number in the writeup.
   - **Gotcha:** check free disk before starting; SLR28 + MUSAN unzipped is ~30 GB
     of staging even if you keep 200 MB.
 
-- [ ] **R2.4 — ffmpeg + the codec path (there is a live problem here — read this).**
+- [x] **R2.4 — ffmpeg + the codec path.** ✅ **RESOLVED: option (b), G.726.**
+  Stock ffmpeg ships AMR-NB decode-only, so the `codec` factor level was changed
+  from `amr` to `g726` (ITU-T ADPCM at 16 kbit/s, present in every stock ffmpeg,
+  2 bits/sample). Verified round-tripping through real ffmpeg via `smoke_codec.py`:
+  RMS delta 0.073 vs 0.247 for opus-lowrate, exact length preserved. Option (a)
+  (homebrew-ffmpeg tap with `--with-opencore-amr`) was rejected: it makes the grid
+  depend on a source build that may not exist on the next machine, for a codec
+  family difference the write-up can simply state. **Must be named in the methods
+  section** — which narrowband codec was used is a methods fact.
+  <details><summary>original decision text (kept for the reasoning)</summary>
   - Install: macOS `brew install ffmpeg` · Debian/Ubuntu `sudo apt install ffmpeg`.
   - Verify the two encoders the factor space needs:
     ```
@@ -772,8 +781,21 @@ credibility of every number in the writeup.
   - **Gotcha:** don't "fix" this by deleting the codec factor. Channel/codec is one
     of the three in-scope factor families (§4) and the codec→entity-destruction
     fingerprint is one of D2's expected results.
+  </details>
 
-- [ ] **R2.5 — Synthetic RIRs for the sim2real leg → `data/rirs_sim/`.**
+  *Outcome note:* on the real grid the codec split was worth keeping — `g726`
+  produces **substitutions** (entity destruction) while `opus-lowrate` produces
+  **deletions**. Two different mechanisms from one factor, which a single codec
+  level would have hidden.
+
+- [x] **R2.5 — Synthetic RIRs for the sim2real leg → `data/rirs_sim/`.** ✅ **DONE**
+  (`make_sim_rirs.py`). 16 synthetic RIRs generated at 16 kHz, paired 1:1 with the
+  measured set: **max |delta| 0.0191 s** against the ±0.05 s tolerance, verified by
+  independent re-measurement. **The trap was the common case, not a corner case:**
+  pairing on the Sabine target instead of the measured RT60 would have breached
+  **8 of 16 pairs** (max 0.162 s), and the bias is not one-signed — the hall
+  realizes 1.241 s for a 1.00 s request (+24%) and 0.168 s for a 0.25 s request
+  (−33%), so no constant correction fixes it.
   - Generate with pyroomacoustics now (it costs nothing and R5.6 needs it):
     for each **measured** RT60 in your real set, build a `pra.ShoeBox` with
     `pra.inverse_sabine(rt60, room_dims)` → `room.compute_rir()` → save 16 kHz wav.
@@ -1497,3 +1519,129 @@ independent of each other — do them in any order, or in parallel.
 - [ ] Dashboard opens offline and the 3-minute path is rehearsed (R6.5)
 - [ ] Writeup limitations section names the Lombard boundary explicitly (R8.2)
 - [ ] Full demo rehearsed offline on the demo machine (R9.3)
+
+---
+
+# Appendix B: Progress Log — state as of 2026-08-05
+
+> Written at a clean pause point. Read this FIRST when resuming; it supersedes the
+> checkbox states in Appendix A where the two disagree.
+
+## B.1 Phase status
+
+| Phase | State | Evidence |
+|---|---|---|
+| **R0** environment | ✅ done | 17 suites green |
+| **R1** corpus | ✅ **done** | `check_recordings.py` → 40/40 OK; clean-condition WER **1.65 %** (6 errors / 363 ref words), 35/40 clips exact, every non-zero row adjudicated by ear |
+| **R2** assets | ✅ **done** | 16 curated RIRs (measured-RT60 gap **0.063 s** at curation, **0.108 s** as the library loads them), 12 noise clips (4/type, 300 s each), G.726 codec verified |
+| **R3** JOIN-1 gate | ✅ **PASSED** | 9/9 gates on u02/u17/u36; SNR calibration **exact to 0.01 dB** on real audio |
+| **R4** grid | ✅ **done** | 176 conditions × 40 clips × nova-3 = **7040 rows, 0 failures**, 394 s, ~$2.52 |
+| **R5** findings | 🟡 **partial** | D1 ✅ real · D2 ✅ real · L2 ✅ real · D3 ✅ built, not run on real Sobol · D4 ⛔ blocked · L1 ⛔ blocked · L3 ⛔ not run |
+| **R6** dashboard | ✅ **done** | 6 panels + model toggle, 267 KB self-contained, builds from the real grid, 22 tests |
+| **R7** live agent | ⬜ not started | scoped out of this push deliberately |
+| **R8** write-up | ⬜ not started | `report/measurements.md` holds the raw material |
+| **R9** demo kit | ⬜ not started | dashboard + `DEMO.md` exist; `demo_break.py` not built |
+
+## B.2 Decisions made (these are settled — do not relitigate)
+
+1. **Narrowband codec is G.726, not AMR-NB** (R2.4). Stock ffmpeg is AMR
+   decode-only. Must be stated in the methods section.
+2. **RIR source is the MIT Acoustical Reverberation Survey**, curated to 16 IRs by
+   greedy RT60 tiling, not bulk-extracted. BUT ReverbDB remains a documented
+   upgrade path if stronger provenance is wanted.
+3. **Noise is DEMAND**, two environments per `noise_type`, so a categorical level
+   means "this kind of place" rather than "this one recording".
+4. **The grid that runs is `interaction_grid()`, not `main_grid()`** — see B.3.
+5. **Sim/real pairing is on measured Schroeder RT60**, never the Sabine target.
+6. **`normalize_text` deletes apostrophes and collapses a small orthographic
+   compound map**, applied symmetrically to reference and hypothesis.
+7. **The sim arm uses a separate `results_sim/` cache.** The cache key is
+   `(clip_id, condition_name, model)` and does **not** encode which RIR library
+   produced the row, so a shared cache would be 100 % false hits and would report a
+   sim2real gap of exactly zero. This is a live footgun; keep the dirs separate.
+
+## B.3 The grid rebalance (supersedes R4.1's allocation)
+
+A 13-call pre-grid probe on one clip changed the design:
+
+- **SNR alone barely moves the model.** At rt60 0.5 / no codec / rolloff 0.3, WER
+  stayed ~0.00 from **0 dB to 25 dB**. Even 0 dB babble transcribed perfectly.
+- **The damage is an interaction.** At rt60 1.0 + g726 + rolloff 1.0, WER ran
+  0.18–0.46 at *every* SNR, confidence still 0.59–0.92, and **non-monotonic in
+  SNR** (0.455 at 25 dB vs 0.273 at 5 dB).
+
+`main_grid()` put 42/60 cells at `codec="none"` and 2 in the harsh-channel region —
+~70 % of the budget on a flat surface. `interaction_grid()` crosses reverb × SNR ×
+codec × rolloff fully (144) plus a noise-character arm (32) = **176 conditions, 36
+harsh-channel cells**. SNR tops out at **20 dB** because the corpus's measured
+inherent SNR is ~25–28 dB, so a 25 dB request under-delivers by ~2.5 dB.
+
+**This does not touch the §5 pre-registration.** `rt60 × snr_db` stands exactly as
+written. Reallocating where we *sample* is not changing what we *predicted*, and
+the probe is reported alongside the verdict either way.
+
+## B.4 Real findings so far
+
+**D1 — the headline is more nuanced than the premise assumed.**
+Global spearman(confidence, WER) = **−0.957**: nova-3 largely *does* know when it
+is failing. But it is **overconfident in 92 % of conditions** (mean gap 0.256) and
+**3.41 % (6/176) are genuine dead zones**. Ranked #1: `rt60 0.7 s, SNR 20 dB,
+babble, opus-lowrate, rolloff 1.0` → confidence **0.843** at WER **0.387**.
+
+*Framing for the write-up:* the danger is not that the model is blind — it is that
+it is *mostly* self-aware, so a system calibrated on average behaviour will trust
+it precisely where it shouldn't.
+
+**D2 — deletions dominate; entities are hit hardest.**
+`snr_db`, `mic_rolloff`, `rt60`, `opus-lowrate` → **deletions**. `g726`, `road` →
+**substitutions**. `engine` and `codec=none` correctly get **NO FIX** (relative
+improvements). Destroyed-word rate: proper_noun **0.646**, spelled_letter 0.613,
+content 0.530, function 0.462. Entity error rate **0.633 vs WER 0.511**. Babble
+insertions are **92 % foreign tokens** — the model transcribing background
+speakers, a different mechanism from confusion.
+
+**L2 — calibration.** On held-out *conditions*: ECE **0.051 → 0.032** (temperature,
+T=1.39) **→ 0.006** (feature-conditioned).
+
+## B.5 Blockers and known defects (start here on resume)
+
+1. ⛔ **Whisper is not installed, so L1 has no second arm.** The background install
+   failed instantly (`./.venv/bin/pip` does not exist in that venv) and this was
+   briefly misreported as succeeding. Fix: `python3 -m pip install openai-whisper`
+   inside the venv, then run the grid with `--models whisper-base`. Whisper is
+   local, so it is immune to the API throttling in (2).
+2. ⛔ **D4 has no real numbers.** The module, the synthetic RIRs and the pairing are
+   all done and tested, but the sim grid arm is **~3111 cells cached of 1760 needed
+   for the 10-clip subset** and stalled: Deepgram began throttling hard after
+   ~10 k calls (`WriteTimeout`, 0.4 rows/s vs 18 earlier). Resume with
+   `--clips al --workers 4 --rir-subdir rirs_sim --results results_sim`; every row
+   caches on write so nothing is lost.
+3. 🐛 **Confidence/edit alignment is skipped, not fixed** (1.75 % of rows).
+   `edits` are built from *normalized* tokens while `word_confidences` come from
+   *raw* transcript tokens, so anything changing token count (e.g. `follow-up`
+   splitting on the hyphen) breaks the 1:1 assumption. `word_records` correctly
+   **raises** rather than zipping — a `zip()` would silently bind confidences to the
+   wrong words. Currently handled by the counted-skip path. **The proper fix is to
+   carry confidences through the same transformation as the text** (duplicate on a
+   split, average on a merge) and should land before L2's numbers are final.
+4. ⚠️ **35.6 % of reference words are deletions and carry no confidence**, so they
+   are invisible to any confidence-calibration analysis. Since D2 shows deletions
+   are the *dominant* failure mode, this is a substantive hole in the headline
+   signal, not a footnote. Belongs in the limitations section.
+5. ⚠️ **Counterintuitive cells are surrogate-PROPOSED, never confirmed.** They carry
+   `presentable_as_measured=False`. Real oracle calls must confirm each one before
+   it can be written up as a measured surprise.
+6. ⬜ **Nobody has listened to the degraded audio yet** (A.R3.5). It is sitting in
+   `results/audio/`. Cheap, and it is the only test for "is this physically
+   plausible" — the unit tests prove the maths, not the result.
+7. ⚠️ **`DEFAULT_FACTOR_SPACE` still declares `snr_db` 0–25** even though
+   `interaction_grid()` samples only to 20. Either cap the factor space (touches
+   `design.py`, which `conditions.py` asserts against) or state the discrepancy.
+
+## B.6 Repo delta vs §13's layout
+
+Added beyond the original plan: `check_recordings.py` (+tests), `fetch_assets.py`,
+`smoke_join1.py`, `make_sim_rirs.py`, `task_specs.json` (+tests),
+`analysis/{confidence_gap,fingerprints,sim2real,interactions,al_savings,layers}.py`,
+`dashboard/`, `report/measurements.md`. `results_sim/` is gitignored alongside
+`results/`.
