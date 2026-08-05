@@ -231,3 +231,69 @@ Handled by the counted-skip path (123 rows dropped and reported). The proper fix
 is to carry confidences through the same token transformation as the text —
 duplicating on a split, averaging on a merge — and is worth doing before the
 calibration numbers go in the write-up as final.
+
+---
+
+## D4 sim-vs-real gap — real result (2026-08-05)
+
+176 paired conditions, nova-3, 10-clip subset. Real arm from `results/master.csv`,
+simulated arm from `results_sim/master_sim.csv` (pyroomacoustics RIRs).
+Paired on **`rir_rt60_measured`**, never the requested rt60; max |delta| 0.017 s.
+
+- **LEVEL:** sim **underestimates WER by 12.1 points** [95 % CI −15.0, −9.6].
+- **ORDER:** Spearman **rho = 0.873** (p = 3e−56), Kendall tau 0.698 — ordering
+  is preserved.
+- **DEAD ZONES: Jaccard 0.00, recall 0.00.** The simulated arm finds *none* of the
+  real dead zones. It misses both (`rt60-0.7_snr-5_babble_opus-lowrate_roll-1`,
+  `rt60-1_snr-0_road_none_roll-1`) and invents a different one
+  (`rt60-0.45_snr-0_babble_opus-lowrate_roll-1`).
+
+**Verdict: order preserved, level offset.** A pyroomacoustics-only testbed ranks
+conditions much like the measured one but reads ~12 points optimistic in absolute
+WER — *use it to rank, not to quote numbers*.
+
+**The sharper finding is the dead-zone recall of zero.** Ranking is the easy part;
+the thing this project actually delivers — *which* conditions are silently
+dangerous — is exactly what the simulation gets wrong. Anyone building a
+synthetic-RIR-only robustness benchmark can rank their conditions with it and
+still be pointed at the wrong danger zone. That is a stronger and more useful
+claim than the level offset, and it is only visible because the dead-zone set was
+computed on both arms rather than just comparing mean WER.
+
+---
+
+## NEW BLOCKER — Whisper's output formatting breaks cross-model WER (2026-08-05)
+
+The L1 second arm now runs (see below), but its WER is **not comparable to
+nova-3's on this corpus**, and the reason is formatting rather than acoustics:
+
+| model | output on u02 |
+|---|---|
+| nova-3 | `call maria four zero five nine one two seven seven` |
+| whisper-base | `Call Maria 405-912-717.` |
+
+`normalize_text` strips case and punctuation but deliberately does **not** map
+digits to words (`audio_pipeline.py`, normalization-parity note). Deepgram's
+formatting is turned off at the adapter (`smart_format` / `punctuate` /
+`numerals = False`) precisely so its raw output is word-form; Whisper has no
+equivalent switch and emits `405`. On a corpus deliberately loaded with phone
+numbers, codes, addresses and amounts, that inflates Whisper's WER by a large,
+condition-independent constant — measured at WER 0.82 on a near-clean cell.
+
+**Consequence for L1:** cross-model *absolute WER* is invalid on this corpus. The
+within-model comparisons remain valid — `within_model_conf_percentile` is
+scale-free and each model's dead-zone map is computed against its own WER
+distribution — so the "does the confidence-vs-WER *shape* differ" question can
+still be answered.
+
+**Not fixed, deliberately.** The tempting fix is a digit→word expansion in
+`normalize_text`, but it is genuinely ambiguous: this corpus spells digits
+individually ("four zero five", "one four"), so `405 -> four zero five` is right
+here while `14 -> one four` would be wrong for a corpus saying "fourteen", and
+currency like `$47.50` has no single correct expansion. Guessing inside a trap
+function to make a number look better is exactly the failure this project is
+about. Options, in preference order:
+1. Report L1 as a within-model shape comparison only, and state this limitation.
+2. Add a corpus-specific digit expansion applied symmetrically to both sides,
+   documented as corpus-specific and covered by tests.
+3. Restrict the L1 arm to the non-numeric utterances in the manifest.
