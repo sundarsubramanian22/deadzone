@@ -138,3 +138,96 @@ confound.
 **Goes in the write-up as:** a stated capture-chain limitation with the measured
 number, the ~1 dB high-SNR bias, and the note that it is constant across the
 corpus rather than varying with condition.
+
+---
+
+## R4 grid — real results (2026-08-05)
+
+`results/master.csv`, run_id `run-20260805T070146Z-6a77c4`.
+176 conditions x 40 clips x nova-3 = **7040 rows, 0 failures**, 394 s wall clock,
+~$2.52. WER spans **0.006 to 1.000** across conditions (median 0.535), so the
+rebalanced grid resolves the full dynamic range rather than a flat surface.
+
+### Why the grid was rebalanced (pre-grid probe, 13 calls)
+
+Probing one clip before spending the budget produced two measurements that
+changed the allocation:
+
+1. **SNR alone barely moves the model.** At rt60 = 0.5, codec = none,
+   rolloff = 0.3, WER stayed ~0.00 from 0 dB to 25 dB SNR. Even 0 dB babble
+   transcribed perfectly.
+2. **The damage is an interaction.** At rt60 = 1.0 + g726 + rolloff = 1.0, WER ran
+   0.18-0.46 at *every* SNR, with confidence still 0.59-0.92 — and non-monotonic
+   in SNR (0.455 at 25 dB vs 0.273 at 5 dB).
+
+The original 60-cell grid put 42 cells at `codec="none"` and only 2 in the
+harsh-channel region, so ~70 % of the budget would have measured a flat surface.
+`interaction_grid()` crosses reverb x SNR x codec x rolloff fully (144 cells) plus
+a noise-character arm (32). This reallocates **where we sample**; it does not
+touch the §5 pre-registration of `rt60 x snr_db`, which stands as written.
+
+### D1 — the headline is more nuanced than the premise assumed
+
+- Global **spearman(confidence, WER) = -0.957**. Nova-3 largely *does* know when
+  it is failing. This is reported first, on purpose: the self-aware regions are
+  the majority and burying them would oversell the result.
+- But it is **overconfident in 92 % of conditions** (mean gap 0.256), and
+  **3.41 % of conditions (6/176) are genuine dead zones**.
+- Ranked #1: `rt60 = 0.7 s, SNR = 20 dB, babble, opus-lowrate, rolloff = 1.0`
+  -> mean word confidence **0.843** while WER is **0.387** (n = 40 clips).
+
+The honest framing for the write-up: the danger is not that the model is blind,
+it is that it is *mostly* self-aware — which makes the 3.4 % of conditions where
+it is not far more dangerous, because a downstream system calibrated on the
+average behaviour will trust it there.
+
+### D2 — deletions dominate; entities are hit hardest
+
+| family | dominant edit | delta (of ref words) | implied fix |
+|---|---|---|---|
+| snr_db | del | +0.344 | front-end recovery |
+| mic_rolloff | del | +0.264 | front-end recovery |
+| rt60 | del | +0.212 | dereverberation (WPE) / closer capture |
+| codec = opus-lowrate | del | +0.111 | front-end recovery |
+| codec = g726 | **sub** | +0.061 | entity-aware / constrained decoding |
+| noise = road | **sub** | +0.059 | entity boosting + matched augmentation |
+| noise = engine | del | **-0.127** | **NO FIX** — relative improvement |
+| codec = none | del | **-0.104** | **NO FIX** — relative improvement |
+
+Destroyed-reference-word rate by class: **proper_noun 0.646**, **spelled_letter
+0.613**, content 0.530, function 0.462. Entity error rate **0.633 vs WER 0.511
+(gap +0.122)** — entities degrade *faster* than WER, which is exactly the
+divergence the agent layer exists to exploit.
+
+Insertions under babble are **92 % tokens foreign to the reference** — the model
+transcribing background speakers rather than confusing the target. A different
+mechanism from acoustic confusion, and reported separately so the fingerprint
+isn't wrong.
+
+### L2 — calibration
+
+On held-out **conditions** (grouped split, never random over words): ECE
+**0.051 raw -> 0.032 temperature (T=1.39) -> 0.006 feature-conditioned**.
+Conditioning on the acoustic parameters cuts calibration error to an eighth,
+~2.4x better than a global temperature. Above rt60 = 0.7, reported confidence
+must be discounted by ~0.07 (0.81 reported vs 0.74 observed, n = 7980 words).
+
+**Stated blind spot:** 22 411 deleted reference words (35.6 % of the reference)
+carry no hypothesis word and therefore no confidence, so they are invisible to
+any confidence-calibration analysis. Given D2 shows deletions are the *dominant*
+failure mode, this is a substantive limitation, not a footnote.
+
+### A real alignment defect the guard caught
+
+`analysis.layers.word_records` raised `AlignmentError` on **123 of 7040 rows
+(1.75 %)** rather than zipping. Root cause: `edits` are built from *normalized*
+tokens while `word_confidences` come from *raw* transcript tokens, so any
+normalization that changes token count breaks the 1:1 assumption — here tokens
+like `follow-up`, which `normalize_text` splits on the hyphen (1 raw -> 2
+normalized). A `zip()` would have silently bound every subsequent confidence in
+that row to the wrong word, quietly corrupting the calibration fit.
+
+Handled by the counted-skip path (123 rows dropped and reported). The proper fix
+is to carry confidences through the same token transformation as the text —
+duplicating on a split, averaging on a merge — and is worth doing before the
+calibration numbers go in the write-up as final.
