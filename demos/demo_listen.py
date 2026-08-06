@@ -520,6 +520,7 @@ def reveal_lines(pair: dict, order: list[tuple[str, dict]], answer: dict,
         heard = arm.get("transcript") or ""
         L += [
             f"  clip {i}  ·  " + ink.yellow(_arm_sentence(cond)),
+            ink.dim(f"      {cond.get('name','')}"),
             '      heard:  ' + (ink.mag(f'"{heard}"') if heard else ink.red("(nothing)")),
             ink.dim(f"      {_fmt_edits(arm)} of {arm.get('n_ref','?')} reference words"
                     f"   ·   mean word confidence {float(arm.get('mean_conf', 0)):.3f}"),
@@ -604,8 +605,8 @@ def prediction_lines(man: dict, ink: Ink, width: int) -> list[str]:
         ink.bold("  THE PREDICTION I GOT WRONG"),
         "",
         "  Before anyone listened, I sealed a prediction: that the buried-in-babble",
-        f"  clip would be the harder one. The listener I ran this on went the OTHER",
-        f"  way in {n_opposite} of {len(calls)} pairs.",
+        "  clip would be the harder one. The listener I ran this on",
+        f"  " + ink.bold(f"went the OTHER way in {n_opposite} of {len(calls)} pairs."),
         "",
         ink.dim("      results/audio/demo/PREREGISTERED_PREDICTION.md — OUTCOME"),
         "",
@@ -634,8 +635,8 @@ def honesty_lines(man: dict, n_answered: int, ink: Ink, width: int) -> list[str]
         "",
         f"  That was {n_answered} judgement{'' if n_answered == 1 else 's'} from one "
         f"listener, one speaker, one accent, one",
-        "  sitting. Blind to which clip was which — but NOT naive to the",
-        "  hypothesis; you know what this project claims, and that moves a judgement.",
+        "  sitting. Blind to which clip was which — but NOT naive to the hypothesis;",
+        "  you know what this project claims, and that moves a judgement.",
         "  The clips are not level-matched (they are byte-identical to what the model",
         "  was scored on). Presentation order is not counterbalanced — with three",
         "  pairs it cannot be. And these clips were selected " + ink.bold("because") + " the model tied",
