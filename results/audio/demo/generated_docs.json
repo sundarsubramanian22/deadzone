@@ -2,8 +2,8 @@
   "written_by": "scripts/make_demo_audio.py",
   "what_this_is": "SHA-256 of each document AS THIS GENERATOR LAST WROTE IT. Baseline for the authored-document guard: a file whose hash no longer matches has been edited by a human and will not be overwritten without --force-docs. Deleting this file unlocks nothing \u2014 an absent record reads as unknown provenance, which also refuses.",
   "sha256": {
-    "results/audio/demo/DEMO_SCRIPT.md": "9187e3f11caf90158e5d27712bb4e54713fa08e7bd591465868824d93a951463",
-    "results/audio/demo/KEY.md": "a008acfc3c16a5759ac26cc00f7f7b41c57e0ad1289b1cde3bd8d9f3b6bad39e",
+    "results/audio/demo/DEMO_SCRIPT.md": "c3271d2c182e5af90bfd6ef33fa8f881c61a0a4fe18833247cd445dbf17d35b1",
+    "results/audio/demo/KEY.md": "222c3f1e6c7005e957defd524986ae8e3801c63ebc29d6f8efc8eb17b0a24be8",
     "results/audio/demo/PREREGISTERED_PREDICTION.md": "6e96c6f6457879faec6bc96939c1c4bf8171680d8f348fd83fcf524d7db0d522",
     "results/audio/demo/WHAT_TO_LISTEN_FOR.md": "fc3bc95ad13e1449ba63fcbe21e80a3bd272191b04675eedd82c8346e858d09b",
     "results/audio/demo/blind/BLIND_SHEET.md": "4428996b8625d8a8e03b49447e60c9b97503967d0ee877da0ed0ec265cb819d1",

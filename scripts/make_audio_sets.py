@@ -352,10 +352,27 @@ def make_listening_set(assets, manifest, *, force_docs: bool = False) -> int:
         "   mild, the calibration is off.\n"
         "4. **Codecs sound like a phone line** (`05_g726_only`, `06_opus_only`) —\n"
         "   bandlimited and gritty, not just quieter.\n\n"
+        # The line that used to close this file said: if they sound intelligible
+        # to you while the model scored 0.3-0.4 WER at high confidence, "that is
+        # the finding, audible." That reading is REFUTED, and refuted by this
+        # very exercise. A listener ran it, reported the exemplars sounded
+        # intelligible, and the follow-up found the estimand mismatch (SPEC
+        # Appendix G): mean_conf averaged over clips that produced words, minus
+        # WER averaged over ALL clips. Dead zones fell 6 -> 2 and the #1 was
+        # reclassified `silence_driven`. So "it sounds fine and the number says
+        # 0.35" is not a finding -- it is a PROMPT TO CHECK THE NUMBER, and the
+        # one time it was followed it caught a real defect. Saying otherwise here
+        # would invite the next listener to conclude exactly what the last one
+        # correctly refused to.
         "Then the `DEADZONE_*` files: these are the conditions D1 flagged as\n"
         "confidently-wrong. The question worth asking is whether they sound as bad\n"
         "as their WER says. If they sound *intelligible to you* while the model\n"
-        "scored 0.3-0.4 WER at high confidence, that is the finding, audible.\n",
+        "scored 0.3-0.4 WER at high confidence, that is NOT a finding -- it is a\n"
+        "reason to go and check how that number was computed. That is not advice:\n"
+        "it is what happened. A listener made exactly this observation, and the\n"
+        "check it prompted found the estimand mismatch in SPEC Appendix G, which\n"
+        "cut the dead-zone count from 6 to 2 and reclassified the headline\n"
+        "condition. No test caught it; the audio did.\n",
         force_docs=force_docs)
     return n
 

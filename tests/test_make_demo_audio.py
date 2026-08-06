@@ -565,6 +565,46 @@ class ThePlayOrderIsDerivedFromTheListenerRecord(unittest.TestCase):
     def test_the_kit_on_disk_agrees_with_the_record(self):
         self.assert_kit_agrees_with_the_record(DEMO)
 
+    def test_the_run_of_show_plays_the_same_number_of_pairs_as_the_script(self):
+        """The clip SET is three; the beat PLAYS two and holds the third back.
+
+        Two numbers a reader will happily conflate, on two surfaces that a
+        presenter reads within a minute of each other — `DEMO_SCRIPT.md` §2 and
+        `demos/demo_listen.py`. Nothing made them agree except that both authors
+        happened to know, which is SPEC J.7's shape exactly. So the run-of-show's
+        count is DERIVED from which pairs the recorded listener called
+        confidently, and this pins that derivation to the script's own default.
+        """
+        from demos import demo_listen as dl
+
+        ordered = mda.by_play_order(
+            json.loads((DEMO / "manifest.json").read_text(encoding="utf-8"))["pairs"])
+        n_play = mda.n_primary(ordered)
+        self.assertEqual(
+            n_play, dl.DEFAULT_N_PAIRS,
+            f"the run-of-show plays {n_play} pairs and demo_listen.py plays "
+            f"{dl.DEFAULT_N_PAIRS} — one of the two surfaces a presenter reads is "
+            f"wrong about the beat")
+        # Controls. Without these the equality could hold because both are zero,
+        # or because every pair is primary and 'reserve' means nothing.
+        self.assertGreater(n_play, 0, "no pair is primary, so nothing is played")
+        self.assertLess(n_play, len(ordered),
+                        "every pair is primary, so there is no reserve and the "
+                        "'two of three' language in KEY.md is a fiction")
+
+    def test_the_run_of_show_says_the_count_out_loud(self):
+        """The derivation is worth nothing if the sentence a presenter reads
+        still implies the whole set gets played."""
+        script = (DEMO / "DEMO_SCRIPT.md").read_text(encoding="utf-8")
+        sec2 = script.split("## 2. They listen and rank")[1].split("\n## ")[0]
+        ordered = mda.by_play_order(
+            json.loads((DEMO / "manifest.json").read_text(encoding="utf-8"))["pairs"])
+        n_play = mda.n_primary(ordered)
+        self.assertIn(f"{mda.words(n_play).capitalize()} pairs are the beat", sec2,
+                      "section 2 does not state how many pairs are actually played")
+        self.assertIn("RESERVE", sec2,
+                      "section 2 does not name the held-back pair as a reserve")
+
     def test_emptying_the_record_degrades_to_construction_order(self):
         """The degenerate input (SPEC E.5). With nothing recorded, the honest
         answer is 'no judgement here', not a stale opinion with no owner."""

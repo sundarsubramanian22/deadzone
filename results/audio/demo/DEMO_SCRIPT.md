@@ -19,10 +19,11 @@ listener who sees them has been told the answer.
 >
 > **Section 7 changed again on 2026-08-06: the close is a QUESTION, not a
 > verdict.** It used to land on a conclusion about what listening can and
-> cannot establish about an ASR. One listener, on three pairs selected
-> BECAUSE the model tied on them, cannot carry a conclusion — this segment
-> is the MOTIVATING HOOK, and it is stronger as one. `demos/demo_listen.py`
-> closes the same way; the two must not diverge.
+> cannot establish about an ASR. One listener, judging a three-clip set
+> selected BECAUSE the model tied on it, cannot carry a conclusion — this
+> segment is the MOTIVATING HOOK, and it is stronger as one.
+> `demos/demo_listen.py` closes the same way and plays the same two pairs by
+> default (`DEFAULT_N_PAIRS`); the two must not diverge.
 >
 > The revision lives in the generator template
 > (`scripts/make_demo_audio.py`), not only in this file, so a regeneration
@@ -66,7 +67,7 @@ Give them `blind/BLIND_SHEET.md`. Two rules only:
 
 ## 2. They listen and rank (60 s)
 
-**Play pair 2 (`u21`) first, then pair 3 (`u26`). Pair 1 (`u40`) is the third if they want one.**
+**Two pairs are the beat — play pair 2 (`u21`) first, then pair 3 (`u26`). Pair 1 (`u40`) is the RESERVE — play it third ONLY if they want another.**
 
 All three carry identical evidential weight — the model scores every pair
 **exactly** equal (pair 1: 0.333 / 0.333 · pair 2: 0.222 / 0.222 · pair 3:
@@ -238,11 +239,12 @@ Play `blind_02.wav` (clean control) then `blind_05.wav`.
 > project claims, which is the kind of thing that moves a judgement. The
 > clips are **not level-matched** (they are byte-identical to what the model
 > was scored on, and a cosmetic gain would break that). **Presentation order
-> is not counterbalanced** — with three pairs it cannot be; one pair plays
-> the reverb arm first, the rest play it second. And I **selected these
-> three clips precisely because the model tied on them**, which is a
+> is not counterbalanced** — with a three-clip set it cannot be; one pair
+> plays the reverb arm first, the rest play it second. And I **selected
+> these three clips precisely because the model tied on them**, which is a
 > defensible choice for a demonstration and an indefensible one for an
-> estimate.
+> estimate. You heard two of them: two pairs is the beat and the third is a
+> reserve, so the set is small and the sample of it is smaller.
 >
 > It is also **not replicated in direction.** I pre-registered which way a
 > listener would go and got it wrong in 2 of 3 pairs. What repeated was only
@@ -280,8 +282,9 @@ Play `blind_02.wav` (clean control) then `blind_05.wav`.
 
 **Do not upgrade that into a verdict on stage.** This script used to close on
 a conclusion about what listening can and cannot establish about an ASR. One
-listener, on three pairs selected BECAUSE the model tied on them, cannot carry
-a conclusion — and asserting one here would be this project's own signature
+listener, judging a three-clip set selected BECAUSE the model tied on it — and
+the room in front of you heard two of those pairs, not the whole set — cannot
+carry a conclusion. Asserting one here would be this project's own signature
 failure committed in its own demo. As the motivating hook it is honest and it
 is stronger, because the question is the reason there is an instrument
 downstream of it.

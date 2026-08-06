@@ -40,12 +40,12 @@ this comparison is confounded by the channel factors.
 
 ## Per-clip facts (all from `results/master.csv`)
 
-Play order is **pair 2, then pair 3, pair 1 third** — see `DEMO_SCRIPT.md` §2.
-All three carry identical evidential weight (the model scores every pair
-exactly equal); the ordering is about the listener. The one session run so far
-(2026-08-05) drew confident calls on pair 2 and pair 3 and a hedge on pair 1
-("both pretty bad ... not 100% eveyeron would agree"), so pair 1 is no longer
-opened on.
+Play order is **pair 2, then pair 3, pair 1 third** — see `DEMO_SCRIPT.md` §2,
+and note the beat plays **two of the three**: the rest are reserves. All three
+carry identical evidential weight (the model scores every pair exactly equal);
+the ordering is about the listener. The one session run so far (2026-08-05)
+drew confident calls on pair 2 and pair 3 and a hedge on pair 1 ("both pretty
+bad ... not 100% eveyeron would agree"), so pair 1 is no longer opened on.
 
 ### Pair 1 — `u40` (third choice — play only if they want another)
 

@@ -2779,7 +2779,12 @@ def test_the_pin_covers_every_report_document():
     into §1 rather than shipped alongside it. Reference logs are exempt by name.
     """
     exempt = {"report/measurements.md",       # capture-chain log, measured once
-              "report/INTERVIEW_RUNBOOK.md",  # rehearsal notes, not a deliverable
+              # report/INTERVIEW_RUNBOOK.md was here and is now DELETED, not
+              # exempted. It was the document the presenter read most and the
+              # only one whose numbers nothing checked -- the J.7 gap, sitting
+              # in the exempt set that J.7 itself warns is where numbers rot.
+              # Superseded by report/INTERVIEW_INTERNAL.md, which is in DOCS
+              # and pinned. One presenter document, checked, beats two.
               # Stage directions moved off the demo's screen. Same category as
               # the runbook -- not a deliverable, never quoted -- and it is
               # written to quote no figures at all, naming the artifact each

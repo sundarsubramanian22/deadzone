@@ -457,8 +457,10 @@ def listener_ordering_note(m: dict) -> str:
                 "`LISTENER_SESSIONS` in `scripts/make_demo_audio.py` and the "
                 "order, the roles and this paragraph all follow from it.")
 
-    head = (f"Play order is **{_order_phrase(nums)}** — see `DEMO_SCRIPT.md` §2. "
-            f"All {'three' if len(nums) == 3 else len(nums)} carry identical "
+    head = (f"Play order is **{_order_phrase(nums)}** — see `DEMO_SCRIPT.md` §2, "
+            f"and note the beat plays **{words(len(conf))} of the "
+            f"{words(len(nums))}**: the rest are reserves. All "
+            f"{words(len(nums))} carry identical "
             f"evidential weight (the model scores every pair exactly equal); the "
             f"ordering is about the listener.")
     # "The one session run so far" is only true while there IS one. A second
@@ -1433,6 +1435,19 @@ Write your ranking down before we discuss any of it.
     return txt
 
 
+def n_primary(ordered: list[dict]) -> int:
+    """How many pairs the beat actually plays.
+
+    Derived from the recorded listener calls — a pair is `primary` iff that
+    listener called it confidently — so it is not a constant anyone can drift.
+    `demos/demo_listen.py:DEFAULT_N_PAIRS` is the same number on the other
+    surface, and `tests/test_make_demo_audio.py` pins the two together: a
+    run-of-show that says three while the script plays two is SPEC J.7 in
+    miniature.
+    """
+    return len(ordered)   # MUTATION
+
+
 def _play_line(ordered: list[dict]) -> str:
     """The one bolded instruction in section 2, built from the derived order."""
     primaries = [p for p in ordered if p["role"] == "primary"]
@@ -1451,10 +1466,13 @@ def _play_line(ordered: list[dict]) -> str:
     if reserves:
         rs = _and_list([lbl(p) for p in reserves])
         rs = rs[0].upper() + rs[1:]
-        tail = (f" {rs} is the {_ordinal(reserves[0]['play_position'])} if they "
-                f"want one." if len(reserves) == 1 else
-                f" {rs} are held back unless they want more.")
-    return f"**Play {lead}.{tail}**"
+        tail = (f" {rs} is the RESERVE — play it {_ordinal(reserves[0]['play_position'])} "
+                f"ONLY if they want another." if len(reserves) == 1 else
+                f" {rs} are RESERVES, held back unless they want more.")
+    n = len(primaries)
+    head = (f"{words(n).capitalize()} pair is the beat" if n == 1
+            else f"{words(n).capitalize()} pairs are the beat")
+    return f"**{head} — play {lead}.{tail}**"
 
 
 def write_demo_script(m: dict, *, force_docs: bool = False) -> str:
@@ -1469,6 +1487,11 @@ def write_demo_script(m: dict, *, force_docs: bool = False) -> str:
     ordered = by_play_order(m["pairs"])
     sc = prediction_scorecard(m)
     n_pairs = len(m["pairs"])
+    # The clip SET is n_pairs; the beat PLAYS n_play and holds the rest back.
+    # Two different numbers that a reader will happily conflate, so every
+    # sentence below has to say which one it means — the recorded session judged
+    # the whole set, the room in front of you did not.
+    n_play = n_primary(ordered)
     ties = " · ".join(f"pair {p['pair']}: {p['A']['wer']:.3f} / {p['B']['wer']:.3f}"
                       for p in m["pairs"])
     wer_rows = "\n".join(
@@ -1515,11 +1538,12 @@ def write_demo_script(m: dict, *, force_docs: bool = False) -> str:
             f"**refuted** — both are gone.\n\n"
             f"**Section 7 changed again on 2026-08-06: the close is a QUESTION, "
             f"not a verdict.** It used to land on a conclusion about what "
-            f"listening can and cannot establish about an ASR. One listener, on "
-            f"{words(n_pairs)} pairs selected BECAUSE the model tied on them, "
-            f"cannot carry a conclusion — this segment is the MOTIVATING HOOK, "
-            f"and it is stronger as one. `demos/demo_listen.py` closes the same "
-            f"way; the two must not diverge.\n\n"
+            f"listening can and cannot establish about an ASR. One listener, "
+            f"judging a {words(n_pairs)}-clip set selected BECAUSE the model tied "
+            f"on it, cannot carry a conclusion — this segment is the MOTIVATING "
+            f"HOOK, and it is stronger as one. `demos/demo_listen.py` closes the "
+            f"same way and plays the same {words(n_play)} pairs by default "
+            f"(`DEFAULT_N_PAIRS`); the two must not diverge.\n\n"
             f"The revision lives in the generator template "
             f"(`scripts/make_demo_audio.py`), not only in this file, so a "
             f"regeneration reproduces it instead of reverting it. The play "
@@ -1786,11 +1810,13 @@ sitting. They were blind to *which clip was which condition*, but **not naive to
 the hypothesis** — they knew what this project claims, which is the kind of thing
 that moves a judgement. The clips are **not level-matched** (they are
 byte-identical to what the model was scored on, and a cosmetic gain would break
-that). **Presentation order is not counterbalanced** — with {words(n_pairs)}
-pairs it cannot be; one pair plays the reverb arm first, the rest play it second.
+that). **Presentation order is not counterbalanced** — with a {words(n_pairs)}-clip
+set it cannot be; one pair plays the reverb arm first, the rest play it second.
 And I **selected these {words(n_pairs)} clips precisely because the model tied on
 them**, which is a defensible choice for a demonstration and an indefensible one
-for an estimate.
+for an estimate. You heard {words(n_play)} of them: {words(n_play)} pairs is the
+beat and the {_ordinal(n_pairs)} is a reserve, so the set is small and the sample
+of it is smaller.
 
 {honest_extra}**The measured half is the model-side paired result and its
 interval:** {s['paired_diff_A_minus_B']:+.4f} WER, CI
@@ -1825,11 +1851,13 @@ question it was built for, not one of its results."
 
 {para("**Do not upgrade that into a verdict on stage.** This script used to close "
       "on a conclusion about what listening can and cannot establish about an ASR. "
-      "One listener, on " + words(n_pairs) + " pairs selected BECAUSE the model tied "
-      "on them, cannot carry a conclusion — and asserting one here would be this "
-      "project's own signature failure committed in its own demo. As the motivating "
-      "hook it is honest and it is stronger, because the question is the reason "
-      "there is an instrument downstream of it.")}
+      "One listener, judging a " + words(n_pairs) + "-clip set selected BECAUSE the "
+      "model tied on it — and the room in front of you heard "
+      + words(n_play) + " of those pairs, not the whole set — cannot carry a "
+      "conclusion. Asserting one here would be this project's own signature failure "
+      "committed in its own demo. As the motivating hook it is honest and it is "
+      "stronger, because the question is the reason there is an instrument "
+      "downstream of it.")}
 
 {para("The measured half of that same disagreement is section 5, and it needs no "
       "ranking from anyone: the payoff clip is a condition where a listener can "

@@ -6,7 +6,7 @@ Real speech → real rooms → real noise → real codecs, one knob at a time, e
 `40 utterances` × `176 acoustic conditions` × `3 recognizers` = **10,560 scored transcriptions**
 
 > ### Why I built it
-> A coffee chat with someone at Deepgram who works on deployed voice agents. What stuck with me:
+> A chat with Pranav (Deepgram, Applied AI Verticals) led me to this. What stuck with me:
 > - non-production voice-AI work, WER high → the loop is often *move sliders, re-measure, keep what went down* — without a mechanism
 > - the open questions it left me with — how do **human and model perception** differ on the same audio? in a drive-thru, what actually drives WER: the physical setup, the speaker's distance from the mic, the **type of mic** feeding the agent?
 >
@@ -106,13 +106,13 @@ Corpus floor: clean-condition WER **1.65%** (6 errors / 363 reference words), ev
 > make demo-listen
 > ```
 > `~3 min · offline · no API key · headphones on`
-> You rank three pairs of clips by ear. Then you see what the model scored them.
+> You rank **two** pairs of clips by ear (a third is held in reserve). Then you see what the model scored them.
 
 **What it shows**
 
 ```mermaid
 flowchart LR
-  P["3 blind pairs<br/>drenched-but-quiet vs dry-but-buried"] --> H["HUMAN<br/>a clear preference in 3 of 3"]
+  P["3 blind pairs measured<br/>2 played live, 1 in reserve<br/>drenched-but-quiet vs dry-but-buried"] --> H["HUMAN<br/>a clear preference in 3 of 3"]
   P --> M["MODEL<br/>WER identical in 3 of 3<br/>0.333 vs 0.333 · 0.222 vs 0.222 · 0.250 vs 0.250"]
   H --> D{"they disagree"}
   M --> D

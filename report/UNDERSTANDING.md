@@ -1107,6 +1107,14 @@ one.
 
 ## One operational note
 
+> ✅ **RESOLVED 2026-08-06 — and resolved the harder way, not the one-line way.**
+> `UNDERSTANDING.md` is now in `DOCS`, not in `exempt`: 15 of its figures are
+> re-read from `results/` on every test run. `INTERVIEW_RUNBOOK.md`, the file the
+> paragraph below compares it to, was **deleted** rather than exempted — it was
+> the presenter's most-read document and the only one whose numbers nothing
+> checked. The paragraph is kept because its reasoning is the interesting part
+> and it argued for the wrong option.
+
 **Adding this file breaks a currently-green test.**
 `tests/test_report_numbers.py::test_the_pin_covers_every_report_document` asserts
 that no `.md` in `report/` quotes figures without being pinned, with only

@@ -5,13 +5,13 @@ anything, and not on screen. It sits in a second window or on paper.
 
 > ## Which presenter document wins
 >
-> There are two. **This one is the one you read from in the room.**
-> `report/INTERVIEW_RUNBOOK.md` is longer rehearsal material and stays useful for
-> practice, but **where the two disagree, this file wins, and the artifact wins over
-> both.** The reason is mechanical, not editorial: this document is in `DOCS` in
-> `tests/test_report_numbers.py`, so 23 of its figures are re-read from `results/` on
-> every test run and every check is proven able to fail. **The runbook is in that
-> test's `exempt` set** — nothing checks its numbers, and SPEC J.7 is the record of
+> There is now exactly **one**, and it is this file. `report/INTERVIEW_RUNBOOK.md`
+> was **deleted** on 2026-08-06 rather than reconciled — recoverable from git
+> history if you ever want it. The reason is mechanical, not editorial: this
+> document is in `DOCS` in `tests/test_report_numbers.py`, so 23 of its figures are
+> re-read from `results/` on every test run and every check is proven able to fail.
+> **The runbook was in that test's `exempt` set** — nothing checked its numbers,
+> and the artifact wins over this file too. SPEC J.7 is the record of
 > what happens to an unpinned presenter surface: it narrated a verdict the dashboard
 > contradicted and an SNR level the grid never ran.
 >
@@ -1539,11 +1539,11 @@ So the pinned surfaces agree by construction. The gaps are outside the gate:
 | **`SPEC.md` G.10** | the indistinguishable pair is "exactly equal per-clip on u40, u26, u21, u10" — implying 4 clips | **18 of 40.** The write-up and the demo say 18 and are correct; the SPEC is stale. |
 | **`SPEC.md` C.4** | the wrong (cell-wise) bootstrap comes out "~35–45 % too narrow" | Re-derived today: **rt60 32.5 %, snr_db 44.1 %**, mic_rolloff 13.0 %, and **codec goes the other way at 8.7 % wider.** Right order, loose on reverb, not universal. **Not persisted to any artifact.** |
 | **`results/MANIFEST.json` vs the tag** | freeze recorded at `0d7d8f5` | `grid-v1` sits at `c321715`; both are behind `HEAD`. Regenerate the manifest on the committed tree before tagging — **and the tag is deliberately held until the write-up, dashboard and artifacts all agree.** |
-| **`report/INTERVIEW_RUNBOOK.md`** | recommends saying *"streaming-capable, measured in batch"*, and asserts *"the project says 'streaming ASR' throughout"* | **Both superseded by SPEC K.2**, which bars *streaming-capable* too, and false of every forward-facing surface. Another agent is repairing it. **This doc wins** — see the box at the top. |
+| ~~`report/INTERVIEW_RUNBOOK.md`~~ | recommended saying *"streaming-capable, measured in batch"* | **RESOLVED by deletion, 2026-08-06.** Both claims were superseded by SPEC K.2. Rather than reconcile a second presenter document whose numbers nothing pinned, it was deleted. Recoverable from git history. |
 | **`report/STATUS.md`** — "No arm is streaming" | *"The framing says 'streaming-capable model'"* | Accurate on the fact, **stale on the framing**: it no longer does (SPEC K.5). |
-| **`README.md` §4 vs `demos/demo_listen.py`** | README's diagram says **3 blind pairs** / "a clear preference in 3 of 3" | The script now plays **2 by default** (`DEFAULT_N_PAIRS = 2`). Both are true of different things — the *recorded session* was 3 pairs, the *live beat* is 2. Run `--pairs 3` or say "two of the three." |
-| **`results/audio/demo/DEMO_SCRIPT.md`** (generated) | still states *"you cannot QA a voice agent by listening to it"* as a conclusion | **Barred as a verdict.** `demos/demo_listen.py` no longer closes on it. This is SPEC J.7's exact failure — a generated narration surface disagreeing with the script it narrates. |
-| **`scripts/make_manifest.py` → `results/MANIFEST.json`** | the arm taxonomy key is `"streaming_commercial"` | Its own `api` field immediately below reads `"pre-recorded (listen.v1.media.transcribe_file)"` — **the key contradicts its own value.** Left deliberately: renaming it changes a frozen artifact's schema (SPEC K.5). If he opens the manifest, get there first. |
+| ~~`README.md` §4 vs `demos/demo_listen.py`~~ | README's diagram said **3 blind pairs** while the script plays 2 | **RESOLVED 2026-08-06.** Decision: keep the default at **2 played live, the third held in reserve**, and the README now says exactly that. Three pairs were *measured*; two are *played*. |
+| ~~`results/audio/demo/DEMO_SCRIPT.md`~~ (generated) | stated *"you cannot QA a voice agent by listening to it"* as a conclusion | **RESOLVED 2026-08-06 (`be4aed2`)** — fixed in the GENERATOR TEMPLATE, not the file, so it survives a rebuild. Was SPEC J.7's exact failure: a generated narration surface disagreeing with the script it narrates. |
+| ~~`scripts/make_manifest.py`~~ | the arm taxonomy key was `"streaming_commercial"` while its own `api` field read `"pre-recorded"` | **RESOLVED 2026-08-06 (`8b42455`)** — renamed to `batch_commercial`. Nothing consumed the key by name (verified by grep first). Regenerate `results/MANIFEST.json` to pick it up. |
 | **In-flight, unverified at the time of writing** | `README.md`, `Makefile`, `dashboard/DEMO.md`, `demos/demo_listen.py`, `tests/test_report_numbers.py` and several test suites all have uncommitted edits from concurrent work | **Check before you demo.** Two known historical traps in that set: the dashboard panel-7 caption once said "Two commercial **streaming** models" (now repaired), and `DEMO.md`'s script once narrated "NOT CONFIRMED" while the panel says **CONFIRMED**, plus an "SNR twenty-five decibels" level the grid never ran. |
 
 **If he finds a disagreement you didn't flag**, the recovery line is the same every
@@ -1630,6 +1630,7 @@ Then, in this order:
   INFERRED / SPECULATION tags. It is the backing for §A/Q3 and it is the difference
   between "I don't know" and "here is exactly how far the public record goes."
 
-**Do not rehearse off `report/INTERVIEW_RUNBOOK.md` as well as this file.** See the
-box at the top: two presenter documents that disagree is SPEC J.7's failure, and it
-is the single most likely thing to bite in the room.
+**There is no second presenter document to rehearse off.** `INTERVIEW_RUNBOOK.md`
+was deleted rather than reconciled — see the box at the top. Two presenter
+documents that disagree is SPEC J.7's failure, and it was the single most likely
+thing to bite in the room.
