@@ -20,7 +20,9 @@ something is genuinely strong it is said once and left alone.*
 
 2. **The count sits on a cliff, and the count is not the strongest form of the
    claim.** "Dead zone" is defined by two hardcoded numbers (`wer_hi = 0.3`,
-   `conf_pct_hi = 0.6`) with **no sensitivity analysis anywhere in the repo**. I
+   `conf_pct_hi = 0.6`) with **no sensitivity analysis anywhere in the repo**
+   *(stale as of 2026-08-06 — there is one now, `results/dead_zone_sensitivity.{json,txt}`,
+   and it reproduces the hand-run table below exactly; verdict FRAGILE)*. I
    ran one: nova-3 gives **13** dead zones at (0.30, 0.50), **2** at (0.30, 0.60),
    **0** at (0.35, 0.60), and **0** at any WER threshold ≥ 0.40. Lead with the
    *continuous* result instead — mean overconfidence **+0.147**, overconfident in
@@ -604,6 +606,31 @@ finds the 0.101 while you are asserting a categorical "cannot," it costs you mor
 than the softer claim ever would.
 
 ### 4.8 The project never says what Deepgram's confidence score actually *is*
+
+> ⚠️ **PARTLY SUPERSEDED 2026-08-06 — and consequence 3 below REVERSES.** The gap
+> named here was real when written and has since been closed by
+> `deadzone/analysis/confidence_char.py` → `results/confidence_char.{json,txt}`.
+> What changed, and it matters because the answer you would give in a room is now
+> the opposite one:
+> - **Consequence 1 is CONFIRMED and now persisted.** Clean reference **0.9622**
+>   at WER 0.0084; raw recordings give 0.9619, so the mildest grid cell is an
+>   exact proxy. Dynamic range down to **0.422**.
+> - **Consequence 2 is CLOSED.** `utterance_conf` was measured: distinct from
+>   `mean_conf` (pearson 0.926) but **not better** at ranking bad transcripts, so
+>   leaving it unread cost nothing measurable.
+> - **Consequence 3 is REFUTED — do not say "the minimum is the operationally
+>   relevant number" in an interview.** It was computed, and **the mean WINS**:
+>   aggregate AUROC **0.944** for `mean` against **0.877** for `min`, a paired
+>   difference of **[−0.080, −0.055]** — min is *significantly worse*. The
+>   hypothesis in the paragraph below was tested and lost. The right reading is
+>   that nova-3 spreads its information across words rather than concentrating it
+>   in the weakest one, which is what you would expect of a per-frame acoustic
+>   score rather than a lattice-derived one.
+>
+> The paragraph is left unedited below because it is the record of what was
+> believed before it was measured, and "I predicted min would win, tested it, and
+> it lost" is a stronger answer than either belief on its own. See
+> `report/INTERVIEW_INTERNAL.md` §A/Q3 for the delivery.
 
 Limitation 12 is purely negative: "vendor confidence is not a calibrated
 probability by construction." Nothing anywhere characterises what it *is* — no
