@@ -109,6 +109,20 @@ corrections to it.
 - **babble** — many people talking at once (cafeteria, station). The hardest noise class because it is *competing speech*: the model can transcribe the background instead of the target.
 - **g726 / opus-lowrate** — g726 is ITU-T narrowband telephony ADPCM at 16 kbit/s (the "phone line" level); opus-lowrate is modern VoIP Opus starved to 8 kbit/s (the "bad VoIP" level). Both applied as real ffmpeg encode-decode round-trips, not modelled.
 ## §4 · ▶ Demo 1 — the disagreement
+
+> ### 🗣 SAY THIS ON SCREEN
+> **Spoken script — read aloud, not reference.** Every number below is an **ILLUSTRATIVE PLACEHOLDER**: read the real values off the screen from whatever clip loads. They are not measurements, nothing pins them, and they must never be quoted as results.
+>
+> *The moment:* two clips get identical WER (e.g. 0.222 vs 0.222) but the transcripts differ — one dropped 2 words, the other substituted 1 and dropped 1.
+>
+> *Why the WER is identical (say this):*
+> "Both score 0.222 — two errors out of nine words. But look what broke: clip 1 just dropped two words, clip 2 swapped one and dropped one. Different rooms, different failures — one model went quiet, the other guessed wrong. WER is a headcount: it adds up substitutions, deletions, and insertions and divides by length. It counts how many errors, never which words or what kind. So two acoustically opposite conditions collapse to the same number."
+>
+> *Why it matters (the takeaway):*
+> "That's the whole argument for not deploying on WER alone. Same score, but one needs denoising, the other needs dereverberation — WER can't tell you which. That's what the fingerprints section fixes: classify the error type, because deletion means a front-end fix and substitution means a decoding-side fix."
+>
+> *If pushed "so what would you use?":* → the §8 fingerprints answer (edit-type classification).
+
 - **Decision:** Open on a listening test, and call it a **hook, not a finding**.
   **Why:** The one thing I need him to feel before any chart is that a human ear and this model's score are not the same axis. Fastest way to make someone believe that is to let them get it wrong themselves. I couldn't settle by ear which condition was actually harder — which is the whole reason I built an instrument instead of trusting QA-by-listening. *(Populations: the corpus check behind it is nova-3 on **all 40 clips**; whisper and Scribe only ever ran a 10-clip subset.)*
   **If pushed:** n=1, unblinded — the listener knew what the experiment was looking for, and went the opposite way to my sealed prediction in 2 of 3. Concede it as theatre with a real measurement behind it: the evidence is the model side, never the ear.
@@ -144,6 +158,24 @@ corrections to it.
 - **calibration** → whether a stated confidence matches observed accuracy: of everything you called 0.9, were 90% right?
 - **dead zone / silence-driven / mute zone** → confidently wrong on the clips it spoke on (2) · looked wrong only because clips vanished (4) · returned nothing at all, on every clip (7). Three mechanisms, three different fixes; a confidence alarm is blind to the third.
 ## §6 · ▶ Demo 2 — the hero
+
+> ### 🗣 SAY THIS ON SCREEN
+> **Spoken script — read aloud, not reference.** Every number below is an **ILLUSTRATIVE PLACEHOLDER**: read the real values off the screen from whatever clip loads. They are not measurements, nothing pins them, and they must never be quoted as results.
+>
+> *The moment:* the degraded transcript collapses (WER 0→0.6) but confidence barely moves (0.997→0.687), and the model reports high confidence (e.g. 0.955) on an inserted word the speaker never said — higher than its average on words it got right. Meanwhile the hardest correct word (a surname) scores the lowest confidence in the utterance.
+>
+> *Why confidence barely moved (say this):*
+> "Accuracy collapsed — WER went from zero to 0.6 — but the model's self-report only dropped from 0.997 to 0.687. It stayed confident while it fell apart. That gap is the dead zone: a system trusting this confidence would commit to a broken transcript."
+>
+> *Why it's confident on a wrong word (say this):*
+> "It reported 0.955 on a word the speaker never said — higher than its average on the words it got right. A modern decoder's confidence isn't purely 'did I hear this' — it's partly 'does this word fit what I've already committed to.' The invented word makes a fluent English sentence, so it's linguistically confident even though there was no audio behind it. The confidence rides the fluency, not the acoustics."
+>
+> *Why that's the dangerous part (the takeaway):*
+> "And it's inverted where it matters. The hardest correct word — a surname — is its least confident, because a name has no language pattern to lean on; it can only hear it. So the signal is backwards exactly where deployment needs it: sure about the filler it invented, unsure about the entity it nailed. That's why confidence thresholding alone isn't enough, and why I built the calibrator."
+>
+> *If pushed "is that how Deepgram's model actually works?":*
+> "I can show the behavior from my data — confident insertions, unconfident entities. The mechanism I'm inferring from how autoregressive decoders generally work; I verified it from Whisper's published source, but Deepgram's internals aren't public, so for nova-3 it's a well-motivated hypothesis, not something I confirmed in their decoder."
+
 - **Decision:** the hero demo makes two *real* Deepgram calls on stage instead of replaying cached numbers.
   **Why:** the whole claim is that the confidence number is not a stored constant. You have to hear the degraded audio to believe the condition is real, and watch the confidences come back off the wire to believe the model isn't hedging — a cached demo proves neither.
   **If pushed:** it can fail live, so it is built to fail quietly — no key, no wifi, a vendor error or a timeout gives one explanatory line, falls through to archived measurements labelled `CACHED`, and exits 0; `make demo-replay` runs the identical beat offline. nova-3 only, because Scribe's transcript for byte-identical audio is a coin flip and Whisper is local, so there is no wire to watch.
