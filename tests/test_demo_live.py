@@ -722,18 +722,26 @@ class MakefileTarget(unittest.TestCase):
         self.assertRegex(help_block, r"(?i)needs.*wifi|network")
         self.assertIn("DEEPGRAM_API_KEY", help_block)
 
-    def test_demo_live_is_not_in_the_offline_spine(self):
+    def test_demo_live_is_not_chained_into_the_spine(self):
         """
-        The spine must stay offline-only. `make demo` running a network call
-        would put the wifi back on the critical path, which is the exact thing
-        the whole demo kit is built to avoid.
+        `make demo` is now `demos/demo_hero.py`, which DOES call the API — the
+        one thing a cached beat cannot show is the payload arriving. The
+        offline guarantee was not dropped, it moved: the hero falls back to the
+        archived measurements and exits 0 on a missing key, a dead network, a
+        vendor error or a timeout, and `make demo-replay` runs the whole beat
+        from cache. `tests/test_demo_hero.py` asserts all of that.
+
+        What must still hold, and is what this checks: THIS file's beat is not
+        chained into it. Two independent live paths in one target means two
+        chances to fail for one piece of evidence, and `demo-live` is the
+        hand-held fallback precisely because it is not wired to anything.
         """
         mk = (REPO / "Makefile").read_text()
         line = next(l for l in mk.splitlines()
                     if l.startswith("demo:") or l.startswith("demo: "))
         self.assertNotIn("demo-live", line,
-                         "demo-live is wired into the `demo` chain; the spine must "
-                         "not depend on the network")
+                         "demo-live is wired into the `demo` chain; it is the "
+                         "hand-held fallback and must stay unchained")
 
 
 if __name__ == "__main__":

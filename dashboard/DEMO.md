@@ -1,21 +1,29 @@
 # The demo — rehearsed running order and timings
 
-Four pieces, ~6.5 minutes total. Every one of them runs with **wifi off** and with
-**no `DEEPGRAM_API_KEY` in the environment**. One command each; nothing is typed live.
+Four pieces, ~7 minutes total. One command each; nothing is typed live.
 
-| # | Piece | Command | Rehearsed | Measured |
+| # | Piece | Command | Rehearsed | Network? |
 |---|---|---|---|---|
-| 1 | Opener — the trap functions are green | `make test-core` | **30 s** | ~16 s |
-| 2 | Degrade-and-break — the visceral one | `make demo-break` | **60 s** | ~14 s (12.6 s of it is audio) |
-| 3 | The active-learning loop | `make demo-al` | **30 s** | ~11 s |
-| 4 | The dashboard, the path below | `make dashboard` | **4.5 min** | opens instantly |
+| 1 | Opener — the trap functions are green | `make test-core` | **30 s** | offline |
+| 2 | **The hero** — one clip, played and transcribed LIVE, twice | `make demo` | **2 min** | live, falls back |
+| 3 | The active-learning loop | `make demo-al` | **30 s** | offline |
+| 4 | The dashboard, the path below | `make dashboard` | **4.5 min** | offline |
 
-`make demo` runs all four in that order. The measured column is the floor — the
-rehearsed column is the budget, because you are talking over pieces 1–3.
+`make demo-all` runs all four in that order.
 
-`make demo-live` is the **only** target that touches the network: it re-transcribes
-one clip live to show the beat is real, and it falls back to cache and exits 0 if
-there is no wifi or no key. It is optional and it is not part of the scripted path.
+**Piece 2 is the only one that touches the network, and it is safe.** The
+interviewer picks a clip from a menu of measured dead zones (or takes a random
+one); the raw recording plays and is transcribed live; then the degraded version
+plays and is transcribed live; the punchline is computed from the payload that
+just arrived, and the archived grid row is shown afterwards as a reproduction
+check. No key, no network, a vendor error or a timeout each print **one** line,
+fall back to the archived measurements for that same clip and condition, and
+**exit 0**.
+
+**Rehearse it with wifi off using `make demo-replay`** — the identical beat from
+cache. That is also the instant fallback if the live path misbehaves on the day.
+`make demo-break` (audio + cached numbers, no calls) and `make demo-live` (two
+calls, no audio) are the two halves on their own, kept working as fallbacks.
 
 There is **no live voice agent** in this demo. SPEC R7 was scoped out of this push
 deliberately; `agent_eval.py` exists as a synthetic-validated scaffold and that is

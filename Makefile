@@ -1,19 +1,27 @@
 # Deadzone — demo kit (SPEC A.R9)
 #
-# One command per demo, nothing multi-step. The entire on-stage path — `make demo`
-# and every target it chains — needs NO API key and touches NO network. Rehearse
-# with wifi OFF.
-#
-# `make demo-live` is the sole exception: an OPTIONAL extra beat that needs both.
-# It is deliberately not a prerequisite of `demo`, and it falls back to cache and
-# exits 0 when either is missing.
+# One command per demo, nothing multi-step.
 #
 #   make help          what you can run
-#   make demo          the full scripted path, in order
+#   make demo          THE HERO. One clip, played and transcribed LIVE, twice.
+#   make demo-all      the full scripted path (hero + AL + dashboard), in order
 #
+# WHAT CHANGED, AND WHY IT IS STATED HERE. `make demo` used to chain
+# test-core -> demo-break -> demo-al -> dashboard, and every step was offline by
+# construction. It is now the single merged hero beat, which DOES call the API —
+# because the one thing a cached demo cannot show is the payload arriving. The
+# offline guarantee has not been dropped, it has been moved: `demo_hero.py`
+# falls back to the archived measurements and exits 0 on a missing key, a dead
+# network, a vendor error or a timeout, and `make demo-replay` runs the whole
+# beat from cache with no network at all. The old chain is `make demo-all`.
+#
+# `demo-break` and `demo-live` survive as hidden fallback targets. They are not
+# on the on-stage list any more (the hero does both jobs), but they still work,
+# and they are what you reach for if the hero misbehaves on the day.
 .DEFAULT_GOAL := help
-.PHONY: help lock test test-core demo demo-prep demo-break demo-al demo-check \
-        dashboard dashboard-build clean-demo demo-live demo-listen
+.PHONY: help lock test test-core demo demo-all demo-replay demo-prep demo-break \
+        demo-hero demo-al demo-check dashboard dashboard-build clean-demo \
+        demo-live demo-listen
 
 PY       := ./.venv/bin/python
 # NOTE: `./.venv/bin/pip` is a broken console script on this machine — its shebang
@@ -33,20 +41,25 @@ OPEN := $(shell command -v open 2>/dev/null || command -v xdg-open 2>/dev/null)
 
 help:
 	@echo ""
-	@echo "  Deadzone demo kit — the whole ON-STAGE path runs OFFLINE, no API key required."
+	@echo "  Deadzone demo kit."
 	@echo ""
-	@echo "  ON STAGE (in this order)"
+	@echo "  THE HERO"
+	@echo "    make demo             2 min  one clip, played and transcribed LIVE, twice:"
+	@echo "                                 raw, then in a measured dead zone. You pick the"
+	@echo "                                 clip. This is the ONE target that needs wifi +"
+	@echo "                                 DEEPGRAM_API_KEY — and it is safe without them:"
+	@echo "                                 no key, no network, a vendor error or a timeout"
+	@echo "                                 each print one line, fall back to the archived"
+	@echo "                                 measurements, and exit 0."
+	@echo "    make demo-replay      2 min  the same beat entirely from cache — rehearsal"
+	@echo "                                 mode, and the instant fallback. No network."
+	@echo ""
+	@echo "  ALSO ON STAGE"
 	@echo "    make test-core        30 s  the trap functions + the demo kit, green"
-	@echo "    make demo-break       60 s  one clip, clean -> measured dead zone"
 	@echo "    make demo-al          30 s  the surrogate walking onto the boundary"
 	@echo "    make demo-listen      3 min INTERACTIVE — they listen, rank, then see the tie"
 	@echo "    make dashboard         —    open the self-contained HTML from file://"
-	@echo "    make demo                   all four, in sequence"
-	@echo ""
-	@echo "  OPTIONAL — the only target that touches the network"
-	@echo "    make demo-live        20 s  the same beat, transcribed LIVE"
-	@echo "                                NEEDS wifi + DEEPGRAM_API_KEY. Skippable:"
-	@echo "                                it falls back to cache and exits 0."
+	@echo "    make demo-all               test-core + hero + demo-al + dashboard, in order"
 	@echo ""
 	@echo "  BEFORE STAGE"
 	@echo "    make demo-check             preflight: is every artifact present?"
@@ -54,6 +67,10 @@ help:
 	@echo "    make lock                   refresh requirements.lock.txt"
 	@echo "    make test                   every test_*.py ($(words $(TESTS)) suites, ~60 s)"
 	@echo "    make dashboard-build        regenerate $(DASH) from results/master.csv"
+	@echo ""
+	@echo "  FALLBACKS (still supported; superseded on stage by 'make demo')"
+	@echo "    make demo-break             the offline half alone: audio + cached numbers"
+	@echo "    make demo-live              the live half alone: two calls, no audio"
 	@echo ""
 	@echo "  CLEANUP"
 	@echo "    make clean-demo             delete results/demo/"
@@ -102,12 +119,36 @@ test-core:
 ## + the listening set (results/audio/demo/, run-of-show in its DEMO_SCRIPT.md)
 demo-prep:
 	$(PY) demos/demo_break.py --prepare
+	$(PY) demos/demo_hero.py --prepare
 	$(PY) scripts/make_demo_audio.py
 
 results/demo/demo_cache.json:
 	@$(MAKE) --no-print-directory demo-prep
 
-## THE 60 SECONDS. One clip clean, then in a measured dead zone.
+results/demo/hero/hero_cache.json:
+	@$(PY) demos/demo_hero.py --prepare
+
+## THE HERO. One clip, played and transcribed LIVE, twice. The interviewer picks
+## the clip from a menu of measured dead zones (or takes a random one). Both
+## calls are real; every number on screen comes from the two responses that just
+## arrived, and the archived grid row is shown afterwards as corroboration —
+## never as a stand-in.
+##
+## It is safe to run with no key and no network: each failure prints ONE line,
+## falls back to the archived measurements for the same clip and condition, and
+## exits 0. `make demo-replay` is the same beat from cache, for rehearsal.
+demo: results/demo/hero/hero_cache.json
+	@$(PY) demos/demo_hero.py
+
+demo-hero: demo
+
+## rehearsal / fallback: the whole hero beat with no network at all
+demo-replay: results/demo/hero/hero_cache.json
+	@$(PY) demos/demo_hero.py --replay
+
+## FALLBACK (hidden from `make help`'s on-stage list). The offline half of the
+## hero on its own: audio plus the cached measurements, no API call. Kept
+## working because on the day it is the thing that cannot fail.
 demo-break: results/demo/demo_cache.json
 	@$(PY) demos/demo_break.py
 
@@ -124,17 +165,11 @@ demo-al:
 demo-listen:
 	@$(PY) demos/demo_listen.py
 
-## OPTIONAL LIVE BEAT — the ONLY target here that needs network + an API key.
-## Two real nova-3 calls (~$0.001) on one clip: clean, then the #1 measured
-## dead zone, showing the per-word confidences as they come back.
-##
-## Deliberately NOT a prerequisite of `demo`. The spine is offline by design and
-## must stay that way — if this were in the chain, a conference wifi outage
-## would take the whole demo down, which is the exact failure the kit exists to
-## prevent. It is safe to run anyway: no key, no network, a vendor error or a
-## timeout all print one explanatory line, fall back to the cached results, and
-## exit 0. Rehearse it with `demos/demo_live.py --offline`; preflight it with
-## `demos/demo_live.py --check` before you decide whether to schedule the beat.
+## FALLBACK (hidden from `make help`'s on-stage list). The live half of the hero
+## on its own: two real nova-3 calls on one hardcoded clip, no audio playback.
+## Superseded by `make demo`, which does this AND plays the audio AND lets the
+## interviewer choose the clip. Kept because it is a second, independently
+## written path to the same evidence, and on the day two paths beat one.
 demo-live:
 	@$(PY) demos/demo_live.py
 
@@ -150,8 +185,9 @@ dashboard:
 dashboard-build:
 	$(PY) dashboard/build.py --master results/master.csv
 
-## the whole scripted path, in the rehearsed order
-demo: test-core demo-break demo-al dashboard
+## the whole scripted path, in the rehearsed order. This is what `make demo`
+## used to be, minus demo-break — the hero replaces it and does strictly more.
+demo-all: test-core demo demo-al dashboard
 	@echo ""
 	@echo "  Done. The dashboard is open; the 3-minute path is in dashboard/DEMO.md."
 	@echo ""
@@ -163,6 +199,7 @@ demo: test-core demo-break demo-al dashboard
 
 ## is every artifact the demo needs actually on disk, right now, offline?
 demo-check:
+	@$(PY) demos/demo_hero.py --check
 	@$(PY) demos/demo_break.py --check
 	@$(PY) scripts/make_demo_audio.py --check
 

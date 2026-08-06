@@ -96,3 +96,91 @@ nobody "cleans them up" thinking they are asides.
   `results/audio/demo/DEMO_SCRIPT.md` (written by `scripts/make_demo_audio.py`)
   still state it as a conclusion. Reconcile before anyone rehearses off both:
   SPEC J.7 is exactly this failure, found by a rehearsal rather than a test.
+
+---
+
+## From `demos/demo_hero.py` (moved out 2026-08-06, when `make demo` became the hero)
+
+`demo_hero.py` is the merge of `demo_break` (audio, cached numbers) and
+`demo_live` (two real calls, no audio). Four things that used to print on the
+live path do not print any more. None of them is wrong; they are operational
+facts that crowd out the two numbers the beat exists to compare, on the one
+slide the whole argument rests on.
+
+### 1. The cost line — `WHAT THAT COST`, and the per-minute rate quoted with a date
+
+> `2 calls · N s of audio · $X   (nova-3 pre-recorded, $R/min as of <date>)`
+> `For scale: the entire N-call grid behind this demo cost ~$Y.`
+
+**Why it existed, and it is a good instinct.** Quoting a vendor rate *with the
+date it was true* is the same discipline as freezing a model literal: a stale
+price stated as current is the class of error this project is about.
+
+**Why it is off the screen.** Two calls cost a fraction of a cent. Putting a
+dollar figure on the projector invites a conversation about pennies at the exact
+moment the room should be looking at a confidence bar. And the "for scale, the
+whole grid cost ~$Y" line is a *provenance* claim, not a demo claim.
+
+**Where it lives instead.** `demos/demo_live.py` still carries the constants
+(`USD_PER_MINUTE`, `RATE_AS_OF`, `GRID_CALLS`, `GRID_USD`) and still prints the
+panel — that target survives as a fallback. The authoritative figures are in
+`results/MANIFEST.json`, which records the call counts, the audio minutes and
+the spend per arm for the frozen run. **Quote the manifest, never this file and
+never a demo's screen.**
+
+**Say it out loud if asked** ("what did this cost?"): the number is in the
+freeze artifact, along with the model literal and the date. That is a better
+answer than a line on a slide, because it comes with its provenance attached.
+
+### 2. `run_id` and the row timestamp in the reproduction check
+
+> `grid   WER … conf …   (run_id 7f3a21…, 2026-08-04)`
+
+**Why it existed.** The reproduction check compares a live call against the
+archived row, and identifying *which run* wrote that row is exactly right for a
+written record.
+
+**Why it is off the screen.** An opaque hex id on a projector is noise. What the
+room needs from that panel is the delta and whether it cleared tolerance; the
+hero prints the live figures first, labelled live, then the archived row,
+labelled archived, then the delta. Provenance of the archived row is a question
+with a written answer.
+
+**Where it lives instead.** `results/master.csv` carries `run_id` and `ts` per
+row, and `results/MANIFEST.json` names the run. Every number the hero prints is
+re-readable from `master.csv` for that `(clip_id, condition_name, model)`, and
+`tests/test_demo_hero.py` asserts exactly that.
+
+### 3. The MANIFEST paragraph
+
+> `The rate is quoted with a date because vendor rates move;`
+> `results/MANIFEST.json holds the one the grid was priced at.`
+
+Same call as (1) and (2): true, useful, and a written-record sentence. The hero's
+reproduction panel keeps the *argument* it was making — that a commercial model
+literal is updated server-side, so a live call is not automatically the same
+experiment as the grid — and drops the file path. If the numbers have moved the
+panel says `MOVED` and says why; if they agree it says how tightly.
+
+### 4. What deliberately stayed on screen
+
+- **The credential PROVENANCE line** (`credential DEEPGRAM_API_KEY, from .env`).
+  It names the *variable*, never a value, never a prefix. It is there because on
+  a screen-share the audience should be able to see that nothing secret is being
+  printed, and because "which key did it use" is the first question when a live
+  call fails.
+- **The fallback notice.** One yellow paragraph naming the cause. It is meant to
+  be read aloud.
+- **The population line under the aggregate** (`averaged over the N of M clips
+  this condition produced words on`). Not a stage direction — it is the estimand,
+  and this project published a wrong headline once for want of it.
+
+### Guard
+
+`tests/test_demo_hero.py::NothingOperationalReachesTheScreen` scans a replay run
+*and* a patched live run for a dollar amount, a per-minute rate, `run_id`,
+`MANIFEST`, `USD` and the old cost heading, and pins the scanner with a positive
+control for each pattern so a matcher that matches nothing cannot pass. It also
+asserts `demos/demo_hero.py` does not import the pricing constants at all, so
+they cannot creep back through a helper. If you deliberately want one of them
+back on screen, that test is where you say so.
