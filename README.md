@@ -90,7 +90,7 @@ Each produces **clean-looking garbage (audibly)** if subtly wrong — plausible 
 <table>
 <tr>
 <td align="center"><b>40</b><br/>utterances<br/><sub>names · phone numbers · spelled codes · addresses</sub></td>
-<td align="center"><b>176</b><br/>conditions<br/><sub>144 babble factorial (4×4×3×3 + 32 engine/road corners)</sub></td><td align="center"><b>3</b><br/>recognizers<br/><sub>nova-3 · scribe_v2 · whisper-base</sub></td>
+<td align="center"><b>176</b><br/>conditions<br/><sub>4×4×3×3 = 144 babble · + 32 engine/road corners</sub></td><td align="center"><b>3</b><br/>recognizers<br/><sub>nova-3 · scribe_v2 · whisper-base</sub></td>
 </tr>
 <tr>
 <td align="center"><b>10,560</b><br/>scored rows<br/><sub>3 failures = 0.03%</sub></td>
@@ -112,8 +112,6 @@ Corpus floor: clean-condition WER **1.65%** (6 errors / 363 reference words), ev
 
 ---
 
----
-
 ## 4 · ▶ Demo 1 — the disagreement
 
 > # ▶ RUN THIS
@@ -127,11 +125,11 @@ Corpus floor: clean-condition WER **1.65%** (6 errors / 363 reference words), ev
 
 ```mermaid
 flowchart LR
-  P["3 blind pairs measured<br/>2 played live, 1 in reserve<br/>drenched-but-quiet vs dry-but-buried"] --> H["HUMAN (n=1, unblinded)<br/>picked a clear winner each time"]
+  P["3 blind pairs measured<br/>2 played live, 1 in reserve<br/>drenched-but-quiet vs dry-but-buried"] --> H["HUMAN (n=1, unblinded)<br/>a preference in 3 of 3<br/>two confident, one 'a little gap'"]
   P --> M["MODEL<br/>WER identical in 3 of 3<br/>0.333 vs 0.333 · 0.222 vs 0.222 · 0.250 vs 0.250"]
   H --> D{"they disagree"}
   M --> D
-  D --> C["corpus check, same two conditions, all 40 clips<br/>paired difference −0.018 WER<br/>95 percent CI −0.065 to +0.031<br/>18 of 40 clips score identically"]
+  D --> C["corpus check — make demo-listen --measured<br/>same two conditions, all 40 clips<br/>paired difference −0.018 WER<br/>95 percent CI −0.065 to +0.031<br/>18 of 40 clips score identically"]
 ```
 
 **The two conditions behind that corpus check**
@@ -143,7 +141,7 @@ flowchart LR
 
 A vs B → **−0.018** paired difference, 95% CI **[−0.065, +0.031]** (spans zero) · **18 of 40** clips score exactly equal
 
-**→ On 18 of 40 clips the model scored the two conditions *identically* — a listener hears an obvious difference. "It sounds fine to me" is not evidence the ASR works.**
+**→ The measurement is the model side: on 18 of 40 clips these two conditions score *identically*, and the paired difference spans zero.** The listening beat is the **hook**, not evidence — one unblinded listener, who called two pairs confidently and the third only "a little gap", and who went the *opposite* way to my sealed prediction in two of three (appendix (b)). What that buys is the question, not the answer: a human ranking and this model's ranking are not the same axis, and I could not check which was right by ear — so I built something that could.
 
 ---
 
@@ -161,7 +159,7 @@ A vs B → **−0.018** paired difference, 95% CI **[−0.065, +0.031]** (spans 
   <img src="docs/assets/overconfidence.svg" alt="Distribution of the per-condition confidence gap; no threshold involved" width="820">
 </p>
 
-*Operating-point and aggregation choices (precision/recall, why mean over min/p10, clip-level ρ = −0.952) are validated — covered live.*
+*Operating-point and aggregation choices (precision/recall, why mean over min/p10, and the mismatched all-clips pairing ρ = −0.952 — the same 169 conditions scored against WER over **every** clip instead of only the ones that spoke) are validated — covered live.*
 
 ### The count, and why it is not the headline
 
@@ -207,6 +205,7 @@ flowchart LR
 > nova-3 ran **40 clips**. whisper-base and elevenlabs-scribe ran a **10-clip subset**.
 > **Every number in this section is the 10 clips all three arms ran — 1,757 rows per arm.**
 > Same model, two correct answers: nova-3's dead-zone rate is **1.14% (2/176)** on 40 clips and **0.57% (1/176)** on 10. Quoting either without its clip count is the error.
+> **Two columns below are NOT that population, and say so:** ECE and AUROC are each computed **within-arm over that arm's full run** — nova-3 40 clips (42,732 words · 7,040 rows), Scribe and Whisper 10 clips (14,668 words · 1,760 and 1,757 rows). Neither statistic subtracts one arm from another, so a full-run figure is the right one to report; it is simply not the matched intersection, and mixing the two silently is the §5 bug one section later.
 
 <p align="center">
   <img src="docs/assets/model-comparison.svg" alt="Dead-zone rate and confidence-vs-WER shape across the three arms" width="820">
@@ -214,7 +213,7 @@ flowchart LR
 
 **Dead-zone rate and ρ(confidence, WER) are in the chart above.** What it doesn't show — same 10-clip intersection, 1,757 rows per arm:
 
-| arm | utterance AUROC | ECE raw → +temp → +features | silent rows | mute conditions |
+| arm | utterance AUROC ‡ | ECE raw → +temp → +features ‡ | silent rows | mute conditions |
 |---|---|---|---|---|
 | **nova-3** | **0.944** | **0.0507 → 0.0346 → 0.0077** | 24.5% | 12 |
 | **elevenlabs-scribe** | 0.737 | 0.1646 → 0.0755 → 0.0340 ^ | **4.4%** | 2 |
@@ -223,9 +222,11 @@ flowchart LR
 ^ **upper bound** — correctness labels come from the same alignment as WER, so orthography disagreements label correct words incorrect.
 § **BLOCKED** — whisper's hypothesis-word count and confidence-list length disagree after alignment; binding them would score the *wrong* words, so ECE is refused, not faked. AUROC survives because it needs only a ranking of confidences against a bad/good label, not word-level correctness binding.
 AUROC = same aggregate (arithmetic mean) for every arm, `bad := row WER ≥ 0.3`, computed **strictly inside** each arm.
+‡ **full run per arm** (nova-3 40 clips, others 10) — see the population box above.
 
 > ⚠️ **This is NOT a "commercial beats open" result — read the columns against each other.**
-> nova-3 leads on **every** statistic. **Scribe and Whisper swap depending on which one you read** — Scribe ahead on ρ (−0.820 vs −0.590) and dead-zone rate (3.98% vs 39.20%), **Whisper ahead on utterance-level AUROC (0.888 vs 0.737)**.
+> nova-3 leads on **every** statistic. **Scribe and Whisper swap depending on which one you read** — Scribe ahead on ρ (−0.820 vs −0.590), **Whisper ahead on utterance-level AUROC (0.888 vs 0.737)**.
+> *Scribe has no dead-zone rate in this comparison on purpose:* a dead zone is an **absolute** WER threshold, and Scribe's orthography is a per-call draw — its 7 strict dead zones fall to **0** under the normalizer. They were spelling, not confident error. A statistic that is "within-model" can still be a *level* statistic; that one is.
 > n = 3 arms with only **one** open model, and it is also the only **small** one (74M) → commercial-vs-open, vendor, and size are all confounded.
 
 ### nova-3 — knows it's failing, then goes quiet
@@ -272,7 +273,7 @@ AUROC = same aggregate (arithmetic mean) for every arm, `bad := row WER ≥ 0.3`
 
 **The mechanism:** a **deletion** means the word never reached the decoder (no token emitted) → only a **front-end** fix recovers it. A **substitution** means a wrong word *was* emitted from degraded evidence → a **decoding-side prior** (boosting, entity-aware decoding) can recover it. That's why the chart's split matters: 7 of 9 families are deletion-dominant (front-end work), and only `g726` and road noise are substitution-dominant (where boosting actually helps).
 
-**Entities die faster than words** — entity error rate **0.633** vs. WER **0.511**. But not uniformly:
+**Entities die faster than words** (nova-3, 40 clips) — entity error rate **0.633** vs. WER **0.511**. But not uniformly:
 
 | word class | destroyed |
 |---|---|
