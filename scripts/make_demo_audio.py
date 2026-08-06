@@ -1513,6 +1513,13 @@ def write_demo_script(m: dict, *, force_docs: bool = False) -> str:
             f"confident call and asserted a precedence-effect / "
             f"informational-masking mechanism that the listening pass "
             f"**refuted** — both are gone.\n\n"
+            f"**Section 7 changed again on 2026-08-06: the close is a QUESTION, "
+            f"not a verdict.** It used to land on a conclusion about what "
+            f"listening can and cannot establish about an ASR. One listener, on "
+            f"{words(n_pairs)} pairs selected BECAUSE the model tied on them, "
+            f"cannot carry a conclusion — this segment is the MOTIVATING HOOK, "
+            f"and it is stronger as one. `demos/demo_listen.py` closes the same "
+            f"way; the two must not diverge.\n\n"
             f"The revision lives in the generator template "
             f"(`scripts/make_demo_audio.py`), not only in this file, so a "
             f"regeneration reproduces it instead of reverting it. The play "
@@ -1801,16 +1808,39 @@ and the limitations section says so."
 
 ---
 
-## 7. The takeaway (10 s) — the line to land on
+## 7. The close (10 s) — a QUESTION, not a verdict
 
-{quote('''
-"**You cannot QA a voice agent by listening to it.** 'Sounds fine to me' is
-not evidence that the ASR works, and 'sounds terrible' is not evidence that it
-fails. The decoupling runs in both directions — I just played you one clip a
-human finds easy that the model fails outright, and a pair a human ranks
-unequal that the model scores the same. If your acceptance test is a person
-with headphones, you are measuring the wrong system."
+{quote(f'''
+"Whichever way you called those pairs — and 'about the same' is a real answer —
+the model reports no difference at all. Not a small one: none. Every pair you
+heard it scored identically, and across all {s['n_clips']} clips the two kinds of
+damage differ by **{s['paired_diff_A_minus_B']:+.4f} WER**, an interval that {verdict}.
+
+Your ears and that number are not measuring the same thing, and I had no way to
+settle which of them to believe by listening harder. 'Sounds fine to me' is an
+opinion and I could not check it — so I built something that could measure it
+instead. Everything after this segment is that instrument. This segment is the
+question it was built for, not one of its results."
 ''')}
+
+{para("**Do not upgrade that into a verdict on stage.** This script used to close "
+      "on a conclusion about what listening can and cannot establish about an ASR. "
+      "One listener, on " + words(n_pairs) + " pairs selected BECAUSE the model tied "
+      "on them, cannot carry a conclusion — and asserting one here would be this "
+      "project's own signature failure committed in its own demo. As the motivating "
+      "hook it is honest and it is stronger, because the question is the reason "
+      "there is an instrument downstream of it.")}
+
+{para("The measured half of that same disagreement is section 5, and it needs no "
+      "ranking from anyone: the payoff clip is a condition where a listener can "
+      "plainly hear a person speaking and the model returns an empty string on "
+      f"{pay['n_empty']} of {pay['n_clips']} clips. Land on that, not on a claim about "
+      "listening.")}
+
+{para("`demos/demo_listen.py` closes the same way, and the two must not diverge — "
+      "SPEC J.7 is a rehearsal finding a demo script narrating a verdict its own "
+      "artifact contradicted. The retracted line and the reasoning behind dropping "
+      "it are in `report/_demo_internal_notes.md`.")}
 
 ---
 
@@ -1818,11 +1848,13 @@ with headphones, you are measuring the wrong system."
 
 - **No speakers / bad room:** skip to section 3 and show the transcripts. The
   measured half needs no audio at all.
-{backwards_fallback}- **They rank the pair EQUAL, or say "I can't call it":** say plainly that the
-  human half didn't fire this time, which costs nothing. The measured half is
-  untouched. Then pivot to section 5 — the payoff clip needs no ranking at all:
-  a human can obviously still hear speech, and the model returned an empty
-  string.
+{backwards_fallback}- **They rank the pair EQUAL, or say "I can't call it":** that is a real answer,
+  not a failed demo — say so. One listener agreeing with the model is worth no
+  more than one listener disagreeing with it, which is exactly why the interval
+  underneath is the measured half and this half is only the question. The
+  measured half is untouched. Then pivot to section 5 — the payoff clip needs no
+  ranking at all: a human can obviously still hear speech, and the model returned
+  an empty string.
 - **They rank confidently but inconsistently across pairs** (one each way): that
   is the honest state of the human evidence and it is fine to say so. The
   model-side claim is per-pair and holds in all {words(n_pairs)}.
@@ -1911,9 +1943,13 @@ What you are listening for yourself, before you run it on anyone:
   buried**: the {room_name(B['room'])} response, measured RT60
   {B['rt60_measured']:.3f} s, DRR {B['drr_db']:+.2f} dB, babble at
   {num(B['snr_db'])} dB.
-- If those two do NOT sound clearly different to you, stop: something is wrong
-  with the composer, because the model says they are equally damaging and the
-  whole exercise is that a human should disagree.
+- If those two do NOT sound clearly different to you, stop and check the
+  composer: they are two unrelated degradations, so they should not sound alike.
+  That is a DSP check on your own ears and **not** a prediction about the
+  listener. The model scores them equally damaging; whether a person ranks them,
+  and which way, is the QUESTION this exercise raises — not a result it is
+  supposed to produce. A listener who calls them about the same has given a real
+  answer, and the run-of-show handles it.
 - **The payoff** (`{pay['deadzone_blind']}`, condition
   `{m['conditions']['payoff']['name']}`) should still sound like a person
   speaking. The model returned an empty string on it — and on

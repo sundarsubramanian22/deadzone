@@ -8,9 +8,21 @@ cutting-edge voice AI — and the model under test is their product.
 - **The subject under test is their product.** The framing is *"I built an
   instrument that finds where an ASR fails silently, and here is what it found"* —
   never *"your model is bad."* The instrument is the deliverable; Nova-3 is the
-  first thing measured with it. Say **"streaming-capable, measured in batch"**
-  rather than "streaming" from the very first sentence — the concession later in
-  this document only works if you have not already overclaimed it in the opener.
+  first thing measured with it.
+- **Do not say "streaming" — and "streaming-capable" is barred too.** SPEC
+  Appendix K (`bcd685a`) dropped the streaming scope outright: **nothing was ever
+  streamed**, so the word is a claim rather than a description, and
+  "streaming-capable" was the previous compromise that still put it on the cover.
+  The project's external title is now **"Deadzone: Silent Failures in Speech
+  Recognition"**, and every arm is **batch** — Deepgram via the pre-recorded
+  endpoint, ElevenLabs via batch REST, Whisper locally with full-file lookahead.
+  Say **"a commercial ASR model that exposes per-word confidence"**, which is the
+  real reason the arm is in the study at all: Whisper, Conformer and wav2vec do
+  not expose one, so the silent-failure question is unanswerable on them. Where
+  deployment relevance is the point, say **"the failure mode matters for a live
+  voice agent, though everything here was measured batch."** Keep the word only
+  where the *point of the sentence is the limitation* — there it is a competence
+  signal, and it is strengthened rather than softened.
 - **The data is favourable to them on the measured arms — but do not build the
   segment on that.** Nova-3's confidence tracks its own error rate at spearman
   **−0.980** (D1, 40 clips), and on the matched subset it beats Whisper by a
@@ -69,9 +81,14 @@ Build the spine with deep branches, and let them steer.
 
 One sentence: *aggregate WER hides where and how a model fails, so I stopped
 asking "how much does it break" and asked "does it know it's breaking" —
-because for a streaming voice agent, a confidently wrong transcript is far more
+because for a live voice agent, a confidently wrong transcript is far more
 dangerous than a visibly uncertain one. Confidence is what decides whether the
 system commits or asks the user to repeat.*
+
+Then the scope, in the same breath and before any result: **everything here was
+measured batch — no arm streamed.** Said in the opener it is a boundary you
+drew; extracted later it is a concession. Same fact, opposite read (see *The
+batch scope* below).
 
 Then the honest positioning immediately, before they wonder: **this genre is
 well-trodden** — WildASR, Speech Robustness Bench, "When Denoising Hinders".
@@ -99,10 +116,18 @@ them has been told the answer.
 > reverb clip harder"** by name. The beats below and `DEMO_SCRIPT.md` now agree —
 > use whichever is in front of you.
 >
-> 🛑 **One live hazard in that file:** it is **generated** by
-> `scripts/make_demo_audio.py`, which rewrites it unconditionally, and the
-> revisions are hand-written. Do not run the generator before the interview. See
-> `REGENERATION_HAZARD.md` in the same directory.
+> ⚠️ **Its section 7 changed on 2026-08-06 and this runbook changed with it.**
+> The script used to close on a verdict about what listening can establish about
+> an ASR; it now closes on **the question**, because one listener on three pairs
+> chosen *because the model tied on them* cannot carry a conclusion. If you have
+> a printout older than that, throw it away — see *the close* below.
+>
+> ✅ **The regeneration hazard is CLOSED.** Every hand-written block in that file
+> now lives in the generator template, so `scripts/make_demo_audio.py` reproduces
+> it rather than reverting it, and it refuses to overwrite anything a human has
+> edited since. You still have no reason to run the generator before the
+> interview — but it is no longer a landmine. `REGENERATION_HAZARD.md` in the same
+> directory carries the detail.
 
 **Beat 1 — the ranking. Ask, do not predict.** Show that
 `PREREGISTERED_PREDICTION.md` exists and **leave it closed** — stating a
@@ -116,10 +141,14 @@ Play, in this order:
 - **Pair 3 — `blind_08` / `blind_04` (`u26`)**
 - Pair 1 — `blind_03` / `blind_07` (`u40`) — only if he wants a third.
 
-`BLIND_SHEET.md` lists the pairs as 1-2-3 and that numbering is fine to leave
-alone — you are choosing the *play order*, not renumbering the sheet. The sheet
-already asks him to say **how confident** he is on each pair; keep that, because
-it is the thing that makes his answers comparable to the listener already run.
+`BLIND_SHEET.md` now lists its rows **in play order — pair 2, pair 3, pair 1** —
+while keeping the pair *labels* unchanged, so the sheet and the order above agree
+without renumbering anything. (The labels are the join key to `KEY.md`,
+`DEMO_SCRIPT.md` and the sealed prediction; renumbering them would break every
+cross-reference.) The sheet already asks him to say **how confident** he is on
+each pair; keep that, because it is what makes his answers comparable to the
+listener already run — and *"about the same"* is a real answer, not a failed
+demo.
 
 Pairs 2 and 3 are the ones the single listener so far called **confidently**;
 pair 1 he called with low confidence by his own account ("not 100 % everyone
@@ -181,9 +210,10 @@ notice if you only volunteer the predictions that worked.
 > the registration, not in the data.
 >
 > What survives is the half I would have kept either way: **a human had a
-> preference in 3 of 3 pairs, and the model scores every pair exactly equal.** The
-> disagreement is the result. *'And here's why'* is not — I had a mechanism, I
-> wrote it down, and the data went the other way."
+> preference in 3 of 3 pairs, and the model scores every pair exactly equal.**
+> That disagreement is the *question* this project came out of — not one of its
+> results; one listener can't make it one. *'And here's why'* is the part I don't
+> have: I had a mechanism, I wrote it down, and the data went the other way."
 
 Have the tally ready if he asks: preference expressed in **3 of 3** pairs,
 confident in **2 of 3** (pairs 2 and 3), predicted direction held in **1 of 3**
@@ -207,11 +237,36 @@ human half properly is a listening study with many listeners, randomised order
 and level-matched stimuli — the experiment this project does not have, and the
 limitations section says so.
 
-**The takeaway is a product claim, and it survives the failed prediction intact:**
-*you cannot QA a voice agent by listening to it.* "Sounds fine to me" is not
-evidence the ASR works, and "sounds terrible" is not evidence it fails — a human
-ranks these unequal, in a direction I could not predict, and the model scores them
-the same.
+**The close is a QUESTION, not a verdict — and this CHANGED on 2026-08-06.**
+This beat used to land on a product claim: ~~*you cannot QA a voice agent by
+listening to it*~~. **Retracted — do not say it.** It is a conclusion, and this
+beat cannot carry one: **n = 1, three pairs, selected *because* the model tied on
+them**, with the pre-registered direction failing in 2 of 3. Asserting a
+conclusion off that is the exact error this project exists to study, committed in
+the project's own demo, in front of the one person guaranteed to notice. **It is
+the motivating hook, and as the hook it is stronger** — the question is the reason
+there is an instrument downstream of it. `demos/demo_listen.py` closes this way
+(`ff1eb28`) and so does `DEMO_SCRIPT.md` §7; land in the same place:
+
+> "Whichever way you called those — and 'about the same' is a real answer — the
+> model reports no difference at all. Not a small one: **none**. Every pair you
+> heard it scored identically, and across all **40** clips the two kinds of damage
+> differ by **−0.0178 WER**, an interval that spans zero. Your ears and that
+> number are not measuring the same thing, and I had no way to settle which of
+> them to believe by listening harder. 'Sounds fine to me' is an opinion and I
+> couldn't check it — so I built something that could measure it instead.
+> Everything after this is that instrument. This beat is the question it was
+> built for, not one of its results."
+
+**If he ranks them equal, nothing breaks.** One listener agreeing with the model
+is worth no more than one disagreeing with it — which is precisely why the
+interval underneath is the measured half and this half is only the question. Say
+that, then go to Beat 2, which needs no ranking from anyone.
+
+**What is measured, and is safe to state as a result:** the paired model-side
+interval and the 18-of-40 exact ties above, and Beat 2's empty transcript at
+20 dB SNR. Those are grid measurements; they do not depend on anyone's ears and
+they read the same whichever way he ranked.
 
 **Beat 2 — the payoff.** Play `blind_02` (clean control) then `blind_05`: `u03`
 under `rt60-0.7 / snr-20 / babble / opus-lowrate / roll-1`. The SNR is **20 dB**
@@ -614,8 +669,9 @@ signal available, and much stronger from you than found by them.
   - The forward-looking half, and it belongs in the *next steps* answer rather
     than the results: `scribe_v2_realtime` exposes **the same per-word `logprob`
     over a websocket**, so it is the cheapest route to this project's first
-    genuinely *streaming* arm — which is the gap the streaming-framing section
-    below already concedes.
+    genuinely *streaming* arm — the boundary *The batch scope* below states
+    outright, and the one place the word belongs, because there the point of the
+    sentence IS the limitation.
 - **Why G.726 and not AMR-NB?** Stock ffmpeg is AMR decode-only. The split paid
   off anyway: g726 produces substitutions, opus-lowrate deletions — two
   mechanisms from one factor.
@@ -697,18 +753,36 @@ line, fall back to the cached replay, and **exit 0**.
 
 ## Calibrating for a Labs SWE specifically
 
-### Get ahead of the streaming framing. He will catch it.
+### The batch scope. Say it in the opener, and say it as a decision.
 
-The project says "streaming ASR" throughout, but **the grid ran on the
-pre-recorded endpoint, not `listen.live`.** Say so before he asks:
+**The forward-facing framing no longer claims streaming.** SPEC Appendix K
+(`bcd685a`, `8b42455`) dropped the scope; the write-up title and abstract, the
+dashboard, `README.md` and `CLAUDE.md` all now state the batch scope outright
+rather than implying otherwise. So this is not a concession you are bracing for;
+it is a boundary you drew, and you should still volunteer it, because he builds
+the thing it is a boundary on.
 
-> "Everything in the grid is pre-recorded. That is the honest label. The
-> confidence signal and the acoustic failure modes carry over, but anything
+**All three arms are batch.** Deepgram via `listen.v1.media.transcribe_file`,
+never `listen.live`; ElevenLabs via batch REST, never `scribe_v2_realtime`;
+Whisper locally with full-file lookahead.
+
+> "Everything in the grid is pre-recorded, and I stopped calling this a streaming
+> study — nothing streamed, so the word was a claim rather than a description.
+> Nova-3 is in here for the **per-word confidence**, which is what makes the
+> silent-failure question askable at all; Whisper and Conformer don't expose one.
+> The confidence signal and the acoustic failure modes carry over, but anything
 > about endpointing or turn-taking genuinely requires the live socket — which is
 > exactly why that is the named next step rather than something I'm claiming."
 
 Volunteered, this is a scoping decision. Discovered by him, it looks like you
 did not know the difference. Same fact, opposite read.
+
+**If he greps the repo and finds the word:** `SPEC.md` §0–§13 and Appendices A–J
+still say "streaming" verbatim, **deliberately**. SPEC is a dated log and the
+project's rule is supersede forward, never edit backward — Appendix K records the
+decision rather than rewriting the history that preceded it. That is a real
+answer. *"I missed it"* is not, and neither is pretending the word was never
+there.
 
 ### Turn-taking is his team's problem, and the most Labs-relevant thing here
 
@@ -783,7 +857,7 @@ earn that simulation cannot.
 
 ---
 
-## The four things to be sure you say
+## The five things to be sure you say
 
 1. *"This genre is well-trodden and nothing in the method is novel."* — first
    five minutes, unprompted.
@@ -802,8 +876,18 @@ earn that simulation cannot.
    vendor's orthography is non-deterministic across identical calls, so a
    benchmark making one call per clip is measuring a coin flip."*
 
-**And the three things to be sure you do NOT say:**
+**And the five things to be sure you do NOT say:**
 
+- **"You cannot QA a voice agent by listening to it."** Retracted 2026-08-06. It
+  is a conclusion drawn from **one listener on three pairs chosen because the
+  model tied on them**, with the pre-registered direction failing in 2 of 3. The
+  listening beat is the **motivating hook**, and it closes on the question — see
+  §2's close and `DEMO_SCRIPT.md` §7, which say the same thing in the same words.
+- **"Streaming", or "streaming-capable".** Both are barred (SPEC Appendix K).
+  Every arm is batch; say *"a commercial ASR model that exposes per-word
+  confidence"*, and where deployment relevance is the point, *"the failure mode
+  matters for a live voice agent, though everything here was measured batch."*
+  The word survives only where the sentence's point IS the limitation.
 - **Any Scribe dead-zone rate.** 3.98 % is real arithmetic on a metric that is not
   scale-free; it goes to **0/176** under the normalizer. The rate is not a
   property of the model.

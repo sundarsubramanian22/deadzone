@@ -45,9 +45,13 @@ What you are listening for yourself, before you run it on anyone:
   buried**: the Restaurant response, measured RT60
   0.193 s, DRR +16.90 dB, babble at
   0.0 dB.
-- If those two do NOT sound clearly different to you, stop: something is wrong
-  with the composer, because the model says they are equally damaging and the
-  whole exercise is that a human should disagree.
+- If those two do NOT sound clearly different to you, stop and check the
+  composer: they are two unrelated degradations, so they should not sound alike.
+  That is a DSP check on your own ears and **not** a prediction about the
+  listener. The model scores them equally damaging; whether a person ranks them,
+  and which way, is the QUESTION this exercise raises — not a result it is
+  supposed to produce. A listener who calls them about the same has given a real
+  answer, and the run-of-show handles it.
 - **The payoff** (`blind_05.wav`, condition
   `rt60-0.7_snr-20_babble_opus-lowrate_roll-1`) should still sound like a person
   speaking. The model returned an empty string on it — and on

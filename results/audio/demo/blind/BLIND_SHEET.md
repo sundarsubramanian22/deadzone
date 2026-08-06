@@ -14,9 +14,9 @@ is the distinction that matters.
 
 | pair | clips |
 |---|---|
-| 1 | `blind_03.wav` and `blind_07.wav` |
 | 2 | `blind_01.wav` and `blind_06.wav` |
 | 3 | `blind_04.wav` and `blind_08.wav` |
+| 1 | `blind_03.wav` and `blind_07.wav` |
 
 Then, separately: `blind_02.wav` and `blind_05.wav`. Same question, plus one more —
 **can you still tell that someone is speaking?**

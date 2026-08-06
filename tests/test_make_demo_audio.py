@@ -106,6 +106,29 @@ def _build_sandbox(root: Path, script_patches: list[tuple[str, str]] | None = No
     return root / "results" / "audio" / "demo"
 
 
+# The guard tests below used to get their "a human edited this" condition for
+# free, because the live kit had no `generated_docs.json` and every document
+# therefore read as `authored`. That made three controls depend on an INCIDENTAL
+# property of the working tree: on 2026-08-06 the kit was rebuilt from the
+# templates, the sidecar appeared, and the controls started asserting that a
+# refusal happened in a run that had nothing to refuse. A control that passes
+# because the fixture happens to be in the right state is the same shape as the
+# defects this file exists to catch, so the condition is now CONSTRUCTED.
+HAND_EDIT = "\n<!-- a human wrote this line and it must survive -->\n"
+
+
+def _plant_hand_edit(demo: Path, name: str = "KEY.md") -> bytes:
+    """Make one document genuinely hand-edited, and return its exact bytes.
+
+    `KEY.md` by default: it carries none of `OUTCOME_SENTINELS` and nothing
+    downstream parses it, so planting there cannot accidentally satisfy or break
+    another assertion in the same test.
+    """
+    p = demo / name
+    p.write_text(p.read_text(encoding="utf-8") + HAND_EDIT, encoding="utf-8")
+    return p.read_bytes()
+
+
 class TheGuard(unittest.TestCase):
     """
     `write_doc()` in its four states. Every refusal is paired with the write it
@@ -316,11 +339,17 @@ class TheAuthoredRecord(unittest.TestCase):
                     f"exactly this string as the check — or it was deliberately "
                     f"rewritten, in which case update OUTCOME_SENTINELS here.")
 
-    def test_a_default_run_leaves_every_document_byte_identical(self):
+    def test_a_default_run_leaves_a_hand_edited_document_byte_identical(self):
         """
         The real generator, at its real default, against a COPY of the real
-        demo directory. Byte-equality rather than a sentinel search, so this
-        keeps working when the wording of the record changes.
+        demo directory with ONE document deliberately hand-edited. Byte-equality
+        rather than a sentinel search, so this keeps working when the wording of
+        the record changes.
+
+        The plant is what makes the assertion non-vacuous. Since the kit was
+        rebuilt from the templates every document is the generator's own output
+        again, so without a plant this test would be checking that a run which
+        had nothing to protect protected nothing.
         """
         master = REPO / "results" / "master.csv"
         if not master.is_file() or not (REPO / "data" / "recordings").is_dir():
@@ -333,35 +362,49 @@ class TheAuthoredRecord(unittest.TestCase):
                 os.symlink(REPO / name, sb / name)
             os.symlink(master, sb / "results" / "master.csv")
             shutil.copytree(DEMO, sb / "results" / "audio" / "demo")
+            demo_sb = sb / "results" / "audio" / "demo"
 
-            before = {p.name: p.read_bytes()
-                      for p in (sb / "results" / "audio" / "demo").rglob("*.md")}
-            n_wavs_before = len(list((sb / "results" / "audio" / "demo").rglob("*.wav")))
+            edited = _plant_hand_edit(demo_sb)
+            before = {p.name: p.read_bytes() for p in demo_sb.rglob("*.md")}
+            n_wavs_before = len(list(demo_sb.rglob("*.wav")))
 
             r = subprocess.run([PY, "scripts/make_demo_audio.py", "--force"],
                                cwd=sb, capture_output=True, text=True, timeout=600)
             self.assertEqual(r.returncode, 0, r.stdout[-3000:] + r.stderr[-3000:])
 
-            after = {p.name: p.read_bytes()
-                     for p in (sb / "results" / "audio" / "demo").rglob("*.md")}
+            after = {p.name: p.read_bytes() for p in demo_sb.rglob("*.md")}
             changed = sorted(n for n in before if after.get(n) != before[n])
             self.assertEqual(changed, [],
                              "a default run rewrote hand-edited documents — this "
                              "is the exact regression the guard exists to stop")
+            self.assertEqual((demo_sb / "KEY.md").read_bytes(), edited,
+                             "the planted human edit did not survive a default run")
+            self.assertNotIn("superseded-", " ".join(p.name for p in demo_sb.rglob("*")),
+                             "a default run made a backup, so it took the "
+                             "--force-docs path without being asked")
 
-            # The control that makes the assertion above mean something: the run
-            # really did do its work. A generator that crashed early, or bailed
-            # on "up to date", would leave every document untouched too and would
-            # pass a test that only checked for damage.
+            # The controls that make the assertions above mean something: the run
+            # really did do its work, and it refused the ONE document it should
+            # have. A generator that crashed early, or bailed on "up to date",
+            # would leave every document untouched too and would pass a test that
+            # only checked for damage.
             self.assertIn("REFUSING to overwrite", r.stdout)
-            self.assertIn("PROTECTED", r.stdout)
+            self.assertIn("KEY.md", r.stdout.split("REFUSING to overwrite")[1][:200])
+            self.assertIn("1 PROTECTED", r.stdout,
+                          "the census does not report exactly one protected "
+                          "document, so either more was refused than was planted "
+                          "or the census is not counting")
             self.assertEqual(
-                len(list((sb / "results" / "audio" / "demo").rglob("*.wav"))),
+                len(list(demo_sb.rglob("*.wav"))),
                 n_wavs_before, "the audio half of the build did not run")
 
     def test_force_docs_can_still_rebuild_the_kit_from_scratch(self):
         """The override is not decorative: without it the kit could never be
-        regenerated after the first hand edit."""
+        regenerated after the first hand edit.
+
+        The hand edit is planted rather than assumed. Reading the live kit's
+        state as "already edited" is what silently retired this assertion once
+        already — see the note above `_plant_hand_edit`."""
         master = REPO / "results" / "master.csv"
         if not master.is_file() or not (REPO / "data" / "recordings").is_dir():
             self.skipTest("needs results/master.csv and data/ to run the generator")
@@ -374,15 +417,19 @@ class TheAuthoredRecord(unittest.TestCase):
             os.symlink(master, sb / "results" / "master.csv")
             shutil.copytree(DEMO, sb / "results" / "audio" / "demo")
             demo_sb = sb / "results" / "audio" / "demo"
-            before = (demo_sb / "PREREGISTERED_PREDICTION.md").read_bytes()
+            before = _plant_hand_edit(demo_sb, "PREREGISTERED_PREDICTION.md")
 
             r = subprocess.run([PY, "scripts/make_demo_audio.py", "--force-docs"],
                                cwd=sb, capture_output=True, text=True, timeout=600)
             self.assertEqual(r.returncode, 0, r.stdout[-3000:] + r.stderr[-3000:])
 
+            rebuilt = (demo_sb / "PREREGISTERED_PREDICTION.md").read_bytes()
             self.assertNotEqual(
-                (demo_sb / "PREREGISTERED_PREDICTION.md").read_bytes(), before,
+                rebuilt, before,
                 "--force-docs did not overwrite, so the kit is not rebuildable")
+            self.assertNotIn(HAND_EDIT.encode(), rebuilt,
+                             "--force-docs left the human's line in place, so it "
+                             "did not rebuild from the template")
             backups = list(demo_sb.glob("PREREGISTERED_PREDICTION.superseded-*.md"))
             self.assertEqual(len(backups), 1,
                              "--force-docs overwrote without keeping a copy")
@@ -455,19 +502,20 @@ class ThePlayOrderIsDerivedFromTheListenerRecord(unittest.TestCase):
                 return c["confidence"]
         return mda.UNTESTED
 
-    def assert_kit_agrees_with_the_record(self, demo: Path, *,
-                                          check_blind_sheet: bool = True):
+    def assert_kit_agrees_with_the_record(self, demo: Path):
         """Every artifact in the kit tells the same story about which pair leads.
 
         Raises AssertionError on any disagreement — which is what the negative
         control below asserts it does.
 
-        `check_blind_sheet=False` is for the LIVE kit only. `blind/BLIND_SHEET.md`
-        on disk predates the play-order fix and is `authored` (no recorded hash),
-        so the generator will not touch it without `--force-docs` — and running
-        that against the live kit is precisely what the guard exists to prevent
-        being done casually. The row-order guarantee is therefore asserted where
-        it is actually a guarantee: on a fresh `--force-docs` regeneration.
+        The `check_blind_sheet=False` exemption this method used to carry for the
+        LIVE kit is GONE. It existed because `blind/BLIND_SHEET.md` on disk
+        predated the play-order fix — its rows read 1, 2, 3 while the derived play
+        order is 2, 3, 1 — and the guard would not let the generator correct it
+        without `--force-docs`. That rebuild happened on 2026-08-06, so the live
+        sheet is now in play order and the exemption would only hide a
+        regression. A listener works that page top to bottom; if its rows and the
+        run-of-show ever disagree again, this must fail.
         """
         want = self.expected_order()
         m = json.loads((demo / "manifest.json").read_text(encoding="utf-8"))
@@ -506,17 +554,16 @@ class ThePlayOrderIsDerivedFromTheListenerRecord(unittest.TestCase):
                          f"the record says {want}")
 
         # 4. the listener's own sheet, which they work top to bottom
-        if check_blind_sheet:
-            sheet = (demo / "blind" / "BLIND_SHEET.md").read_text(encoding="utf-8")
-            rows = re.findall(r"^\| (\d) \| `blind", sheet, flags=re.M)
-            self.assertEqual([int(r) for r in rows], [num[c] for c in want],
-                             "BLIND_SHEET rows are not in play order, so a "
-                             "listener working down the page undoes the ordering")
+        sheet = (demo / "blind" / "BLIND_SHEET.md").read_text(encoding="utf-8")
+        rows = re.findall(r"^\| (\d) \| `blind", sheet, flags=re.M)
+        self.assertEqual([int(r) for r in rows], [num[c] for c in want],
+                         "BLIND_SHEET rows are not in play order, so a "
+                         "listener working down the page undoes the ordering")
 
     # --- the live kit ------------------------------------------------------
 
     def test_the_kit_on_disk_agrees_with_the_record(self):
-        self.assert_kit_agrees_with_the_record(DEMO, check_blind_sheet=False)
+        self.assert_kit_agrees_with_the_record(DEMO)
 
     def test_emptying_the_record_degrades_to_construction_order(self):
         """The degenerate input (SPEC E.5). With nothing recorded, the honest
@@ -539,9 +586,17 @@ class ThePlayOrderIsDerivedFromTheListenerRecord(unittest.TestCase):
     # --- the regression, and its mutation control --------------------------
 
     def _regenerate(self, patches=None) -> tuple[Path, subprocess.CompletedProcess]:
+        """`--force-docs` against a sandbox that contains a real hand edit.
+
+        The plant is not decoration: `--force-docs` only prints
+        `OVERWRITING hand-edited` for documents it actually had to override, and
+        since the kit was rebuilt from the templates there would otherwise be
+        none — the assertion that this run rewrote anything would pass or fail on
+        the working tree's state rather than on the generator's behaviour."""
         td = tempfile.mkdtemp(prefix="deadzone-playorder-")
         self.addCleanup(shutil.rmtree, td, ignore_errors=True)
         demo = _build_sandbox(Path(td), patches)
+        _plant_hand_edit(demo)
         r = subprocess.run([PY, "scripts/make_demo_audio.py", "--force-docs"],
                            cwd=td, capture_output=True, text=True, timeout=600)
         self.assertEqual(r.returncode, 0, r.stdout[-3000:] + r.stderr[-3000:])
@@ -603,6 +658,139 @@ class ThePlayOrderIsDerivedFromTheListenerRecord(unittest.TestCase):
                          "so this control is not testing what it claims")
         with self.assertRaises(AssertionError):
             self.assert_kit_agrees_with_the_record(demo)
+
+
+class TheCloseIsAQuestionNotAVerdict(unittest.TestCase):
+    """
+    The listening beat is the MOTIVATING HOOK, not a finding, and the run-of-show
+    has to close that way.
+
+    Section 7 used to land on a conclusion about what listening can and cannot
+    establish about an ASR. It cannot carry one: **one listener, three pairs,
+    selected BECAUSE the model tied on them**, with the pre-registered direction
+    failing in 2 of 3. `demos/demo_listen.py` was re-voiced in `ff1eb28` and
+    `tests/test_demo_listen.py` pins its close; the generated script is the OTHER
+    surface a presenter reads, and SPEC J.7 is precisely a rehearsal finding a
+    demo script narrating a verdict its own artifact contradicted. Prose is not
+    executable, so nothing in this repo could have caught that — this is the pin.
+    """
+
+    # Lower-cased, because the retraction has to survive re-capitalisation.
+    RETRACTED = "you cannot qa a voice agent by listening to it"
+    # Where the retracted line legitimately still lives. Asserting its presence
+    # here is the control: without it, `assertNotIn(RETRACTED, ...)` could be a
+    # sentence about a matcher that never matched anything anywhere.
+    RETRACTION_RECORD = REPO / "report" / "_demo_internal_notes.md"
+
+    # Reinstates the pre-2026-08-06 close, and nothing else. Two anchors because
+    # one of them is the heading and one is the read-aloud line; restoring only
+    # the heading would leave a test passing on the wrong half.
+    OLD_VERDICT_CLOSE = [
+        ("## 7. The close (10 s) — a QUESTION, not a verdict",
+         "## 7. The takeaway (10 s) — the line to land on"),
+        ('"Whichever way you called those pairs — and \'about the same\' is a real answer —',
+         '"**You cannot QA a voice agent by listening to it.** Never mind that'),
+    ]
+
+    @classmethod
+    def setUpClass(cls):
+        if not DEMO.is_dir():
+            raise unittest.SkipTest(f"{DEMO} not present")
+
+    @staticmethod
+    def flat(text: str) -> str:
+        """Lower-cased, with every run of whitespace and markdown blockquote
+        markers collapsed to one space.
+
+        Necessary, not cosmetic: the template hard-wraps at 78 columns and the
+        read-aloud blocks are `>`-quoted, so a sentence that must not appear can
+        be split across a line break and a `>` and still be read aloud verbatim.
+        Matching raw text would let the retracted verdict back in on a wrap.
+        """
+        return re.sub(r"[>\s]+", " ", text.lower())
+
+    def assert_the_close_is_a_question(self, script: str):
+        low = self.flat(script)
+        self.assertNotIn(
+            self.RETRACTED, low,
+            "the run-of-show is back to closing on a verdict. One listener on "
+            "three pairs chosen because the model tied on them cannot carry a "
+            "conclusion — see results/audio/demo/REGENERATION_HAZARD.md.")
+        for needed in ("## 7. the close",
+                       "a question, not a verdict",
+                       "the model reports no difference at all",
+                       "not one of its results",
+                       "do not upgrade that into a verdict"):
+            self.assertIn(needed, low, f"the close lost: {needed!r}")
+
+    def test_the_matcher_finds_the_retracted_line_where_it_still_belongs(self):
+        """The negative control for every `assertNotIn` below."""
+        if not self.RETRACTION_RECORD.is_file():
+            self.skipTest(f"{self.RETRACTION_RECORD} not present")
+        self.assertIn(self.RETRACTED,
+                      self.flat(self.RETRACTION_RECORD.read_text(encoding="utf-8")),
+                      "the retracted line is not recorded anywhere, so the "
+                      "absence assertions are unfalsifiable")
+
+    def test_the_run_of_show_on_disk_closes_on_the_question(self):
+        self.assert_the_close_is_a_question(
+            (DEMO / "DEMO_SCRIPT.md").read_text(encoding="utf-8"))
+
+    def test_the_listening_notes_do_not_predict_the_listeners_answer(self):
+        """`WHAT_TO_LISTEN_FOR.md` told the presenter the exercise *is* that a
+        human should disagree. Same defect one document over: it makes a
+        disagreement the expected outcome, when 'about the same' is a real
+        answer and the segment is a question either way."""
+        low = self.flat((DEMO / "WHAT_TO_LISTEN_FOR.md").read_text(encoding="utf-8"))
+        self.assertNotIn("a human should disagree", low)
+        self.assertIn("a prediction about the listener", low)
+        self.assertIn("question this exercise raises", low)
+
+    def test_force_docs_reproduces_the_question_close_from_the_template(self):
+        """The change is in the TEMPLATE, so a rebuild reproduces it.
+
+        This is the whole point of the fix: editing the generated file would have
+        left the guard refusing to touch it and the next regeneration reverting
+        it — the failure mode `REGENERATION_HAZARD.md` was written about."""
+        master = REPO / "results" / "master.csv"
+        if not master.is_file() or not (REPO / "data" / "recordings").is_dir():
+            self.skipTest("needs results/master.csv and data/ to run the generator")
+
+        td = tempfile.mkdtemp(prefix="deadzone-close-")
+        self.addCleanup(shutil.rmtree, td, ignore_errors=True)
+        demo = _build_sandbox(Path(td))
+        _plant_hand_edit(demo)
+        r = subprocess.run([PY, "scripts/make_demo_audio.py", "--force-docs"],
+                           cwd=td, capture_output=True, text=True, timeout=600)
+        self.assertEqual(r.returncode, 0, r.stdout[-3000:] + r.stderr[-3000:])
+        self.assertIn("OVERWRITING hand-edited", r.stdout,
+                      "--force-docs rewrote nothing, so this proves nothing "
+                      "about what the template produces")
+        self.assert_the_close_is_a_question(
+            (demo / "DEMO_SCRIPT.md").read_text(encoding="utf-8"))
+
+    def test_negative_control_the_old_verdict_close_fails_this(self):
+        """The mutation control. Put the verdict back into the template — nothing
+        else — and the assertion above must fail. Without this it could be
+        passing on some incidental property of the fixture."""
+        master = REPO / "results" / "master.csv"
+        if not master.is_file() or not (REPO / "data" / "recordings").is_dir():
+            self.skipTest("needs results/master.csv and data/ to run the generator")
+
+        td = tempfile.mkdtemp(prefix="deadzone-close-mut-")
+        self.addCleanup(shutil.rmtree, td, ignore_errors=True)
+        demo = _build_sandbox(Path(td), self.OLD_VERDICT_CLOSE)
+        _plant_hand_edit(demo)
+        r = subprocess.run([PY, "scripts/make_demo_audio.py", "--force-docs"],
+                           cwd=td, capture_output=True, text=True, timeout=600)
+        self.assertEqual(r.returncode, 0, r.stdout[-3000:] + r.stderr[-3000:])
+
+        script = (demo / "DEMO_SCRIPT.md").read_text(encoding="utf-8")
+        self.assertIn(self.RETRACTED, script.lower(),
+                      "the mutation did not reinstate the verdict, so this "
+                      "control is not testing what it claims")
+        with self.assertRaises(AssertionError):
+            self.assert_the_close_is_a_question(script)
 
 
 if __name__ == "__main__":
