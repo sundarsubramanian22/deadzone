@@ -1608,7 +1608,7 @@ independent of each other — do them in any order, or in parallel.
 | **R3** JOIN-1 gate | ✅ PASSED | 9/9 gates on u02/u17/u36; SNR calibration exact to 0.01 dB on real audio |
 | **R4** grid | ✅ done | 176 conditions × 40 clips × nova-3 = **7040 rows, 0 failures**, + the 1760-row whisper arm = **8800 rows, 3 failures (0.03 %)**, well under the 2 % gate; `results/master.parquet` now written too (pyarrow installed — it was silently falling back to CSV only) |
 | **R4.3/4.5** screen + sensitivity | ✅ **done, and better than planned** | exact functional-ANOVA decomposition of the real factorial — see B.3 |
-| **R4.7 / R5.5** active learning | ✅ done — **a null, and it is robust** | see B.4 |
+| **R4.7 / R5.5** active learning | ✅ done — **a null, and it is robust** | see B.4; the null's own obvious fix (reparameterise reverb to DRR) was tested and **failed** — see Appendix H |
 | **R5.1** D1 headline | ✅ real — ⚠️ **SUPERSEDED by Appendix G** | then: ρ = −0.957, 6/176 dead zones. **Now: ρ = −0.980 paired / −0.952 all-clips (n = 169), 2/176 dead zones** — the estimand mismatch |
 | **R5.3** D2 fingerprints | ✅ real | deletions dominate; entity error 0.633 vs WER 0.511 |
 | **R5.4** D3a interactions | ✅ real — **pre-registration CONFIRMED**, report reconciled | see B.3 |
@@ -1782,6 +1782,11 @@ proposing cells the oracle cannot reproduce. The defensible parameterisation for
 this axis is **DRR (or C50)**, which orders the measured conditions perfectly
 where RT60 does not.
 
+> ⚠️ **The corollary drawn from this — that re-parameterising the surrogate's
+> input to DRR would rescue the D3b active-learning null — was TESTED and FAILED.
+> See Appendix H.** The ordering result above is unaffected and stands; on an axis
+> of four discrete rooms, no relabelling of it buys active learning anything.
+
 The six proposals now print with the held-fixed coordinates that differ between
 them, instead of six identical lines.
 
@@ -1865,6 +1870,9 @@ observed on 8144 held-out words); above `mic_rolloff = 0.5`, by ~0.06 (0.82 vs
 
 **D3b — active learning is a NULL, and the null is robust.**
 (`results/al_savings.{json,txt}`, `al_curve.json`, `al_trajectory.json`.)
+**→ Appendix H tests the null's one obvious objection — that the GP was given the
+wrong reverb axis — and the null survives it. Every number below is reproduced
+there to full float precision by the RT60 arm.**
 
 > No savings claim: the `boundary_rmse` target 0.162 was reached by **2/8 active
 > seeds and 4/8 random seeds** within the 45-evaluation budget. Report the budget,
@@ -2778,6 +2786,13 @@ Order: repair the artifacts → rebuild the dashboard → reconcile
 | SPEC appendices C/D/E | `7b587c0` |
 | the write-up | `46614d4` |
 
+**Added after this close** (the table above is the state at `46614d4`; F.1 and F.2
+are unaffected):
+
+| piece | commit |
+|---|---|
+| D3b: the DRR reparameterisation test + its permutation control — **Appendix H** | `3652409` |
+
 **Open, and each needs a human:** the ElevenLabs `sk_` key (Appendix D — probe
 ready, zero spent), the listening pass, and then the tag.
 
@@ -3020,3 +3035,304 @@ analysis code** — `load_factorial`'s duplicate-overwrite (C.4), `sim2real`'s
 unenforced clip premise (C.8), and this. Every time, the instrument built to
 detect silent failure was itself failing silently. The only thing that caught
 *this* one was a human listening to the audio.
+
+---
+
+# Appendix H: The reverb axis reparameterised — the null survives its own obvious fix (2026-08-05)
+
+> B.3 ends with a concrete, testable explanation for D3b's active-learning null:
+> a GP fitted with `rt60` as a **continuous** coordinate "assumes a smoothness
+> the instrument does not have," and the defensible axis is **DRR**, which orders
+> the delivered rooms perfectly (ρ = −1.000) where RT60 does not (ρ = +0.800).
+> That is a mechanism claim about *why* the method failed, and mechanism claims
+> that are never tested are just stories that happen to be consistent with the
+> data. So it was tested. **It fails.**
+>
+> Artifacts `results/al_drr.{json,txt}` from `scripts/run_al_drr.py`, commit
+> `3652409`. Offline, seeded, **zero API calls.**
+
+## H.1 What was held fixed, and the identity check
+
+Protocol identical to `results/al_savings.json`'s `run_config` in every respect
+except the reverb coordinate: nova-3, metric `boundary_rmse`, threshold 0.5, band
+±0.15, 15 seed + 30 acquired = **45 evaluations per arm**, AL seeds 0–7, split
+seeds 0–3, three arms (`active_boundary`, `active_uncertainty`, `random`).
+176 conditions → **106 oracle-training / 70 held out**, of which **13** lie within
+±0.15 of the contour (split 0; `[13, 13, 12, 11]` across the four splits).
+
+The identity is a **precondition, asserted rather than assumed**: every coordinate
+races on the same conditions, the same held-out real WERs and the same
+near-boundary count, train/test disjoint in all 44; only the reverb x-coordinate —
+and hence the geometry of the GP oracle refitted in it — differs.
+44 coordinates × 4 splits × 8 seeds × 3 arms × 45 evals = **190,080 surrogate
+oracle calls, 0 API**, an identity that holds exactly and is the cheapest
+available check that no arm was quietly running a different race.
+
+**The four delivered rooms**, measured off the RIR files:
+
+| room | RT60 | DRR dB | C50 dB | marginal WER |
+|---|---|---|---|---|
+| Restaurant | 0.193 | **+16.90** | 28.10 | 0.2026 |
+| Bar | 0.474 | −2.05 | 10.22 | 0.5559 |
+| Campground Dininghall | 0.680 | +4.26 | 10.03 | 0.4495 |
+| Shower | 1.011 | **−10.02** | 2.12 | 0.7217 |
+
+ρ(DRR, WER) = **−1.000** · ρ(RT60, WER) = **+0.800** · ρ(C50, WER) = **−0.800**.
+
+*Population note, checked rather than assumed.* These marginals are over **all 176
+nova-3 conditions** (7,040 rows); B.3's room table is over the **babble factorial
+core** (1,440 rows per level). Bar reads 0.5559 here against 0.6359 there, Shower
+0.7217 against 0.7581; Restaurant and Campground agree to the digit because their
+rows *are* the babble core. The **ordering is identical under both populations**,
+so every ρ above is unchanged — but after Appendix G, two tables of the same
+quantity differing by 0.08 get their populations named out loud rather than
+reconciled in someone's head.
+
+## H.2 The result — the hypothesis coordinate does no better
+
+`diff` = median paired (`active_boundary` − `random`) final `boundary_rmse` over
+4 splits × 8 seeds = **32 paired runs**; **negative = active better**.
+
+| coordinate | splits won | paired won | median diff | stable? | oracle floor | WER monotone? |
+|---|---|---|---|---|---|---|
+| measured RT60 (PUBLISHED baseline) | 2/4 | 13/32 | **+0.0029** | FLIPS | 0.185 | no (ρ = +0.800) |
+| measured RT60, delivered-min/max bounds | 1/4 | 16/32 | +0.00005 | FLIPS | 0.185 | no |
+| **DRR — THE HYPOTHESIS** | **0/4** | **14/32** | **+0.0003** | FLIPS | 0.191 | **YES (ρ = −1.000)** |
+| C50 clarity index | 1/4 | 16/32 | −0.0027 | FLIPS | 0.189 | no (ρ = −0.800) |
+
+**The RT60 arm reproduces the published D3b result to full float precision** —
+`median_paired_diff = 0.002884173361068651`, 13/32, 2/4,
+`winner_by_split = [random, active_boundary, active_boundary, random]`, and the
+headline sentence and per-seed evaluation counts byte-identical to
+`results/al_savings.json`'s `split_robustness`. **That is what validates the
+harness:** this is the same experiment with one axis relabelled, demonstrated
+rather than asserted. A re-run that could not reproduce the thing it is trying to
+overturn is not evidence about the thing.
+
+Under the hypothesis coordinate `active_boundary` wins **zero of four splits**
+(per-split winners: random, active_uncertainty, random, active_uncertainty). The
+bounds-convention arm exists so that any difference attributable to *how the axis
+is scaled* rather than to *which coordinate it is* stays visible instead of being
+assumed away; it moves nothing.
+
+## H.3 The negative control is the experiment, not a formality
+
+**Control A — all 24 permutations of the SAME four DRR values.** Spacing held
+exactly fixed (the same four numbers, hence the same bounds, every time); only
+which room gets which value varies. The true DRR assignment is one of the 24, so
+its rank is an exhaustive permutation test of the ordering claim with no
+distributional assumptions.
+
+- true DRR median paired diff **+0.0003**
+- **rank 18 of 24** — **17 permutations beat the physically correct one**,
+  permutation **p = 0.750**
+- spread over permutations: median −0.0003, range **[−0.0036, +0.0063]**
+- permutations favouring active: 15/24
+
+**Control B — 16 random monotone relabellings** (RT60's *ordering* preserved,
+spacing randomised, isolating spacing from ordering): **7/16 beat RT60**; spread
+median +0.0002, range [−0.0053, +0.0106]; 7/16 favour active.
+
+**All 44 parameterisations together:** median paired diff spans **[−0.0053,
++0.0106]** with median **−0.0001**; **23/44 favour active** — a coin flip;
+**1/44** moves the gap by more than 0.010; and **0/44 have a winner stable across
+the four splits.**
+
+A physically correct ordering ranking 18th of 24 against its own permutations is
+not a weak positive. It is the statement that **the coordinate is not what is
+holding active learning back**, made in the only form that can carry it: a random
+relabelling does as well as the right one.
+
+## H.4 The ceiling on this experiment — state it as a limit, not a hedge
+
+The master table contains exactly **four distinct RIRs**, one per `rt60` level, so
+the reverb axis is **four discrete rooms**. Any reparameterisation of it is a
+relabelling of four points on a line, and because the GP normalises each axis by
+its bounds, a coordinate is fully described by the **order** of the four rooms
+plus the **relative spacing** of the two interior points. DRR cannot add
+information the grid never measured.
+
+This is an honest ceiling on what the experiment could ever have shown, and it
+cuts both ways: it is why the negative controls are the experiment rather than a
+formality, and it is why the result must be scoped as *"reparameterising this
+four-room axis does not rescue the null"* rather than *"DRR is not a better
+coordinate."* B.3's DRR mechanism — damage monotone in direct-to-reverberant
+ratio, ρ = −1.000 against RT60's +0.800 — is a **measured ordering result and it
+stands**; H refutes only the corollary that re-parameterising the surrogate's
+input in it would buy active learning anything. On four points, it cannot.
+
+The right test of B.3's corollary needs a reverb axis with enough distinct rooms
+to have a *shape*. Note the binding constraint is **not** the asset library — 16
+RIRs are curated (R2.1) — but the grid, which requests four `rt60` levels and
+therefore snaps to four of them. Sampling the axis at 10–16 levels spanning the
+DRR range would give a surrogate something to be smooth *over*; that is a re-run
+of the grid (API spend), not an analysis change. Recorded as the follow-up, not as
+a caveat on this result.
+
+## H.5 Mechanism — straddle acquisition demonstrably worked, and gained nothing
+
+Fraction of an arm's evaluations landing within ±0.15 of the 0.5 contour
+(`active_boundary`'s **acquired** evaluations, i.e. excluding its 15 seed points,
+against `random`'s evaluations, which have no acquisition step to exclude):
+
+| coordinate | active (acquired) | random | verdict |
+|---|---|---|---|
+| rt60 | **58.3 %** | 30.0 % | WORKED |
+| rt60_minmax | 51.7 % | 30.0 % | WORKED |
+| **drr_db** | **58.3 %** | **21.1 %** | WORKED |
+| c50_db | 93.3 % | 97.8 % | did NOT concentrate |
+
+Under DRR the acquisition function put **2.8×** as many of its calls near the
+decision contour as random did — and finished level with it. **A high
+concentration with no fidelity gain means the acquisition function did its job and
+the job did not pay:** the boundary was not the scarce information on this
+surface. The null is a property of the surface (smooth, low-dimensional, wide
+boundary region), not of the method.
+
+This **complements and does not duplicate** the planted-structure control in
+`tests/test_active_learning.py`, and the two say different things. The test says
+*the method works when there IS a sharp boundary* — on planted structure, active
+reaches random's full-45-call fidelity in 27 calls, saving 18. H says *the method
+behaved correctly here and still did not pay.* Without the test, a reader
+concludes the implementation is broken; without H, a reader concludes it was never
+given a chance to acquire. Both are needed.
+
+(C50 is the exception that is not an exception: under that coordinate ~95 % of
+everything sampled is already near the contour, so "concentration" has no room to
+mean anything. Reported, not interpreted.)
+
+## H.6 An anti-mechanism signal worth recording
+
+**C50 orders the conditions WORSE than DRR — ρ = −0.800 against −1.000, it swaps
+one adjacent pair — and scores nominally BEST of the four** (median diff −0.0027,
+the only negative sign in the primary table). If the coordinate's fidelity to the
+delivered acoustics were what mattered, that ordering would not invert.
+
+The honest reading is not "C50 wins" — its winner flips across splits like every
+other coordinate, and −0.0027 sits inside the [−0.0053, +0.0106] band that 44
+arbitrary relabellings span. The reading is that the sign of the gap is **not
+tracking the physics at all**, which is the same conclusion Control A reaches by a
+different route. Two independent paths to it is the reason to record it.
+
+## H.7 A near-miss: an absolute-fidelity claim that did not survive the split check
+
+On the headline split, DRR and C50 looked like **materially better surrogates of
+the real held-out WERs** than RT60 — passive-arm final `boundary_rmse` 0.139 and
+0.090 against 0.162 — and this was very nearly written up as a secondary finding:
+*"reparameterising does not help active learning, but DRR is the better coordinate
+for the surrogate."* It is false. Across all four splits the ordering **reverses**:
+
+| coordinate | split 0 | split 1 | split 2 | split 3 | mean |
+|---|---|---|---|---|---|
+| rt60 | 0.162 | 0.097 | 0.094 | 0.090 | **0.111** |
+| rt60_minmax | 0.162 | 0.094 | 0.092 | 0.097 | **0.111** |
+| drr_db | 0.139 | 0.161 | 0.135 | 0.097 | **0.133** |
+| c50_db | 0.090 | 0.182 | 0.141 | 0.152 | **0.142** |
+
+Only ~13 held-out conditions sit near the contour, so **one split's fidelity is a
+13-point statistic** and split 0 is simply the split on which RT60 draws a hard
+test set. The same caveat kills the oracle-floor column of H.2 (0.185 vs 0.191 on
+split 0): across splits the floors are rt60 0.168 vs drr 0.174 on the mean, and
+drr is *lower* on splits 2 and 3. **No absolute-fidelity claim for DRR survives
+the split check — the honest statement is "no improvement," never "worse," and
+certainly never "better."** The four-split table is now printed in
+`results/al_drr.txt` specifically so the mistake cannot be repeated by the next
+reader of the headline split.
+
+**No absolute-fidelity improvement from DRR may appear as a claim anywhere** — not
+in the write-up, not in the dashboard, not in a talk.
+
+## H.8 A real bug: a parameter accepted and not forwarded
+
+`deadzone/analysis/al_savings.py:885` — `split_robustness` accepted a `space`
+argument and **did not forward it** to `surrogate_oracle_from_master`, so the
+oracle was fitted in `DEFAULT_FACTOR_SPACE` while the arms sampled and were scored
+in the caller's space. Fixed in `3652409`, with the reason written at the call
+site rather than in a commit message.
+
+**Nothing published is affected, verified two ways rather than argued.**
+(1) The only production caller is `al_savings.py`'s `main`, which passes
+`DEFAULT_FACTOR_SPACE` explicitly — so the fallback was a no-op, which is exactly
+why it survived. (2) Empirically: the RT60 arm of this run, executed under the
+*fixed* code, reproduces `results/al_savings.json`'s `split_robustness` block to
+full float precision (H.2). A fix that changes nothing where it should change
+nothing is the evidence, not the assurance.
+
+**Failure modes, stated precisely because they differ:** a *renamed* axis raises —
+`encode_sample` does `sample[f.name]`, so a space expecting `rt60` handed a sample
+carrying `drr_db` is a `KeyError`. A space that **keeps the factor names and
+changes only the bounds** is silently wrong: the GP normalises by bounds, so the
+oracle and the arms simply live in differently-scaled copies of the same named
+space and nothing complains. In *this* run 43 of the 44 coordinates rename the
+axis, so the omission would have raised rather than lied. **The silent mode is
+real but unrealised here, and that matters for the classification below.**
+
+### Is this Appendix E's family? No — and it should not be counted there.
+
+E's six members are all **guards whose failure mode is silence**: `nan > tol`,
+`nan >= wer_hi`, `... or 1`, a set-based size check, `.get(key, "")`, a repeated
+deterministic seed. Each is a *check or a default* that returns a plausible value
+when handed a **degenerate input**.
+
+This is a different shape, and the distinctions are load-bearing:
+
+1. **There is no degenerate input.** The data is ordinary; the defect fires on
+   perfectly well-formed rows.
+2. **It is not a guard.** Nothing here was ever checking anything — the argument
+   simply evaporated between the signature and the call.
+3. **Its silence is conditional**, not structural: loud for a renamed axis, silent
+   only when the names coincide. E's members are unconditionally silent.
+4. **Its concealment mechanism is the default value.** A parameter is only wrong
+   once somebody uses it, and until this experiment nobody had. The thing that
+   made the API look configurable is the thing that made the bug invisible.
+
+Name for the shape: **a parameter accepted and silently discarded — a signature
+advertising configurability the body does not deliver.** Its closer sibling is
+**Appendix G**, not E: like G's two-averages-over-different-populations, the defect
+lives entirely in the **seam between two individually correct components** — an
+oracle correct in one coordinate frame, arms correct in another, compared across
+the join — rather than inside either one. G joined two populations; this joins two
+coordinate frames. **E's count stays at six.** Inflating it to make a pattern
+would be the same move as massaging a threshold to manufacture a win.
+
+**The checklist line it earns:** when a function takes a configuration object,
+grep every call it makes for that object before trusting that the configuration
+reaches them. A default that makes the omission a no-op for the current caller is
+not a mitigation — it is the thing that will hide it until the first caller who
+needs it.
+
+## H.9 Tests
+
+`tests/test_active_learning.py` gained **5 checks** (suite green): the coordinate
+mapping joins on `rir_key` — the RIR actually resolved to — and an unmapped room
+**raises** instead of shrinking the reverb axis to three rooms; a cross-check of
+the four delivered rooms against the published DRR/C50 table on the real grid,
+asserting all coordinates keep the same 176 conditions, WERs and ordering; both
+arms provably share one oracle instance and one held-out set; `split_robustness`
+forwards `space` (asserted against the source of the call, so it cannot regress
+silently); and an identity guard that **can actually fail** — it is shown flagging
+a changed test set rather than waving it through.
+
+## H.10 What this licenses, and what it does not
+
+- **Licensed:** "The active-learning null is not explained by the reverb axis'
+  parameterisation. Reparameterising it to the physically correct coordinate
+  changes nothing measurable (14/32 vs 13/32 paired wins, winner flips across
+  splits in both), and a random relabelling of the same four rooms does as well as
+  the correct one (rank 18/24, p = 0.75). Straddle acquisition concentrated 58.3 %
+  of its calls near the contour against random's 21.1 % and gained nothing: the
+  null is a property of the surface, not of the acquisition function."
+- **Not licensed:** any claim that DRR is a worse coordinate, any absolute-fidelity
+  comparison between coordinates (H.7), and any claim that this settles the
+  question for a reverb axis with more than four rooms (H.4).
+- **Unchanged:** B.3's DRR ordering result and the "which RIRs were curated"
+  conclusion, and D3b's published headline, which this run reproduces exactly.
+- **Carried forward from D3b, unchanged:** every oracle call here went to the GP
+  surrogate; **no seed was confirmed end-to-end against the live API.** Same
+  caveat, same sentence, and it must travel with the H numbers too.
+
+The reason this belongs in the log at all: the D3b null had exactly one obvious
+objection — *you gave the GP the wrong axis* — and an objection with an obvious
+answer that is never run is the cheapest way for a null to be quietly wrong. It
+cost 190,080 free oracle calls and roughly half an hour of wall clock to close it,
+and the negative control is the part that closed it.
