@@ -854,12 +854,13 @@ within each model's own distribution, and it's enforced by a raise in code."*
 > *"That's the mechanism difference, and it's more interesting than the magnitude.
 > **Under stress nova-3 goes quiet and Whisper invents.** Deletions are comparable —
 > 0.270 against 0.289 of reference words — but substitutions are 2.8× and insertions
-> are **9.4×**. At the extreme, reference 'call maria at' comes back as a 49-word
-> degenerate repetition loop about having a file. And one cell came back as a row of
+> are **9.4×**. At the extreme, the 11-word reference 'call maria at four zero five
+> nine one two seven seven' comes back as a **47-word** degenerate repetition loop
+> about having a file. And one cell came back as a row of
 > decorative Unicode glyphs — not language at all — at **0.926 confidence.***
 >
 > *The point for a deployment: **WER structurally understates that.** WER caps damage
-> at one error per reference word. A 49-word hallucination handed to a downstream LLM
+> at one error per reference word. A 47-word hallucination handed to a downstream LLM
 > is unbounded harm. That's an independent argument for why WER isn't the deployment
 > metric — separate from the entity argument in the fingerprints."*
 
@@ -1499,7 +1500,33 @@ weakness. If he agrees with it, that is the answer working, not the answer faili
 - edits (cross-model): nova-3 sub 0.149 / del 0.270 / ins 0.021; whisper 0.413 /
   0.289 / 0.197 → insertions **9.4×**
 - hallucination: whisper p95 length ratio 2.75, 9.9 % of rows over 2× reference,
-  mean foreign fraction 0.528; worst 3 ref words → **49** hyp words
+  mean foreign fraction 0.528; worst **11 ref words → 47 hyp words** (NOT the 3 → 49
+  that `results/model_arms.{json,txt}` still prints — see the warning box below)
+
+> ### ⛔ IF HE OPENS `results/model_arms.txt`, GET THERE FIRST
+>
+> Lines 171/175/179 still read `3 ref words -> 49 hyp words` (and `-> 38`, `-> 34`).
+> **Those are wrong and the documents are right** — the inverse of the usual rule in
+> this repo, so say it before he reads it.
+>
+> `hallucination_report` cross-model-normalizes the reference (`"four zero five"` →
+> `"405"`) and *then* tokenizes with `[a-z']+` — letters only. It manufactures eight
+> digit tokens and immediately discards them. The reference is **11** spoken words.
+> The hypothesis contains no digits, so it loses nothing, and the ratio inflates to
+> **16.3× against a true 4.3×**. Strict alignment: 11 → 47, WER 4.18, 1 match / 10
+> sub / 36 ins.
+>
+> **The line to say:** *"That number is wrong and I know why — it's a ratio between
+> two differently-tokenized quantities. I found it while regenerating the figure,
+> because the chart drew the strict alignment and disagreed with the text above it.
+> The docs are corrected; regenerating that artifact is a code change I haven't made
+> yet."*
+>
+> Note the shape: it is this project's signature bug — **two quantities computed
+> differently, then divided** — and it survived into four documents because everyone
+> quoted the stored field instead of the alignment that produced the stored WER.
+> The mechanism is untouched: Whisper did invent a 47-word repetition loop where
+> nova-3 went silent. Only the magnitude moved.
 - Jaccard: nova|whisper **0.000** · nova|scribe 0.000 · **scribe|whisper 0.101 (7
   shared)**
 - silent rows: nova-3 24.5 % · whisper 19.1 % · scribe 4.4 %; mute conditions 12 / 5 / 2
