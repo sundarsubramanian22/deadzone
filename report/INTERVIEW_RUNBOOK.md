@@ -243,6 +243,16 @@ Have the composition order and its physical justification ready as a branch.
 
 Offline, `file://`, wifi off. Order matters:
 
+> **The model toggle has THREE arms now** — `elevenlabs-scribe`, `nova-3`,
+> `whisper-base`. Checked: the dashboard's `default_model` is **`nova-3`**, so it
+> loads correctly — but the buttons render alphabetically, so **the leftmost
+> button is not the selected arm.** Do not click blind.
+> The file has no such default: **Scribe is the FIRST block in
+> `results/confidence_gap.txt`**, so anyone reading that artifact from the top —
+> including you, on the day — reads the wrong arm's headline first. It opens with
+> a mean confidence of 0.976 at WER 0.428, which looks spectacular and is not
+> nova-3's number.
+
 1. **The silent-failure map, in three categories.** Not one bucket: **dead zone**
    (spoke, confident, wrong) — **2 of 176**; **silence-driven** (looks like one
    only if you mis-pair the estimands) — **4**; **mute zone** (empty transcript
@@ -276,9 +286,8 @@ Offline, `file://`, wifi off. Order matters:
    carried by proper nouns and spelled letters (0.613), **not** by digits, which
    are the *least* destroyed class. Each signature implies a fix: keyword
    boosting, dereverberation, entity-aware decoding.
-4. **Model comparison — the framing must not depend on who wins.** See the
-   `[[PENDING SCRIBE]]` box at the top: **a third arm is a commercial peer, and
-   its results do not exist yet.**
+4. **Model comparison — the framing must not depend on who wins, and now it
+   provably cannot.** Three arms: nova-3, elevenlabs-scribe, whisper-base.
 
    **Primary framing, and it is direction-independent — open with this:** the
    interesting result is not which model is better, it is that the models have
@@ -292,8 +301,16 @@ Offline, `file://`, wifi off. Order matters:
    > not from a simulator. The map is the deliverable and it does not transfer —
    > which is an argument for the instrument, not for any one model's ranking."
 
-   A third arm makes that claim *stronger whichever way it ranks*, and that is
-   the whole reason to lead with it.
+   **The third arm sharpened this rather than just repeating it, and the sharp
+   part is the one non-zero number.** With three arms, quote the **pairwise**
+   Jaccard (the runbook flagged this before the arm ran; it now has teeth):
+   `nova-3|whisper-base` **0.000** (0/70) · `nova-3|elevenlabs-scribe` **0.000**
+   (0/8) · `elevenlabs-scribe|whisper-base` **0.101** (7/69). So **nova-3's dead
+   zone is shared with no other arm**, and the only overlap in the study is
+   between Scribe and the open baseline — and *those seven conditions evaporate
+   entirely under the orthography normalizer.* The one apparent counter-example
+   to "you cannot borrow the map" turns out to be a scoring artifact, which is a
+   better story than a clean sweep would have been.
 
    **The Whisper leg — measured, quote freely, matched 10-clip subset:**
    dead-zone rate **0.57 % (1/176) vs 39.20 % (69/176)**, confidence-vs-WER
@@ -315,59 +332,118 @@ Offline, `file://`, wifi off. Order matters:
    leaves the ones that hallucinate past 1.0. One model goes quiet under stress;
    the other invents.
 
-   **The Scribe leg — three branches, decided now, not on stage.**
-   `[[PENDING SCRIBE — do not speak any of these until rows exist]]`
+   **The Scribe leg — the arm ran, and the result is a reversal, not a ranking.
+   This is the strongest single beat in §4. Give it the time.**
 
-   - **(a) Nova-3 ahead on dead-zone rate and calibration.** Then §4.4 reads as it
-     always did, *but the ranking is still the second sentence.* First sentence
-     stays the disjoint map: *"two commercial models, both exposing per-word
-     confidence, and their dead zones do not overlap — one of them happens to have
-     fewer."*
-   - **(b) Scribe ahead on dead-zone rate or on ECE.** Deliver it as a finding, in
-     one flat sentence, and then keep going:
-     > "In region X the commercial peer was better calibrated — its dead-zone rate
-     > there is A against Nova-3's B, and its post-calibration ECE is C against D.
-     > The mechanism is visible in the edit signature: [substitutions vs deletions
-     > vs silence]. That is the instrument doing its job — it was built to find
-     > where *a* model fails silently, and it found a region where this one does.
-     > What I'd want from you is whether that region matches anything you already
-     > know about the acoustic front end."
-     Said flatly, that is a result. Said apologetically, it is a concession — and
-     hedging it in front of the people who build the model is the worse failure.
-     **Never** editorialise beyond the measurement, and never generalise from a
-     region to the product.
-   - **(c) Mixed / within noise.** Most likely outcome. The primary framing above
-     already covers it verbatim; add *"neither arm dominates, and the regions where
-     each is blind are disjoint,"* which is the strongest version of the claim.
+   The lead sentence, and do not bury it behind a table:
+
+   > "**Which commercial model appears to know when it is wrong depends on a
+   > scoring choice most benchmarks make silently.** Not a little — it *reverses*."
+
+   On the **159 conditions all three arms spoke on** — the only population in
+   which three arms can be ranked at all, which is §5's lesson applied to
+   correlations instead of gaps — within-model confidence-vs-WER Spearman, CIs
+   from a 4000-replicate bootstrap over conditions:
+
+   | scoring | nova-3 | Scribe | Whisper | nova-3 over Scribe | Scribe over Whisper |
+   |---|---|---|---|---|---|
+   | **strict** (spine scorer) | −0.971 | −0.768 | −0.694 | **+0.203 [0.115, 0.312]** — separable | +0.074 [−0.112, +0.267] — **not** separable |
+   | **normalized** | −0.971 | −0.936 | −0.709 | +0.035 [−0.002, +0.077] — **not** separable | **+0.227 [0.097, 0.376]** — separable |
+
+   Strictly scored, Scribe is separable from nova-3 and indistinguishable from the
+   open baseline. Normalized, it is indistinguishable from nova-3 and separable
+   from the baseline. **Same rows, same confidences, opposite verdict.** A
+   benchmark that skipped the normalization audit would have published a confident
+   and backwards answer — which is this project's entire thesis, arriving one level
+   up from where it was aimed.
+
+   **Then the mechanism, because the reversal is not magic — Scribe's orthography
+   is non-deterministic.** Four identical calls, byte-identical audio, same model
+   literal: **different transcripts on 5 of 6 probe clips.** `A7X42` three times
+   and `A seven X four two` once; `Q9J05` vs `Q nine J zero five`; and `u33` flips
+   the *other* way, so it is not one consistent policy. Worth up to **0.727 strict
+   WER on identical input**, with zero recognition difference between the forms.
+
+   > "Whisper's formatting offset is a **constant**, +0.090 — characterise it once
+   > and subtract it, which is what `cross_model_norm.py` does. Scribe's is a
+   > **per-call draw**. That is variance, not bias, and you cannot subtract
+   > variance. It also turns the two residuals my normalizer documents as fixed —
+   > the leading zero in `Q9J05`, the letter run `AW` — into run-to-run noise. So
+   > Scribe is scoped **within-model and rank-only**, and that is enforced in code
+   > and pinned by a test, not left to convention: the cross-model WER paths
+   > **raise** on it unless the caller explicitly passes `exclude_incomparable`.
+   > There is no flag that lets it in."
+
+   The generalisable claim, and it is the one worth leaving in the room: **a
+   benchmark that makes one call per clip is measuring a coin flip on
+   entity-bearing utterances.** Repeat-call variance belongs in the harness
+   alongside the acoustic conditions. *(Honest provenance: the repeat-call probe
+   is 6 clips × 4 calls and is not persisted to an artifact; the grid itself ran
+   once per cell, like every other arm, so it carries this variance unquantified.
+   Say that — he will ask how many calls.)*
+
+   **What IS claimable, and say it in exactly this shape:** nova-3's
+   confidence-shape edge **over Whisper** is a real cross-vendor pattern, not a
+   one-model quirk. A second independent commercial vendor lands at −0.82 strict /
+   −0.95 normalized while Whisper sits at −0.59 / −0.60. **Whisper is the
+   outlier.** The caveat travels with the claim: **n = 3 with only one open
+   model**, so *"commercial vs open"* and *"vendor-specific"* remain confounded.
+
+   **The half that survives all of it — and it inverts the safety story.** An
+   empty transcript is empty under any normalizer, so this one is immune to
+   everything above. On the matched subset nova-3 returns **nothing at all on
+   24.5 %** of clip-rows (431/1757) and goes fully mute on 12 conditions; Scribe on
+   **4.4 %** (78/1757) and 2. **5.5×.** Under stress **nova-3 goes quiet and Scribe
+   keeps talking** — and a deletion carries no hypothesis token, so **63.2 % of
+   nova-3's errors carry no confidence at all** against **33.7 % for Scribe**.
+
+   > "So the best-calibrated arm in the study has the *least* monitorable failure
+   > mode. Its dominant failure is invisible to exactly the confidence-based early
+   > warning this project proposes. That is not a knock on the model — it is the
+   > reason I split mute zones out as their own category, and it is why the product
+   > recommendation is confidence **plus** a 'did I get anything' check, not
+   > confidence alone."
+
+   It also qualifies the correlation table mechanically, and volunteer this rather
+   than let him find it: **nova-3's ρ is computed over 164 conditions after its 12
+   hardest were dropped for emitting nothing; Scribe's over 174 after 2.** A model
+   that goes silent on its worst conditions is scored on an easier set. That is
+   precisely why the table above is restricted to the common 159.
 
    **Comparability rules that must survive contact with an expert:**
    - Scribe reports a **log-probability**; `exp(logprob)` is its own scale and is
      **not** commensurate with a Deepgram acoustic confidence or with Whisper's
      segment proxy. Every cross-model claim goes through
      `within_model_conf_percentile`. Say this before he asks.
-   - **The orthography audit is a gate, not a nicety** —
-     `scripts/probe_scribe_orthography.py`, run and read before a single Scribe row
-     enters `master.csv`. Benchmarks to quote: nova-3 shifts **−0.014** (already
-     word-form, so ~0 is the *expected* result), whisper **+0.090** (the normalizer
-     recovering digit orthography, not accuracy). A large unexplained Scribe shift
-     means a condition-independent formatting offset — indistinguishable from an
-     acoustic effect once it is in the table, which is exactly the failure this
-     project is about.
-   - **A third arm narrows the matched comparison.** L1 matches to the cells
-     *every* arm ran; the current intersection is 10 clips × 176 conditions = 1757
-     rows per arm. An arm on a different clip subset shrinks that further, and the
-     arm census in `results/model_arms.txt` prints it. Quote the census, never a
-     bare WER.
+   - **The orthography audit was a gate, and it is the reason the arm is scoped the
+     way it is** — `scripts/probe_scribe_orthography.py`, run and read before the
+     rows were trusted. The measured shifts: nova-3 **−0.014** (already word-form,
+     so ~0 is the *expected* result and it is the control on the normalizer
+     itself), whisper **+0.090** (recovering digit orthography, not accuracy),
+     Scribe **+0.064** — but Scribe's is the only one that is *not repeatable*,
+     which is the whole verdict.
+   - **A third arm did NOT narrow the matched comparison, and say so if it comes
+     up.** Scribe ran the same 10-clip AL subset, so the intersection is unchanged
+     at 10 clips × 176 conditions = **1757 rows per arm** (3 dropped for Whisper's
+     3 failures). An arm on a *different* subset would have shrunk it; the arm
+     census in `results/model_arms.txt` prints the number either way. Quote the
+     census, never a bare WER.
    - **With three arms, quote the PAIRWISE Jaccard, not the all-arm one.** The
-     headline 0.000 today is a two-arm number, where all-arm and pairwise
-     coincide. At three arms the all-arm figure becomes *"flagged by every arm"* —
-     a stricter and different claim that will trend to zero for trivial reasons.
-     `dead_zone_overlap.pairwise["nova-3|elevenlabs-scribe"]` is the one that
-     carries the "you cannot borrow someone else's map" argument.
+     all-arm figure now means *"flagged by every arm"* — a stricter and different
+     claim that trends to zero for trivial reasons. It reads 0.000 here, and it
+     would read 0.000 for uninteresting reasons too. The pairwise numbers above
+     are the ones that carry the argument.
    - **Every dead-zone rate is flagged on `wer_spoke`, on the matched cells.**
-     That is the §5 correction, and it applies to a new arm on day one rather than
-     being discovered in it later. If a Scribe comparison ever gets quoted off the
-     all-clips pairing, it is the same defect this whole runbook opens on.
+     That is the §5 correction, and it applied to the new arm on day one rather
+     than being discovered in it later — Scribe's `n_silence_driven` is **0**
+     precisely because the two pairings were checked against each other from the
+     first row.
+   - **And the rate itself is not scale-free.** `dead_zone_flags` thresholds an
+     absolute WER (`wer_hi = 0.3`), so *no* arm's dead-zone rate survives an
+     orthography change: Scribe's 7 → 0 under the normalizer, Whisper's 69 → 44.
+     **This is a limitation of my own headline metric and you should volunteer it**
+     — it is the same class of finding as the estimand mismatch in §5, caught
+     before publication instead of after.
 
 ### 5. Judgment — the section that decides the interview (8 min)
 
@@ -468,6 +544,11 @@ signal available, and much stronger from you than found by them.
   calibrator cuts ECE from **0.051 to 0.008** on held-out conditions
   (temperature scaling alone gets 0.035). Concretely: above `rt60 = 0.7`,
   discount reported confidence by ~0.07; above `mic_rolloff = 0.5`, by ~0.06.
+  **It replicates on the second commercial arm, which is what turns it from a
+  nova-3 observation into a recommendation:** Scribe **0.165 → 0.076 → 0.034**,
+  and its temperature is **4.11** against nova-3's **1.39** — i.e. a much larger
+  correction, on a raw ECE that is itself an upper bound because its orthography
+  mismatches are labelled as errors. Two vendors, same direction, same cheap fix.
 - **Confidence has a structural blind spot, and it now has a name.** Deletions
   are 35.1 % of reference words and 69.3 % of all errors, and carry no hypothesis
   token, so no confidence. A perfectly calibrated confidence converges on
@@ -490,10 +571,29 @@ signal available, and much stronger from you than found by them.
   `agent_eval.py` is built and synthetic-validated — task/entity metrics and a
   turn-taking analyzer over a typed event stream — a drop-in once there is an
   agent to score. Have the file open.
-- **"Why ElevenLabs Scribe, and where is it?"** `[[PENDING SCRIBE]]` The honest
-  status: **the adapter and the confidence gate are done, the grid has not run,
-  and there is no Scribe number to quote.** What the day-one gate actually
-  established, which is the interesting part:
+- **"Why is Whisper's calibration row blank?"** He will notice — the L2 table has
+  Scribe and nova-3 in it and Whisper missing. **It is blocked, not computed, and
+  own that:**
+  > "69 of 1757 Whisper rows still have a hypothesis-word count that disagrees
+  > with the confidence-list length after re-alignment — `align_confidences`
+  > recovered 33 and could not recover those. `word_records` refuses to zip,
+  > because zipping binds confidences to the wrong words. The library offers
+  > `on_misalign='skip'`, which drops them and gives me a number — and that number
+  > would print in the same column as the other two arms while being fit on a
+  > silently smaller and non-random set. That is a protocol change disguised as a
+  > value. So the row is blank and the reason is printed next to it. I'd rather
+  > show you a hole than a number I'd have to caveat."
+
+  The two arms that *did* fit: nova-3 ECE **0.051 → 0.035 (temp) → 0.008
+  (feature)**, T = 1.39; Scribe **0.165 → 0.076 → 0.034**, T = 4.11. Scribe's raw
+  ECE is marked as an **upper bound** — its correctness labels come from the same
+  alignment as WER, so its orthography mismatches get counted as errors. The
+  raw→calibrated *improvement* still reads, because within one arm the labels are
+  wrong in a fixed direction.
+
+- **"Why ElevenLabs Scribe?"** The arm has run (§4.4). But the *day-one gate* is
+  the better answer to this question, because it is about method rather than
+  results:
   - Scribe returns a **per-word `logprob`** (≤ 0), so it is the second arm in the
     study that can be asked the silent-failure question at all. Whisper cannot —
     its confidence is a derived segment proxy.
@@ -507,9 +607,10 @@ signal available, and much stronger from you than found by them.
   - Observed live: a word (`u02`, "at") with `logprob` exactly **0.0**, i.e.
     `exp()` = exactly 1.0. Anything that then takes a logit of that confidence
     must clip — the same class of bug as the calibration layer's `_logit` guard.
-  - Cost is not the constraint: $0.22/hr batch ⇒ the 10-clip subset ≈ **$0.43**,
-    the full 40-clip grid ≈ **$1.72**. **The gate is the constraint** (the
-    orthography audit, §4.4).
+  - Cost was never the constraint: $0.22/hr batch ⇒ the 10-clip subset ≈ **$0.43**
+    (what actually ran), the full 40-clip grid ≈ **$1.72**. **The gate was the
+    constraint**, and it was the right one — the orthography audit is what turned
+    this from a third data point into §4.4's reversal.
   - The forward-looking half, and it belongs in the *next steps* answer rather
     than the results: `scribe_v2_realtime` exposes **the same per-word `logprob`
     over a websocket**, so it is the cheapest route to this project's first
@@ -538,10 +639,59 @@ signal available, and much stronger from you than found by them.
   (`u40`) — two pairs carry the beat and pair 1 is the marginal one. **Never cut
   §5's first item, and never cut §2's beat 1b** (the failed pre-registration):
   a demo that only reports the predictions that worked is the exact failure this
-  project is about.
-- **Nothing in the run-of-show depends on a Scribe result.** If the arm has not
-  run by the day, every `[[PENDING SCRIBE]]` block is skipped and the hour is
-  unchanged. Rehearse it that way at least once.
+  project is about. **§4.4's Scribe reversal is now in the never-cut set too** —
+  it is the only place the hour demonstrates the thesis on the *benchmark* rather
+  than on the model.
+- **Nothing in the run-of-show requires the network.** The spine is offline by
+  design and `make demo-live` is deliberately not a prerequisite of `make demo`.
+
+### OPTIONAL: `make demo-live` (~20 s) — the only beat that touches the network
+
+Two real nova-3 calls on one clip: raw, then the same clip in the **measured #1
+dead zone**, with the per-word confidences printed as they come back. **12.1 s of
+audio, 2 calls, ~$0.0009.** It is safe to schedule because it cannot fail loudly:
+no key, no network, a vendor error or a timeout each print **one** explanatory
+line, fall back to the cached replay, and **exit 0**.
+
+- Rehearse it as `./.venv/bin/python demos/demo_live.py --offline` (byte-identical
+  presentation, no key read at all). Preflight the real thing with `--check`.
+- **Where it goes:** after §2's payoff clip, or as the answer to *"can I see the
+  confidences?"* in §4. Do **not** put it at the top — the spine must establish
+  itself offline first.
+- **The exemplar is `u11`**, and the per-word numbers are the point, not the
+  utterance mean. Ref: *"deliver it to sofia martinez at eighty eight elm street"*.
+  In the dead zone it returns *"deliver it to sofia martinez at three eight l
+  three"* — a delivery address destroyed — with:
+
+  | word | outcome | confidence |
+  |---|---|---|
+  | `street` → `three` | **wrong** | **0.933** |
+  | `elm` → `l` | **wrong** | **0.926** |
+  | `eighty` → `three` | **wrong** | 0.826 |
+  | `martinez` | **right** | **0.336** |
+
+  Utterance mean **0.849**; clean control WER 0.000 at conf 0.961.
+
+- **The honest framing, and deliver it as the honest one — it is better than the
+  triumphant version.** At the *utterance* level confidence is informative in
+  direction and useless in magnitude: WER goes 0.000 → 0.300 while confidence
+  moves only 0.961 → 0.849. At the *word* level it is worse than uninformative —
+  **the lowest confidence in the utterance (0.336) is on a word the model got
+  right**, while two of the three substitutions score **above** the utterance
+  mean. A threshold tuned to catch this failure fires on `martinez` and lets
+  `three eight l three` through.
+  > "So on this clip the signal is wrong in both directions at once — a false
+  > alarm on the one word it nailed, and silence on the three it invented. That is
+  > the argument for the calibrator in §6, and it is also why I won't tell you
+  > confidence thresholding is sufficient."
+- **It is nova-3 only, and that is deliberate, not an oversight.** Say so if
+  asked: a live Scribe call could return either orthography (§4.4), so a live
+  demo of it would be a coin flip on stage. The one arm whose output is
+  reproducible is the one that goes live.
+- One caution: a commercial model literal is updated server-side, so a live call
+  months after the grid is **not** the same experiment. The demo prints the live
+  result against the stored grid row every time, so a divergence is a talking
+  point rather than a surprise. Today they agree exactly (WER 0.300, conf 0.849).
 
 ---
 
@@ -615,6 +765,15 @@ documents a confidence without saying what it is a posterior over. That
 difference is the reason nothing in this study ever pools confidences across
 vendors. It is a methods statement, not a scoreboard.
 
+**And the natural follow-up — "so is our confidence better than theirs?" — has a
+real answer now, which is "I can't tell you, and here is exactly why."** Strict
+scoring says nova-3 by +0.203 [0.115, 0.312]; normalized scoring says +0.035
+[−0.002, +0.077], barely clear of zero, and since orthography noise only
+attenuates a rank correlation that is an **upper bound**. The gap between those
+two numbers is not measurement precision, it is a scoring convention. Give him the
+question rather than a verdict — *"if you wanted to settle that properly, the
+missing piece is repeat-call variance in the harness, not more conditions."*
+
 ### On novelty
 
 Labs values ambition, and the positioning rule says claim none. Not in tension:
@@ -638,6 +797,21 @@ earn that simulation cannot.
    pre-registration was badly written, because it never allowed for 'unequal but
    backwards.' The measured half is untouched: a human has a preference, the
    model scores them equal."*
+5. *"Which commercial model appears to know when it is wrong reverses depending
+   on a scoring choice most benchmarks make silently — and the reason is that one
+   vendor's orthography is non-deterministic across identical calls, so a
+   benchmark making one call per clip is measuring a coin flip."*
 
-**And the one thing to be sure you do NOT say:** any Scribe number, until the arm
-has run. `[[PENDING SCRIBE]]`
+**And the three things to be sure you do NOT say:**
+
+- **Any Scribe dead-zone rate.** 3.98 % is real arithmetic on a metric that is not
+  scale-free; it goes to **0/176** under the normalizer. The rate is not a
+  property of the model.
+- **That nova-3 is meaningfully better calibrated than its commercial peer.** The
+  normalized gap is +0.035 [−0.002, +0.077] and that is an upper bound. Say
+  "indistinguishable once orthography is controlled," which is both true and the
+  more interesting sentence.
+- **That commercial models know when they are wrong, as a class claim.** n = 3
+  with exactly one open model. *"Commercial vs open"* and *"vendor-specific"* are
+  confounded, and the one thing that IS supported — **Whisper is the outlier** —
+  is narrower and survives both scorings.
