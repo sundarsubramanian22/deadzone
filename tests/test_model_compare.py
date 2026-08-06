@@ -37,7 +37,7 @@ import numpy as np
 from deadzone.design import DEFAULT_FACTOR_SPACE
 from deadzone.model_compare import (
     MODEL_REGISTRY, get_model, compare_models, dead_zone_flags,
-    within_model_conf_percentile, confidence_wer_shape,
+    find_divergence_regions, within_model_conf_percentile, confidence_wer_shape,
 )
 from deadzone.audio_pipeline import _parse_vosk_result
 
@@ -145,6 +145,66 @@ def test_dead_zone_and_shape():
           f"strong rho={s_strong:.2f} < weak rho={s_weak:.2f}")
 
 
+# ---- 4b: the two ways a comparison can be silently wrong -------------------
+
+def test_nan_wer_never_dilutes_the_dead_zone_rate():
+    """
+    A NaN confidence is legitimate and handled (it sinks to percentile 0). A NaN
+    WER is not: `nan >= wer_hi` is False, so the row is classified NOT a dead
+    zone AND still counted in the denominator of `mean(flags)` — an unmeasured
+    condition quietly dilutes the dead-zone rate, which is D1's headline number,
+    with nothing anywhere reading as missing.
+    """
+    tables = build_tables()
+    clean_flags = dead_zone_flags(tables["weak"])
+    victim = int(np.flatnonzero(clean_flags)[0])       # a genuine dead-zone cell
+    poisoned = [dict(r) for r in tables["weak"]]
+    poisoned[victim]["wer"] = float("nan")             # e.g. an unfiltered failure
+
+    clean_rate = float(np.mean(clean_flags))
+    # what the un-guarded arithmetic WOULD have produced: a silently lower rate
+    wer = np.array([r["wer"] for r in poisoned], dtype=float)
+    pct = within_model_conf_percentile(poisoned)
+    silent_rate = float(np.mean((wer >= 0.3) & (pct >= 0.6)))
+    assert silent_rate < clean_rate, (silent_rate, clean_rate)
+
+    try:
+        dead_zone_flags(poisoned)
+        assert False, "expected a non-finite-WER raise"
+    except ValueError as exc:
+        assert "non-finite WER" in str(exc) and "dilute" in str(exc), exc
+    print(f"ok 4b: a NaN WER raises instead of silently dropping the dead-zone "
+          f"rate from {clean_rate:.3f} to {silent_rate:.3f}")
+
+
+def test_ragged_region_coverage_raises():
+    """
+    `wer_gap` subtracts one model's mean over ITS rows in a region from
+    another's mean over ITS rows. If the arms did not run the same cells there,
+    the gap is a model effect PLUS a coverage effect and the two cannot be
+    separated afterwards — while the ranked region table still looks perfectly
+    meaningful. This is the same defect the sim2real arms had.
+    """
+    tables = build_tables()
+    find_divergence_regions(tables, SPACE, n_bins=4)      # matched: no false positive
+
+    ragged = {"strong": tables["strong"],
+              "weak": [r for r in tables["weak"] if r["rt60"] > 0.2]}
+    try:
+        find_divergence_regions(ragged, SPACE, n_bins=4)
+        assert False, "expected a ragged-coverage raise"
+    except ValueError as exc:
+        assert "ragged coverage" in str(exc) and "matched_arms" in str(exc), exc
+
+    try:
+        find_divergence_regions({"only-one": tables["strong"]}, SPACE)
+        assert False, "expected a single-arm raise"
+    except ValueError as exc:
+        assert ">= 2 model tables" in str(exc), exc
+    print("ok 4b: a region where the arms cover different numbers of cells "
+          "raises rather than reporting a confounded WER gap")
+
+
 # ---- 5: the third adapter arm parses to the shared contract (offline) ------
 
 def test_vosk_parses_to_contract():
@@ -173,6 +233,8 @@ if __name__ == "__main__":
     test_within_model_normalization()
     test_comparison_surfaces_weak_region()
     test_dead_zone_and_shape()
+    test_nan_wer_never_dilutes_the_dead_zone_rate()
+    test_ragged_region_coverage_raises()
     test_vosk_parses_to_contract()
     print("\nAll model-compare tests passed — cross-model dead-zone comparison "
           "works within-model (scale-free) and surfaces the planted weak region.")

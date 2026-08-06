@@ -48,6 +48,7 @@ import json
 import math
 import os
 import tempfile
+from unittest import mock
 
 import numpy as np
 
@@ -489,6 +490,73 @@ def test_al_test_set_from_master_costs_nothing():
 # 7 — ONE SEED IS NOT EVIDENCE
 # ============================================================================
 
+def test_repeated_seeds_cannot_fake_a_band(split):
+    """
+    TRAP 1's blind spot. The seed COUNT was checked; the seeds being DISTINCT
+    was not. `active_learn`/`random_baseline` are deterministic in the seed, so
+    `seeds=(0, 0, 0)` runs three identical trajectories, passes the MIN_SEEDS
+    gate, and produces a zero-width band reported as "median over 3 seeds" —
+    the single-seed anecdote this module exists to prevent, presented in the
+    STRONGEST available form because the spread vanished.
+    """
+    oracle = CountingOracle(boundary_surface)
+    try:
+        multi_seed_curves(oracle, SPACE, X_test=split["X_test"],
+                          y_test=split["y_test"], seeds=[0, 0, 0], n_seed=6,
+                          budget=6)
+        raise AssertionError("three copies of one seed were accepted as a band")
+    except InsufficientSeedsError as e:
+        assert "duplicate seed" in str(e) and "zero width" in str(e), e
+    assert oracle.calls == 0, "the refused run still burned oracle calls"
+
+    try:
+        multi_seed_curves(oracle, SPACE, X_test=split["X_test"],
+                          y_test=split["y_test"], seeds=[], n_seed=6, budget=6)
+        raise AssertionError("an empty seed list was accepted")
+    except InsufficientSeedsError as e:
+        assert "no seeds" in str(e), e
+
+    # negative control: three DISTINCT seeds are still accepted and the band has
+    # real width, i.e. the guard is pinned to the repetition and nothing else.
+    multi = multi_seed_curves(oracle, SPACE, X_test=split["X_test"],
+                              y_test=split["y_test"], seeds=[0, 1, 2], n_seed=6,
+                              budget=6)
+    finals = [ps["final"]["active_boundary"]["boundary_rmse"]
+              for ps in multi["per_seed"]]
+    assert len(set(finals)) > 1, ("distinct seeds produced identical runs", finals)
+    # The robustness verdict interpolates `np.median(all_diffs)` directly into
+    # its SENTENCE. `paired_arm_difference` keeps only the seeds where both arms
+    # ended finite, so that list can come back empty — and `np.median([])` is
+    # nan, printing "median paired difference nan", which reads as a MEASURED
+    # TIE rather than as no measurement at all. (The dict field was already
+    # guarded; the quoted sentence was not.)
+    from deadzone.analysis import al_savings as ALS
+    fake_multi = {"per_seed": [{"seed": 0, "curves": {}}], "threshold": 0.5,
+                  "band": 0.15}
+    with mock.patch.object(
+            ALS, "paired_arm_difference",
+            lambda *a, **k: {"per_seed": [], "median_diff": float("nan")}):
+        with mock.patch.object(ALS, "test_set_from_master",
+                               lambda *a, **k: split), \
+             mock.patch.object(ALS, "surrogate_oracle_from_master",
+                               lambda **k: (oracle, {})), \
+             mock.patch.object(ALS, "multi_seed_curves",
+                               lambda *a, **k: fake_multi), \
+             mock.patch.object(ALS, "oracle_fidelity_floor",
+                               lambda *a, **k: {"boundary_rmse": 0.1}):
+            try:
+                ALS.split_robustness([], SPACE, split_seeds=(0,), seeds=(0, 1, 2))
+                raise AssertionError("an all-nan robustness verdict was returned")
+            except ValueError as exc:
+                assert "no paired runs survived" in str(exc), exc
+                assert "measured tie" in str(exc), exc
+
+    print("OK 6b: repeated (and empty) seed lists are refused — a zero-width "
+          "band cannot be printed as 'median over N seeds' — and a robustness "
+          "verdict with no comparable runs refuses rather than printing "
+          "'median paired difference nan'")
+
+
 def test_single_seed_is_refused_or_flagged(split):
     oracle = CountingOracle(boundary_surface)
 
@@ -619,6 +687,7 @@ if __name__ == "__main__":
     rows, prop = test_counterintuitive_cells_are_proposed_not_measured()
     test_confirmation_needs_the_real_oracle(rows, prop)
     _, split = test_al_test_set_from_master_costs_nothing()
+    test_repeated_seeds_cannot_fake_a_band(split)
     test_single_seed_is_refused_or_flagged(split)
     test_multi_seed_band_and_headline(split)
     test_schema_matches_the_runner()

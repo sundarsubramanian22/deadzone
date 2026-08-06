@@ -56,7 +56,8 @@ import numpy as np
 
 from deadzone import model_compare
 from deadzone.analysis import (
-    failure_summary, load_master_table, parse_edits, split_failures,
+    DuplicateCellError, check_finite, check_unique_cells, failure_summary,
+    load_master_table, parse_edits, split_failures,
 )
 from deadzone.analysis import confidence_gap as cg
 from deadzone.analysis import fingerprints as fp
@@ -704,6 +705,66 @@ def test_fingerprint_plot_payload():
           f"signatures, no-fix rows flagged); both payloads JSON-serialize")
 
 
+# ===========================================================================
+# 15. A DUPLICATE (clip, condition) ROW IS REFUSED BY BOTH AGGREGATORS
+# ===========================================================================
+# The defect family this guards: a repeated cell leaves NO hole, NO NaN and NO
+# shape change. D1 averages the clip in twice (lifting that condition's WER and
+# confidence toward the repeated clip's, which can push it into the dead-zone
+# quadrant) and D2 gives its edit-type mix double weight (which can flip a
+# condition's fingerprint). Both tables still look complete afterwards, so the
+# only thing that can catch it is a count identity asserted at the door.
+
+def test_duplicate_cell_is_refused_by_both_aggregators():
+    rows = build_table()
+    dup = dict(rows[0])                       # the SAME (clip, condition) again
+    dup["wer"] = 0.99                         # ... with a different measurement
+    poisoned = rows + [dup]
+
+    for label, fn in (("D1 per_condition_table",
+                       lambda r: cg.per_condition_table(r, model=MODEL)),
+                      ("D2 edit_composition", fp.edit_composition)):
+        try:
+            fn(poisoned)
+        except DuplicateCellError as exc:
+            msg = str(exc)
+            assert rows[0]["clip_id"] in msg, msg          # names the offender
+            assert rows[0]["condition_name"] in msg, msg
+            assert "double-weighted" in msg or "overwritten" in msg, msg
+        else:
+            raise AssertionError(f"{label} must refuse a duplicated cell")
+
+    # and the guard must not fire on the clean table (no false positive)
+    cg.per_condition_table(rows, model=MODEL)
+    fp.edit_composition(rows)
+
+    # the shared helper reports the count identity, not just "something is wrong"
+    try:
+        check_unique_cells(poisoned, ("clip_id", "condition_name"), where="probe")
+    except DuplicateCellError as exc:
+        assert f"{len(poisoned)} rows for {len(rows)} distinct cells" in str(exc), exc
+    print(f"OK 15: a duplicated (clip, condition) row is refused by D1 and D2 "
+          f"({len(poisoned)} rows for {len(rows)} cells); the clean table passes")
+
+
+# ===========================================================================
+# 16. A NON-FINITE VALUE NEVER REACHES A MEAN SILENTLY
+# ===========================================================================
+
+def test_check_finite_refuses_a_nan_that_would_reach_a_mean():
+    try:
+        check_finite([0.1, 0.2, float("nan")], where="probe", what="WER")
+    except ValueError as exc:
+        assert "2" in str(exc) and "not\nfinite" not in str(exc)
+        assert "index 2" in str(exc), exc          # names WHICH value
+        assert "nan" in str(exc).lower(), exc
+    else:
+        raise AssertionError("a NaN feeding a mean must raise")
+    assert check_finite([0.1, 0.2, 0.3], where="probe", what="WER") == 3
+    print("OK 16: check_finite names the offending index and refuses; finite "
+          "input passes through")
+
+
 if __name__ == "__main__":
     test_loader_and_schema()
     test_failed_rows_never_averaged()
@@ -719,6 +780,8 @@ if __name__ == "__main__":
     test_entity_error_beats_wer()
     test_report_artifacts()
     test_fingerprint_plot_payload()
+    test_duplicate_cell_is_refused_by_both_aggregators()
+    test_check_finite_refuses_a_nan_that_would_reach_a_mean()
     print("\nAll analysis tests passed — D1 recovers the planted dead zone (and "
           "only it), D2 recovers the planted reverb/babble fingerprints, a level "
           "that is merely cleaner than its siblings is never prescribed a fix, and "

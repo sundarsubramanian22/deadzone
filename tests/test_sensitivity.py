@@ -45,7 +45,8 @@ import numpy as np
 
 from deadzone.analysis.sensitivity import (            # noqa: E402
     anova_variance_terms, _check_partition, sobol_from_terms, _subsets,
-    decompose, load_factorial, screen_from_factorial, to_json,
+    decompose, load_factorial, measured_counterintuitive,
+    screen_from_factorial, to_json,
     PRIMARY_FACTORS, PRIMARY_FIXED,
 )
 from deadzone.analysis.interactions import normalize_sobol_result, load_sobol_json  # noqa: E402
@@ -431,6 +432,104 @@ check("load_factorial: raises on a duplicate (clip, cell) row", raised)
 check("load_factorial: the same table WITHOUT the duplicate still loads fine",
       load_factorial(rows_ok, PRIMARY_FACTORS, model="nova-3",
                      fixed=PRIMARY_FIXED)["n_rows"] == len(rows_ok))
+
+
+# ===========================================================================
+print("\n[9b] block integrity: the decomposition refuses input it cannot see through")
+# ===========================================================================
+#
+# `load_factorial` establishes all of this for a block it builds, but decompose /
+# screen_from_factorial / measured_counterintuitive are public and take
+# hand-assembled blocks (this file builds them with make_block; so would any
+# caller carving a sub-block). Each failure below is SILENT if unchecked.
+
+# (a) THE ONE THAT MATTERS MOST: a NaN in W. It propagates into every ANOVA term,
+# and `_check_partition`'s `nan > tol` is FALSE -- so without an explicit
+# finiteness check the partition assertion, the single guard this whole
+# decomposition leans on, would PASS and hand back an all-nan S1/ST table that
+# prints as `nan` rather than as an error.
+Vt_nan, Vtot_nan, _ = anova_variance_terms(
+    np.where(np.arange(Yint.size).reshape(Yint.shape) == 0, np.nan, Yint), 4)
+sum_nan = sum(Vt_nan.values())
+check("partition check: a NaN response really does make sum(V_u) non-finite",
+      not np.isfinite(np.asarray(sum_nan)).all())
+check("partition check: `nan > tol` is False, so a bare threshold would PASS",
+      not (float(np.max(np.abs(np.asarray(sum_nan) / float(Vtot_nan) - 1.0))) > 1e-9))
+raised = ""
+try:
+    _check_partition(Vt_nan, Vtot_nan)
+except AssertionError as e:
+    raised = str(e)
+check("partition check: raises NON-FINITE instead of passing silently",
+      "NON-FINITE" in raised, raised[:80])
+
+W_nan = np.array(blk0["W"], dtype=float)
+W_nan[3, 1, 2, 0, 1] = np.nan
+raised = ""
+try:
+    decompose(dict(blk0, W=W_nan), bootstrap=20, seed=0)
+except ValueError as e:
+    raised = str(e)
+check("decompose: raises on a non-finite response",
+      "NOT\nFINITE" in raised or "NOT FINITE" in raised, raised[:90])
+check("decompose: the message names how many and where",
+      "1 of" in raised and "[3, 1, 2, 0, 1]" in raised, raised[:120])
+for name, fn in (("screen_from_factorial",
+                  lambda b: screen_from_factorial(b, bootstrap=20)),
+                 ("measured_counterintuitive",
+                  lambda b: measured_counterintuitive(b, bootstrap=20))):
+    ok = False
+    try:
+        fn(dict(blk0, W=W_nan))
+    except ValueError as e:
+        ok = "FINITE" in str(e)
+    check(f"{name}: refuses a non-finite response too", ok)
+
+# (b) the row-count identity. `n_rows` is what every report prints as "real
+# transcriptions decomposed"; if it disagrees with W.size the provenance line
+# describes a different dataset than the numbers came from.
+raised = ""
+try:
+    decompose(dict(blk0, n_rows=blk0["n_rows"] + 40), bootstrap=20)
+except ValueError as e:
+    raised = str(e)
+check("decompose: raises when declared n_rows != W.size",
+      "row-count identity" in raised, raised[:90])
+
+# (c) a shape that does not match what the block declares would decompose over
+# the wrong axes and still return in-range indices.
+raised = ""
+try:
+    decompose(dict(blk0, shape=(4, 4, 3, 3, 1)), bootstrap=20)
+except ValueError as e:
+    raised = str(e)
+check("decompose: raises on a shape/n_clips identity mismatch",
+      "shape identity" in raised, raised[:90])
+
+# (d) fewer than two clips makes every bootstrap std(ddof=1) nan, i.e. every CI
+# silently prints as nan next to a perfectly good point estimate.
+blk_one = make_block(Yint, names, levels, n_clips=1)
+raised = ""
+try:
+    decompose(blk_one, bootstrap=20)
+except ValueError as e:
+    raised = str(e)
+check("decompose: refuses a single-clip block (every CI would be nan)",
+      "bootstrap" in raised and "1 clip" in raised, raised[:90])
+
+# (e) same for the replicate count itself.
+raised = ""
+try:
+    decompose(blk0, bootstrap=1)
+except ValueError as e:
+    raised = str(e)
+check("decompose: refuses bootstrap<2 (no CI is computable)",
+      "bootstrap=1" in raised, raised[:90])
+
+# negative control: the untouched block still decomposes, so every guard above is
+# pinned to its violation and not to some incidental property of blk0.
+check("block guards do not fire on the clean block",
+      abs(decompose(blk0, bootstrap=20)["variance_explained_check"] - 1.0) < 1e-12)
 
 
 # ===========================================================================

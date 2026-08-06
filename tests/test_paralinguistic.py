@@ -343,6 +343,62 @@ def test_transcribe_cache_dedupes_and_is_free_on_rerun():
     print("OK 12: 15 transcriptions cached (baselines deduped); re-run made 0 calls")
 
 
+# ---- 13: a duplicated index entry cannot silently swap the audio ----------
+
+def test_duplicate_index_entry_raises():
+    """
+    `clip_curves` keys the index by level, so a SECOND entry for a level already
+    present silently REPLACES the first — and every lookup still finds a file,
+    so the drift curve comes out the right length, over the right ladder, built
+    from whichever wav the index happened to list last. Same shape, same
+    verdict machinery, different audio. Two sweeps written into one directory,
+    or a regenerated ladder appended rather than replacing, is all it takes.
+    """
+    levels = [0.2, 0.31, 0.43, 0.54, 0.66, 0.77, 0.89, 1.0]
+    noise = [0.0, 0.06, 0.12, 0.17, 0.19, 0.20, 0.20, 0.20]
+    wer = [0.0, 0.0, 0.0, 0.0, 0.0, 0.10, 0.30, 0.60]
+    with tempfile.TemporaryDirectory() as td:
+        index, cache = _fake_sweep(td, "rt60", levels, noise, wer)
+        run_factor_decoupling("rt60", index, cache,          # clean: no false
+                              feature_keys=("rms",), root=td)  # positive
+
+        # the SAME clip/level again, pointing at the mildest rung's audio
+        dup = dict(index["rt60"][0])
+        dup["file"] = index["rt60"][-1]["file"]
+        poisoned = {"rt60": index["rt60"] + [dup]}
+        try:
+            run_factor_decoupling("rt60", poisoned, cache,
+                                  feature_keys=("rms",), root=td)
+            raise AssertionError("a duplicated sweep entry was accepted")
+        except ValueError as exc:
+            assert "duplicate sweep entries" in str(exc), exc
+            assert "listed last" in str(exc), exc
+
+        # a single-clip sweep makes every reported sd nan while the mean curves
+        # still print as measurements
+        one = {"rt60": [e for e in index["rt60"] if e["clip_id"] == "c1"]}
+        try:
+            run_factor_decoupling("rt60", one, cache, feature_keys=("rms",),
+                                  root=td)
+            raise AssertionError("a single-clip sweep was accepted")
+        except ValueError as exc:
+            assert "1 clip(s)" in str(exc) and "nan" in str(exc), exc
+
+        # a non-finite WER in the cache would flow into the degeneracy check,
+        # the half-level and the verdict as a quiet nan
+        bad_cache = dict(cache)
+        k = _cache_key("rt60", "c1", levels[0])
+        bad_cache[k] = {**cache[k], "wer": float("nan")}
+        try:
+            run_factor_decoupling("rt60", index, bad_cache,
+                                  feature_keys=("rms",), root=td)
+            raise AssertionError("a NaN WER was accepted")
+        except ValueError as exc:
+            assert "not finite" in str(exc), exc
+    print("OK 13: a duplicated sweep entry, a single-clip sweep and a NaN WER "
+          "all raise instead of producing a right-shaped curve off wrong data")
+
+
 if __name__ == "__main__":
     test_f0_tracks_known_pitches()
     test_flatness_rises_with_noise()
@@ -356,6 +412,7 @@ if __name__ == "__main__":
     test_flat_clip_gets_no_vote()
     test_verdict_sentence_direction_aware()
     test_transcribe_cache_dedupes_and_is_free_on_rerun()
+    test_duplicate_index_entry_raises()
     print("\nAll paralinguistic tests passed — feature extractor recovers planted "
           "acoustic structure, the multi-clip runner recovers the planted leader "
           "in both directions, and a flat lexical curve is refused a "

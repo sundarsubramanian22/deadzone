@@ -190,6 +190,89 @@ def test_hallucination_detector_separates_length_blowup_from_confusion():
     print("ok: hallucination separated from ordinary substitution")
 
 
+def test_a_duplicated_cell_in_one_arm_raises():
+    """
+    The intersection is computed over a SET of cells, so a cell that appears
+    twice in one arm contributes one set member and two rows. The size check
+    between arms cannot see it if both arms happen to carry one duplicate each,
+    and `condition_table` then averages that clip in twice — its WER and
+    confidence carry double weight in the condition, `n_clips` just reads one
+    higher, and the table is otherwise perfect. Nothing downstream can tell.
+    """
+    base = [
+        _row("nova-3", "u02", "c1", 0.1, 0.9, "a"),
+        _row("nova-3", "u05", "c1", 0.1, 0.9, "a"),
+        _row("whisper-base", "u02", "c1", 0.2, 0.5, "a"),
+        _row("whisper-base", "u05", "c1", 0.2, 0.5, "a"),
+    ]
+    matched_arms(base)                                    # clean: no false positive
+
+    # one duplicate per arm, so the arm SIZES still match — the case the old
+    # equal-length check was blind to
+    poisoned = base + [_row("nova-3", "u02", "c1", 0.9, 0.4, "a"),
+                       _row("whisper-base", "u02", "c1", 0.9, 0.4, "a")]
+    try:
+        matched_arms(poisoned)
+        assert False, "expected RaggedArmsError on a duplicated cell"
+    except RaggedArmsError as exc:
+        assert "3 rows for 2 common" in str(exc), exc
+        assert "u02" in str(exc) and "double weight" in str(exc), exc
+    print("ok: a duplicated (clip, condition) cell raises even when both arms "
+          "carry one, so the equal-size check alone would have passed")
+
+
+def test_condition_table_refuses_a_repeated_clip():
+    """`condition_table` is reachable without going through `matched_arms`."""
+    rows = [_row("nova-3", "u02", "c1", 0.2, 0.8, "a"),
+            _row("nova-3", "u02", "c1", 0.9, 0.3, "a")]   # same clip, twice
+    try:
+        condition_table(rows)
+        assert False, "expected a duplicate-clip raise"
+    except ValueError as exc:
+        assert "u02" in str(exc) and "2 rows for 1 distinct clips" in str(exc), exc
+    print("ok: condition_table refuses a repeated clip inside one condition")
+
+
+def test_a_clip_with_no_manifest_reference_raises():
+    """
+    An unknown clip_id used to score against an EMPTY reference, and
+    `classify_errors("", hyp)` returns wer=1.0 with n_ref=0 — a perfect-looking
+    total failure attributed to the model, for a row whose ground truth was
+    simply never loaded. That is indistinguishable from a real acoustic collapse
+    once it is in the table, and it drags the arm's cross-model mean toward 1.0.
+    """
+    rows = [_row("nova-3", "u99", "c1", 0.0, 0.9, "some transcript"),
+            _row("whisper-base", "u99", "c1", 0.0, 0.5, "some transcript")]
+    try:
+        rescore_cross_model(matched_arms(rows), REFS)     # REFS has no u99
+        assert False, "expected a missing-reference raise"
+    except ValueError as exc:
+        assert "u99" in str(exc) and "wer=1.0" in str(exc), exc
+    print("ok: a clip with no manifest reference raises instead of scoring "
+          "against an empty reference (which returns a clean-looking WER 1.0)")
+
+
+def test_edit_signature_refuses_a_zero_denominator():
+    """
+    `... or 1` turned an empty denominator into a 0/0/0 composition, which reads
+    as 'this model destroyed no words' — the exact inversion of 'there was
+    nothing to score'.
+    """
+    for label, rows in (
+            ("no rows", []),
+            ("no reference words",
+             [_row("nova-3", "u02", "c1", 0.0, 0.9, "a", n_ref=0,
+                   n_sub=0, n_del=0, n_ins=0)])):
+        try:
+            edit_signature(rows)
+            assert False, f"expected a raise for {label}"
+        except ValueError as exc:
+            # both messages must say what the 0/0/0 would have been MISREAD as
+            assert "no errors" in str(exc) or "no data" in str(exc) \
+                or "destroyed no words" in str(exc), exc
+    print("ok: an empty edit signature raises instead of printing a clean 0/0/0")
+
+
 def test_hallucination_report_survives_an_empty_transcript():
     """A model that returns nothing must not divide by zero."""
     rep = hallucination_report(
@@ -208,5 +291,9 @@ if __name__ == "__main__":
     test_condition_table_averages_over_clips()
     test_edit_signature_is_a_fraction_of_reference_words()
     test_hallucination_detector_separates_length_blowup_from_confusion()
+    test_a_duplicated_cell_in_one_arm_raises()
+    test_condition_table_refuses_a_repeated_clip()
+    test_a_clip_with_no_manifest_reference_raises()
+    test_edit_signature_refuses_a_zero_denominator()
     test_hallucination_report_survives_an_empty_transcript()
     print("\nL1 comparison layer verified on planted structure.")

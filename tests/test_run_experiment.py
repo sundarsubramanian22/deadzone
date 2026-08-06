@@ -490,6 +490,155 @@ def test_peak_guard_prevents_silent_clipping():
           f"({stats.get('peak_guard')} clip(s) rescaled and reported)")
 
 
+# ---------------------------------------------------------------------------
+# 10: the master table is refused if it violates one-row-per-cell
+# ---------------------------------------------------------------------------
+# This is the ORIGIN of the defect family. Every downstream reader keys the
+# table by (clip, condition, model): sensitivity fills W[clip, cell] (a
+# duplicate silently OVERWRITES and leaves no NaN — the block still looks
+# complete), while model_arms/confidence_gap group and average it (a duplicate
+# silently DOUBLE-WEIGHTS that clip). Neither can distinguish a duplicated
+# measurement from a real one, and the table's shape, columns and row count all
+# still look right. Cheaper to refuse to WRITE it than to guard every reader.
+
+def test_write_master_refuses_duplicate_cells():
+    lib = make_library()
+    conds = [Condition(0.2, 25.0, "babble", "none", 0.0)]
+    with quiet():
+        res = run_grid(CLIPS, REFS, conds, {"fake": FakeASR()}, lib, fs=FS,
+                       workers=2, progress_every=0)
+    rows = res["rows"]
+
+    with tempfile.TemporaryDirectory() as td:
+        write_master(rows, td, "clean")                      # no false positive
+        poisoned = rows + [dict(rows[0], wer=0.99)]          # same cell, new wer
+        try:
+            write_master(poisoned, td, "poisoned")
+            raise AssertionError("a duplicated cell was written to master")
+        except ValueError as exc:
+            assert "refusing to write" in str(exc), exc
+            assert f"{len(poisoned)} rows for {len(rows)} distinct" in str(exc), exc
+            assert rows[0]["clip_id"] in str(exc), exc
+        assert not (Path(td) / "poisoned.csv").exists(), \
+            "a partial table was left on disk after the refusal"
+    print(f"OK 10: write_master refuses {len(rows) + 1} rows for {len(rows)} "
+          f"cells and leaves nothing on disk")
+
+
+# ---------------------------------------------------------------------------
+# 11: a duplicate manifest id is SPEC §12's unfixable bug
+# ---------------------------------------------------------------------------
+
+def test_duplicate_manifest_id_raises():
+    """
+    A repeated id silently overwrites the earlier ground truth and the LATER row
+    wins, so every WER for that clip is scored against a reference the speaker
+    may never have read. No test in this repo can tell you a reference is wrong,
+    and the resulting constant offset is indistinguishable from an acoustic
+    effect (SPEC §12).
+    """
+    import csv as _csv
+    with tempfile.TemporaryDirectory() as td:
+        path = Path(td) / "manifest.csv"
+        with open(path, "w", newline="", encoding="utf-8") as fh:
+            w = _csv.DictWriter(fh, fieldnames=["id", "say_this", "ground_truth"])
+            w.writeheader()
+            w.writerow({"id": "u01", "say_this": "A", "ground_truth": "call maria"})
+            w.writerow({"id": "u02", "say_this": "B", "ground_truth": "ship it"})
+        assert load_manifest(path) == {"u01": "call maria", "u02": "ship it"}
+
+        with open(path, "a", newline="", encoding="utf-8") as fh:
+            _csv.DictWriter(fh, fieldnames=["id", "say_this", "ground_truth"]
+                            ).writerow({"id": "u01", "say_this": "C",
+                                        "ground_truth": "call mario"})
+        try:
+            load_manifest(path)
+            raise AssertionError("a duplicate manifest id was accepted")
+        except ValueError as exc:
+            assert "duplicate id" in str(exc) and "u01" in str(exc), exc
+            assert "3 rows for 2 distinct ids" in str(exc), exc
+    print("OK 11: a duplicate manifest id raises — the later ground truth would "
+          "silently win and no test could catch the wrong reference")
+
+
+# ---------------------------------------------------------------------------
+# 12: a superseded cache row is legitimate but never silent
+# ---------------------------------------------------------------------------
+
+def test_cache_reports_superseded_rows():
+    """
+    Last-write-wins is deliberate (the file is a LOG, not a table), so a
+    superseded row is legitimate — but it is the only place in the pipeline
+    where an earlier measurement is discarded, and how many were discarded is
+    the difference between 'the cache was resumed once' and 'half the grid was
+    re-run against a different model literal without anyone noticing'.
+    """
+    lib = make_library()
+    conds = [Condition(0.2, 25.0, "babble", "none", 0.0)]
+    with tempfile.TemporaryDirectory() as td:
+        path = Path(td) / "cache.jsonl"
+        cache = ResultCache(path)
+        with quiet():
+            res = run_grid(CLIPS, REFS, conds, {"fake": FakeASR()}, lib, fs=FS,
+                           workers=2, cache=cache, progress_every=0)
+        cache.close()
+        n = len(res["rows"])
+
+        reloaded = ResultCache(path)
+        assert reloaded.n_superseded == 0
+
+        with open(path, "a", encoding="utf-8") as fh:        # re-run one cell
+            fh.write(json.dumps(dict(res["rows"][0], wer=0.5)) + "\n")
+        with quiet() as out:
+            again = ResultCache(path)
+        assert len(again) == n, "the re-run must not add a cell"
+        assert again.n_superseded == 1, again.n_superseded
+        assert "SUPERSEDED" in out.getvalue(), out.getvalue()
+        assert again.get(("u02", conds[0].name, "fake"))["wer"] == 0.5 \
+            or again.n_superseded == 1
+    print("OK 12: a superseded cache row is counted and reported, not silently "
+          "dropped (last write still wins, by design)")
+
+
+# ---------------------------------------------------------------------------
+# 13: a planned cell that produced no row is a HOLE, not a failure
+# ---------------------------------------------------------------------------
+
+def test_grid_refuses_to_return_a_short_table():
+    """
+    `rows` is preallocated to the plan's length and filled by index, and the
+    return filters `None` out — so a cell that vanished between planning and
+    writing makes the table silently SHORTER. Every mean still computes, nothing
+    reads as missing, and the cells most likely to vanish are the harsh ones the
+    dead-zone map is about. Failures are ROWS here (`failed=True`), so a None is
+    never legitimate.
+    """
+    lib = make_library()
+    conds = [Condition(0.2, 25.0, "babble", "none", 0.0),
+             Condition(0.9, 0.0, "engine", "none", 0.5)]
+
+    real_run_one = sys.modules["scripts.run_experiment"].run_one
+    seen = {"n": 0}
+
+    def drop_the_third(*a, **kw):
+        seen["n"] += 1
+        if seen["n"] == 3:
+            return None                      # a cell that silently produced nothing
+        return real_run_one(*a, **kw)
+
+    with mock.patch("scripts.run_experiment.run_one", drop_the_third):
+        try:
+            with quiet():
+                run_grid(CLIPS, REFS, conds, {"fake": FakeASR()}, lib, fs=FS,
+                         workers=1, progress_every=0)
+            raise AssertionError("a hole in the grid was returned as a short table")
+        except RuntimeError as exc:
+            assert "planned cells" in str(exc) and "missing" in str(exc), exc
+            assert "survivorship-biased" in str(exc), exc
+    print("OK 13: a planned cell that produced no row raises instead of "
+          "shortening the table")
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in fns:

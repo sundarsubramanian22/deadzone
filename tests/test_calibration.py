@@ -372,6 +372,78 @@ def test_runner_rejects_ungrouped_split():
           "inherited on trust (leakage would show up as a BETTER ECE)")
 
 
+def test_parallel_arrays_are_asserted_not_assumed():
+    """
+    Every function here takes (confidence, correctness) as two PARALLEL arrays
+    the CALLER assembled by walking an alignment. Two ways that pairing breaks,
+    both of which still produce a temperature and an ECE:
+
+      * a LENGTH MISMATCH (an upstream filter applied to one list only, or a
+        `zip` that truncated) — numpy broadcasts a length-1 array happily;
+      * a NON-FINITE CONFIDENCE — `np.clip(nan, eps, 1-eps)` is still nan, the
+        NLL is nan at every T, and `minimize_scalar` returns a bounded-search
+        value WITHOUT raising, so the reported T is a property of the optimizer.
+    """
+    all_rows, raw_conf, y_all, _true_p, _over = make_population(seed=0)
+    conf = np.asarray(raw_conf, dtype=float)[:200]
+    y = np.asarray(y_all, dtype=float)[:200]
+    rows = [dict(r) for r in all_rows[:200]]
+
+    # the un-guarded arithmetic really does return a T without complaining
+    nan_conf = conf.copy()
+    nan_conf[7] = np.nan
+    for label, call in (
+            ("TemperatureScaler.fit length",
+             lambda: TemperatureScaler().fit(conf[:100], y)),
+            ("TemperatureScaler.fit NaN",
+             lambda: TemperatureScaler().fit(nan_conf, y)),
+            ("reliability_curve length",
+             lambda: reliability_curve(conf, y[:100])),
+            ("expected_calibration_error NaN",
+             lambda: expected_calibration_error(nan_conf, y)),
+            ("FeatureCalibrator.fit rows/conf",
+             lambda: FeatureCalibrator(SPACE).fit(rows[:100], conf, y)),
+            ("calibration_report before/after",
+             lambda: calibration_report(conf, conf[:100], y)),
+            ("empty input",
+             lambda: TemperatureScaler().fit([], []))):
+        try:
+            call()
+            raise AssertionError(f"{label}: must raise, not fit silently")
+        except ValueError as exc:
+            assert "confidence" in str(exc).lower() or "words" in str(exc).lower(), exc
+
+    # negative control: the well-formed triple still fits and scores
+    t = TemperatureScaler().fit(conf, y)
+    assert np.isfinite(t.T) and t.T > 0
+    FeatureCalibrator(SPACE).fit(rows, conf, y)
+    assert np.isfinite(expected_calibration_error(conf, y))
+    print("OK 10: mismatched-length and non-finite (confidence, label) inputs "
+          f"raise instead of silently fitting; the clean triple still gives "
+          f"T={t.T:.2f}")
+
+
+def test_seed_band_refuses_a_fake_band():
+    """
+    The BAND is the claim. A repeated seed re-runs the IDENTICAL grouped split,
+    so `seeds=(0, 0, 0)` yields three identical fits and a zero-width band still
+    labelled "median [min, max] over 3 grouped splits" — one draw wearing the
+    strongest possible form of the number.
+    """
+    rows, _failed = CR.usable_rows(
+        [r for r in make_master_rows() if str(r.get("model")) == "nova-3"])
+    for label, seeds in (("duplicate", (0, 0, 0)), ("empty", ())):
+        try:
+            CR.seed_band(rows, SPACE, CR.PRIMARY_SPLIT, 0.5, seeds)
+            raise AssertionError(f"{label} seeds must raise")
+        except ValueError as exc:
+            assert "seed" in str(exc).lower(), exc
+    band = CR.seed_band(rows, SPACE, CR.PRIMARY_SPLIT, 0.5, (0, 1, 2))
+    assert len(band["ece_raw"]["per_seed"]) == 3
+    print("OK 11: duplicate/empty grouped-split seeds raise; three distinct "
+          "seeds still produce a band")
+
+
 if __name__ == "__main__":
     test_metrics_sane()
     test_temperature_reduces_ece()
@@ -382,6 +454,8 @@ if __name__ == "__main__":
     test_runner_deletion_blindness()
     test_runner_build_report()
     test_runner_rejects_ungrouped_split()
+    test_parallel_arrays_are_asserted_not_assumed()
+    test_seed_band_refuses_a_fake_band()
     print("\nAll calibration tests passed — feature-conditioned calibration "
           "recovers the planted condition-dependent overconfidence, ECE and all; "
           "the real-data runner accounts for the alignment fix, measures the "
