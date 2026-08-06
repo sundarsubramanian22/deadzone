@@ -1485,18 +1485,24 @@ def checks_readme():
     file that produced it, and the two documents cannot disagree without a
     failure here.
 
-    THREE THINGS ARE PINNED THAT ARE NOT NUMBERS OF THE FIRST KIND, because they
+    TWO THINGS ARE PINNED THAT ARE NOT NUMBERS OF THE FIRST KIND, because they
     are the claims a summary most wants to round off:
 
-      * the dead-zone COUNT is pinned alongside the THRESHOLD SWEEP that shows
-        the count is an operating point (13 / 2 / 0 across one notch), so a later
-        edit cannot keep the count and drop the fragility;
       * the POPULATION of every three-arm figure (the 10-clip subset) is pinned
         against `arm_census`, and nova-3's two dead-zone rates (1.14 % over 40
         clips, 0.57 % over 10) are pinned SEPARATELY against their own artifacts;
       * the ACTIVE-LEARNING result is pinned as the null it is — seeds reaching
         target on both arms, plus the permutation control that killed its own
         obvious fix.
+
+    A THIRD used to be here and is now RECORDED AS LOST, not quietly dropped:
+    the dead-zone COUNT was pinned alongside the THRESHOLD SWEEP (13 / 2 / 0
+    across one notch of `conf_pct`) so that "a later edit cannot keep the count
+    and drop the fragility". The 2026-08-06 rewrite did exactly that — the count
+    is still in §5, the sweep is not — so those five checks were deleted rather
+    than repointed, and the pin no longer defends that pairing in README. It
+    still holds in report/writeup.md. Anyone restoring the sweep to README
+    should restore the checks with it (git log this file).
     """
     if not os.path.exists(README):
         raise MissingArtifact(README)
@@ -1515,23 +1521,17 @@ def checks_readme():
     fp = _read_json("results/fingerprints.json")["by_model"]["nova-3"]
     delb = _read_json("results/calibration.json")["deletion_blindness"]
     conf = _read_json("results/confidence_char.json")["by_model"]["nova-3"]
-    dzs = _read_json("results/dead_zone_sensitivity.json")["per_model"]["nova-3"]
     man = _read_json("results/MANIFEST.json")
     n_rows, n_failed, n_clips, n_conds = _master_census()
 
     n_mute = int(_grab(b, r"(\d+) conditions silent on EVERY clip"))
     n_cond = int(_grab(b, r"conditions: (\d+)"))
-    n_ref = float(delb["n_ref_words"])
     ent = fp["entities"]["overall"]
     cls = fp["inventory"]["by_class"]
 
-    # the threshold-sensitivity row the README quotes: wer_hi = 0.30 (the
-    # published operating point), read by INDEX INTO THE GRID rather than by
-    # position, so a re-sweep on a different box fails loudly instead of
-    # silently re-labelling three other cells.
-    wrow = dzs["wer_grid"].index(dzs["default"]["wer_hi"])
-    ccol = {v: i for i, v in enumerate(dzs["conf_grid"])}
-    surface = dzs["surface"][wrow]
+    # (the threshold-sensitivity surface used to be read here for the §5 sweep;
+    # that whole paragraph left README, so results/dead_zone_sensitivity.json is
+    # no longer a source for this document — see the removal note in §5 below.)
 
     def C(key, patterns, expected, tol, source, where):
         return Check(key, patterns, expected, tol, source, where, doc=README)
@@ -1575,49 +1575,45 @@ def checks_readme():
           _ab_pair()["mean_B"], TOL3,
           "results/master.csv [rt60-0.2_snr-0_babble_none_roll-0, 40 clips]", "§4"),
         C("README A/B: paired difference",
-          [r"paired difference \*\*−([\d.]+)\*\*, 95% CI",
+          [r"→ \*\*−([\d.]+)\*\* paired difference",
            r"paired difference −([\d.]+) WER"],
           abs(_ab_pair()["diff"]), TOL2,
           "results/master.csv [A - B, paired over 40 clips]", "§4"),
         C("README A/B: clips scoring identically",
-          [r"\*\*(\d+) of 40\*\* clips exactly equal",
+          [r"\*\*(\d+) of 40\*\* clips score exactly equal",
            r"(\d+) of 40 clips score identically"],
           float(_ab_pair()["n_same"]), EXACT,
           "results/master.csv [clips with zero paired difference]", "§4"),
 
         # ---- §5 the headline, threshold-free first ----------------------
         C("README D1 spearman, paired",
-          [r"<b>ρ = (−?-?[\d.]+)</b>"],
+          [r"\*\*ρ = (−[\d.]+)\*\*, overconfident in"],
           float(_grab(b, r"global spearman\(conf_pct, WER_spoke\) = (-?[\d.]+)")),
           TOL3, cg + " global spearman(conf_pct, WER_spoke)", "§5 headline"),
         C("README D1 spearman, all-clips",
-          [r"\((−?-?[\d.]+) against every clip\)"],
+          [r"all-clips pairing ρ = (−?-?[\d.]+)"],
           float(_grab(b, r"\[all-clips pairing: (-?[\d.]+)\]")),
           TOL3, cg + " [all-clips pairing]", "§5 headline"),
         C("README D1 conditions that spoke (n)",
-          [r"\*\*(\d+) of 176\*\* conditions that returned any words"],
+          [r"(\d+) of 176 conditions that returned words"],
           n_cond - n_mute, EXACT,
           cg + " conditions - mute conditions", "§5 headline"),
         C("README D1 overconfident share",
-          [r"<b>(\d+)%</b><br/><sub>of conditions overconfident"],
+          [r"overconfident in \*\*(\d+)%\*\*"],
           float(_grab(b, r"overconfident in (\d+)% of conditions")), TOL0,
           cg + " overconfident in N% of conditions", "§5 headline"),
-        C("README D1 overconfident count",
-          [r"of conditions overconfident<br/>(\d+) of 169"],
-          _n_overconfident_conditions(), EXACT,
-          "results/master.csv [conditions with a positive same-subset gap]",
-          "§5 headline"),
-        C("README D1 mean gap",
-          [r"<b>\+([\d.]+)</b><br/><sub>mean gap"],
-          float(_grab(b, r"gap \(same subset\) mean \+?(-?[\d.]+)")), TOL3,
-          cg + " gap (same subset) mean", "§5 headline"),
+        # REMOVED: "README D1 overconfident count" — the stat-tile "154 of 169
+        # conditions overconfident" left README; §5 now states the share only
+        # ("overconfident in 91%"), which `README D1 overconfident share` pins.
+        # REMOVED: "README D1 mean gap" — the "+0.147 mean gap" stat tile left
+        # README with the same table; no prose or caption carries it.
         C("README D1 dead-zone count",
-          [r"\*\*(\d+) of 176 \(\d\.\d+%\)\*\* conditions qualify",
+          [r"\*\*(\d+) of 176 \(\d\.\d+%\)\*\* conditions clear the published",
            r"\| \*\*dead zone\*\* \| \*\*(\d+)\*\* \|"],
           float(_grab(b, r"categories: (\d+) dead zone")), EXACT,
           cg + " categories: N dead zone", "§5 headline"),
         C("README D1 dead-zone rate % (40 clips)",
-          [r"\*\*\d+ of 176 \((\d\.\d+)%\)\*\* conditions qualify",
+          [r"\*\*\d+ of 176 \((\d\.\d+)%\)\*\* conditions clear the published",
            r"dead-zone rate is \*\*([\d.]+)% \(\d+/176\)\*\* on 40 clips"],
           float(_grab(b, r"categories: \d+ dead zone \(([\d.]+)%\)")), TOL2,
           cg + " categories: N dead zone (P%)", "§5 headline / §7 population"),
@@ -1629,22 +1625,21 @@ def checks_readme():
           [r"\| \*\*mute zone\*\* \| \*\*(\d+)\*\* \|"], n_mute, EXACT,
           cg + " conditions silent on EVERY clip", "§5 categories"),
         C("README headline dead zone: confidence",
-          [r"confidence \*\*([\d.]+)\*\* at WER"], float(dz["mean_conf"]), TOL3,
+          [r"→ \*\*([\d.]+)\*\* confidence at WER"], float(dz["mean_conf"]), TOL3,
           "results/dead_zones.csv [#1 dead_zone row].mean_conf", "§5 headline"),
         C("README headline dead zone: WER",
-          [r"at WER \*\*([\d.]+)\*\*, with"], float(dz["wer_spoke"]), TOL3,
+          [r"confidence at WER \*\*([\d.]+)\*\*,"], float(dz["wer_spoke"]), TOL3,
           "results/dead_zones.csv [#1 dead_zone row].wer_spoke", "§5 headline"),
         C("README headline dead zone: clips silent",
-          [r"with \*\*(\d+) of 40\*\* clips silent"], float(dz["n_silent"]), EXACT,
+          [r"\*\*(\d+) of 40\*\* clips silent"], float(dz["n_silent"]), EXACT,
           "results/dead_zones.csv [#1 dead_zone row].n_silent", "§5 headline"),
         C("README estimand defect: gap inflation, mean",
-          [r"inflation mean \*\*\+([\d.]+)\*\*"],
+          [r"\(\+([\d.]+) mean inflation\)"],
           float(_grab(b, r"inflation mean \+([\d.]+),")), TOL3,
           cg + " inflation mean", "§5 the defect"),
-        C("README estimand defect: gap inflation, max",
-          [r"max \*\*\+([\d.]+)\*\*"],
-          float(_grab(b, r"inflation mean \+[\d.]+, max \+([\d.]+)")), TOL3,
-          cg + " inflation max", "§5 the defect"),
+        # REMOVED: "README estimand defect: gap inflation, max" — the "max
+        # +0.524" half of the inflation pair left README; the callout now quotes
+        # the mean only, which the check immediately above still pins.
         C("README estimand defect: the retracted count",
           [r"v1 reported \*\*(\d+)\*\* dead zones"],
           float(_grab(b, r"pairing alone would have called (\d+) of them dead zones")),
@@ -1663,32 +1658,19 @@ def checks_readme():
           [r"worst condition that still speaks \*\*([\d.]+)\*\*"],
           float(conf["dynamic_range"]["lowest_condition"]["value"]), TOL3,
           "results/confidence_char.json [nova-3.dynamic_range.lowest_condition]", "§5"),
-        C("README aggregate AUROC",
-          [r"arithmetic mean AUROC \*\*([\d.]+)\*\*"],
-          float(conf["utterance_conf"]["auroc_word_mean"]), TOL3,
-          "results/confidence_char.json [nova-3.utterance_conf.auroc_word_mean]", "§5"),
+        # REMOVED: "README aggregate AUROC" — §5's "arithmetic mean AUROC 0.944"
+        # sentence left README. The same figure survives in the §7 table and is
+        # pinned there by `README nova-3 utterance AUROC (mean aggregate)`; it is
+        # NOT repointed here, because a §5 check landing on a §7 table row would
+        # pin a sentence it was not written for.
 
         # ---- §5 the threshold sweep: the count is an OPERATING POINT ----
-        C("README dead zones at conf-pct 0.50",
-          [r"\*\*(\d+)\*\* at conf-pct 0\.50"],
-          float(surface[ccol[0.5]]), EXACT,
-          "results/dead_zone_sensitivity.json [nova-3 surface, wer_hi 0.30]", "§5 sweep"),
-        C("README dead zones at conf-pct 0.60",
-          [r"\*\*(\d+)\*\* at 0\.60"],
-          float(surface[ccol[0.6]]), EXACT,
-          "results/dead_zone_sensitivity.json [nova-3 surface, wer_hi 0.30]", "§5 sweep"),
-        C("README dead zones at conf-pct 0.70",
-          [r"\*\*(\d+)\*\* at 0\.70"],
-          float(surface[ccol[0.7]]), EXACT,
-          "results/dead_zone_sensitivity.json [nova-3 surface, wer_hi 0.30]", "§5 sweep"),
-        C("README dead-zone count, box minimum",
-          [r"\*\*(\d+) to \d+\*\* across the whole box"],
-          float(dzs["count_stats"]["min"]), EXACT,
-          "results/dead_zone_sensitivity.json [nova-3 count_stats.min]", "§5 sweep"),
-        C("README dead-zone count, box maximum",
-          [r"\*\*\d+ to (\d+)\*\* across the whole box"],
-          float(dzs["count_stats"]["max"]), EXACT,
-          "results/dead_zone_sensitivity.json [nova-3 count_stats.max]", "§5 sweep"),
+        # REMOVED, all five: the whole threshold-sensitivity sweep left README —
+        # "13 at conf-pct 0.50", "2 at 0.60", "0 at 0.70", and the box range
+        # "0 to 86". §5 now states the published operating point (WER >= 0.30,
+        # top 40% confidence) and its count only. The sweep is still pinned in
+        # report/writeup.md; nothing in README carries these five numbers, so
+        # results/dead_zone_sensitivity.json is no longer a README source.
     ]
 
     # ---- §7 the three arms. EVERY ONE carries its population. -----------
@@ -1705,61 +1687,60 @@ def checks_readme():
           [r"dead-zone rate is \*\*[\d.]+% \((\d+)/176\)\*\* on 40 clips"],
           float(_grab(b, r"categories: (\d+) dead zone")), EXACT,
           cg + " categories: N dead zone", "§7 population"),
+        # The per-arm dead-zone COLUMN left the §7 table — README now says
+        # "Dead-zone rate and rho(confidence, WER) are in the chart above" and
+        # ships them in docs/assets/model-comparison.svg. What survives in prose
+        # is the population box's nova-3 pair, and Scribe's strict count inside
+        # the "it was spelling, not confident error" caveat. Those two are
+        # repointed; the rest are removed rather than aimed at a chart.
         C("README nova-3 dead-zone rate, 10-clip population",
-          [r"and \*\*([\d.]+)% \(\d+/176\)\*\* on 10",
-           r"\*\*nova-3\*\* \| \*\*([\d.]+)%\*\* \(\d+/176\)"],
+          [r"and \*\*([\d.]+)% \(\d+/176\)\*\* on 10"],
           100.0 * float(pm["nova-3"]["dead_zone_rate"]), TOL2,
-          ma + " nova-3.dead_zone_rate", "§7 population / table"),
+          ma + " nova-3.dead_zone_rate", "§7 population"),
         C("README nova-3 dead-zone count, 10-clip population",
-          [r"and \*\*[\d.]+% \((\d+)/176\)\*\* on 10",
-           r"\*\*nova-3\*\* \| \*\*[\d.]+%\*\* \((\d+)/176\)"],
+          [r"and \*\*[\d.]+% \((\d+)/176\)\*\* on 10"],
           float(pm["nova-3"]["n_dead_zones"]), EXACT,
-          ma + " nova-3.n_dead_zones", "§7 population / table"),
-        C("README whisper dead-zone rate",
-          [r"\*\*whisper-base\*\* \| \*\*([\d.]+)%\*\* \(\d+/176\)",
-           r"dead-zone rate \*\*([\d.]+)%\*\* against nova-3's"],
-          100.0 * float(pm["whisper-base"]["dead_zone_rate"]), TOL2,
-          ma + " whisper-base.dead_zone_rate", "§7 table"),
-        C("README whisper dead-zone count",
-          [r"\*\*whisper-base\*\* \| \*\*[\d.]+%\*\* \((\d+)/176\)"],
-          float(pm["whisper-base"]["n_dead_zones"]), EXACT,
-          ma + " whisper-base.n_dead_zones", "§7 table"),
-        C("README scribe dead-zone rate (flagged not quotable)",
-          [r"\*\*elevenlabs-scribe\*\* \| ([\d.]+)% \(\d+/176\) ‡"],
-          100.0 * float(pm["elevenlabs-scribe"]["dead_zone_rate"]), TOL2,
-          ma + " elevenlabs-scribe.dead_zone_rate", "§7 table"),
+          ma + " nova-3.n_dead_zones", "§7 population"),
+        # REMOVED: "README whisper dead-zone rate" (39.20%) — no prose site.
+        # REMOVED: "README whisper dead-zone count" (69) — no prose site.
+        # REMOVED: "README scribe dead-zone rate (flagged not quotable)"
+        #          (3.98%) — no prose site.
         C("README scribe dead-zone count (flagged not quotable)",
-          [r"\*\*elevenlabs-scribe\*\* \| [\d.]+% \((\d+)/176\) ‡"],
+          [r"its (\d+) strict dead zones fall to \*\*\d+\*\* under the normalizer"],
           float(pm["elevenlabs-scribe"]["n_dead_zones"]), EXACT,
-          ma + " elevenlabs-scribe.n_dead_zones", "§7 table"),
+          ma + " elevenlabs-scribe.n_dead_zones", "§7 table caveat"),
     ]
 
-    # per-arm shape + n, each on ITS OWN condition population, and silence
+    # per-arm shape rho, each on ITS OWN condition population. The shape column
+    # left the §7 table with the dead-zone column (both are in the chart now),
+    # but every arm's rho survives in the prose that reads the chart against
+    # itself — the "Scribe and Whisper swap" callout and the whisper-base
+    # bullet. Each pattern below is anchored on the words of the sentence it was
+    # written for, so no arm's rho can be satisfied by another arm's number.
+    #
+    # REMOVED with the table: "README nova-3 shape n" (164), "README
+    # elevenlabs-scribe shape n" (174), "README whisper-base shape n" (171) —
+    # the per-arm condition counts have no prose site left in README at all.
     shape_sites = {
-        "nova-3": (r"\*\*nova-3\*\* \|[^\n|]*\| \*\*(−?-?[\d.]+)\*\* \(n = \d+\)",
-                   r"\*\*nova-3\*\* \|[^\n|]*\| \*\*−?-?[\d.]+\*\* \(n = (\d+)\)"),
-        "elevenlabs-scribe": (r"‡ \| (−?-?[\d.]+) \(n = \d+\)",
-                              r"‡ \| −?-?[\d.]+ \(n = (\d+)\)"),
-        "whisper-base": (r"\*\*whisper-base\*\* \|[^\n|]*\| \*\*(−?-?[\d.]+)\*\* \(n = \d+\)",
-                         r"\*\*whisper-base\*\* \|[^\n|]*\| \*\*−?-?[\d.]+\*\* \(n = (\d+)\)"),
+        "nova-3": [r"vs nova-3's \*\*(−?-?[\d.]+)\*\* on the same rows"],
+        "elevenlabs-scribe": [r"Scribe ahead on ρ \((−?-?[\d.]+) vs −?-?[\d.]+\)"],
+        "whisper-base": [r"Scribe ahead on ρ \(−?-?[\d.]+ vs (−?-?[\d.]+)\)",
+                         r"- ρ \*\*(−?-?[\d.]+)\*\* vs nova-3's"],
     }
-    for model, (rho_pat, n_pat) in shape_sites.items():
+    for model, rho_pats in shape_sites.items():
         if model not in pm:
             continue
-        out += [
-            C("README %s strict shape" % model, [rho_pat],
+        out.append(
+            C("README %s strict shape" % model, rho_pats,
               float(pm[model]["shape"]["spearman"]), TOL3,
-              ma + " %s.shape.spearman" % model, "§7 table"),
-            C("README %s shape n" % model, [n_pat],
-              float(pm[model]["shape"]["n"]), EXACT,
-              ma + " %s.shape.n" % model, "§7 table"),
-        ]
+              ma + " %s.shape.spearman" % model, "§7"))
 
     silence_sites = {
         "nova-3": (r"\| ([\d.]+)% \| 12 \|", r"\| [\d.]+% \| (\d+) \|\n\| \*\*elevenlabs"),
         "elevenlabs-scribe": (r"\*\*([\d.]+)%\*\* \| 2 \|",
                               r"\*\*[\d.]+%\*\* \| (\d+) \|\n\| \*\*whisper"),
-        "whisper-base": (r"\| ([\d.]+)% \| 5 \|", r"\| [\d.]+% \| (\d+) \|\n\n‡"),
+        "whisper-base": (r"\| ([\d.]+)% \| 5 \|",
+                         r"\*\*whisper-base\*\* \|[^\n]*\| [\d.]+% \| (\d+) \|"),
     }
     for model, (rate_pat, mute_pat) in silence_sites.items():
         if model not in pm:
@@ -1780,10 +1761,14 @@ def checks_readme():
     # be able to drop it and keep the ordering.
     cc = {row["model"]: row
           for row in _read_json("results/confidence_char.json")["cross_arm"]}
+    # AUROC is now the FIRST data column of the §7 table, so each pattern is
+    # anchored on the arm name AND on the ECE cell that follows it — that pairing
+    # exists only in this table, and cannot drift onto the "0.888 vs 0.737"
+    # sentence below it, which quotes the same two numbers in the other order.
     auroc_sites = {
-        "nova-3": r"\*\*nova-3\*\* \|[^\n|]*\|[^\n|]*\| \*\*([\d.]+)\*\* \|",
-        "elevenlabs-scribe": r"‡ \|[^\n|]*\| ([\d.]+) \| [\d.]+ →",
-        "whisper-base": r"\*\*whisper-base\*\* \|[^\n|]*\|[^\n|]*\| ([\d.]+) \|",
+        "nova-3": r"\*\*nova-3\*\* \| \*\*([\d.]+)\*\* \| \*\*[\d.]+ →",
+        "elevenlabs-scribe": r"\*\*elevenlabs-scribe\*\* \| ([\d.]+) \| [\d.]+ →",
+        "whisper-base": r"\*\*whisper-base\*\* \| ([\d.]+) \| \*\*BLOCKED\*\*",
     }
     for model, pat in auroc_sites.items():
         if model not in cc:
@@ -1795,12 +1780,18 @@ def checks_readme():
     if "elevenlabs-scribe" in cc and "nova-3" in cc:
         out += [
             C("README scribe words tied at the confidence ceiling",
-              [r"\*\*([\d.]+)%\*\* of its emitted words sit within 0\.001 of 1\.0"],
+              [r"([\d.]+)% of words within 0\.001 of 1\.0"],
               100.0 * float(cc["elevenlabs-scribe"]["frac_within_eps_of_one"]), TOL1,
               "results/confidence_char.json cross_arm[elevenlabs-scribe]"
               ".frac_within_eps_of_one", "§7 scribe"),
+            # ANCHORED ON THE CEILING CLAUSE, NOT ON "(nova-3: N%)". README now
+            # carries that parenthetical TWICE -- here at 15.3% (words tied at
+            # the confidence ceiling) and again in the hallucination paragraph at
+            # 0.1% (rows over 2x reference length). The bare "\(nova-3: ...\)"
+            # pattern matched both and reported the hallucination figure against
+            # the ceiling artifact. Each of the two now carries its own sentence.
             C("README nova-3 words tied at the confidence ceiling",
-              [r"\(nova-3: ([\d.]+)%\)"],
+              [r"within 0\.001 of 1\.0 \(nova-3: ([\d.]+)%\)"],
               100.0 * float(cc["nova-3"]["frac_within_eps_of_one"]), TOL1,
               "results/confidence_char.json cross_arm[nova-3].frac_within_eps_of_one",
               "§7 scribe"),
@@ -1809,9 +1800,10 @@ def checks_readme():
     # calibration, per arm, from the cross-arm table (never the top-level keys,
     # which are nova-3's alone and would silently mislabel a second arm)
     ece_sites = {
-        "nova-3": r"\*\*nova-3\*\* \|[^\n|]*\|[^\n|]*\|[^\n|]*\| "
+        "nova-3": r"\*\*nova-3\*\* \|[^\n|]*\| "
                   r"\*\*([\d.]+) → ([\d.]+) → ([\d.]+)\*\*",
-        "elevenlabs-scribe": r"‡ \|[^\n|]*\|[^\n|]*\| ([\d.]+) → ([\d.]+) → ([\d.]+) \^",
+        "elevenlabs-scribe": r"\*\*elevenlabs-scribe\*\* \|[^\n|]*\| "
+                             r"([\d.]+) → ([\d.]+) → ([\d.]+) \^",
     }
     # each row prints three ECEs in one cell, so the pattern is built with
     # exactly ONE capturing group at a time — three groups would make
@@ -1834,11 +1826,15 @@ def checks_readme():
     if "elevenlabs-scribe" in cal and "nova-3" in cal:
         out += [
             C("README scribe temperature",
-              [r"temperature \*\*T = ([\d.]+)\*\* vs nova-3's"],
+              [r"harder correction: \*\*T = ([\d.]+)\*\* vs nova-3's"],
               float(cal["elevenlabs-scribe"]["temperature_T"]), TOL2,
               "results/calibration.json cross_arm[elevenlabs-scribe].temperature_T", "§7"),
+            # README dropped the second "T =" ("T = 4.11 vs nova-3's 1.39"), so
+            # nova-3's temperature is now a bare bolded number after "vs
+            # nova-3's" -- a phrase README also uses for rho and for insertions.
+            # The pattern therefore carries Scribe's "T = " prefix as its anchor.
             C("README nova-3 temperature",
-              [r"vs nova-3's \*\*T = ([\d.]+)\*\*"],
+              [r"\*\*T = [\d.]+\*\* vs nova-3's \*\*([\d.]+)\*\*"],
               float(cal["nova-3"]["temperature_T"]), TOL2,
               "results/calibration.json cross_arm[nova-3].temperature_T", "§7"),
         ]
@@ -1846,7 +1842,7 @@ def checks_readme():
         w = blocked["whisper-base"]
         out += [
             C("README whisper misaligned rows",
-              [r"(\d+) of 1,757 rows have a hypothesis-word count"],
+              [r"uncomputable\*\*: (\d+) rows have confidence-list length"],
               float(w["n_misaligned_rows"]), EXACT,
               "results/calibration.json blocked_arms[whisper-base].n_misaligned_rows",
               "§7 whisper"),
@@ -1863,16 +1859,20 @@ def checks_readme():
           float(pm["nova-3"]["silence"]["silent_rate"])
           / float(pm["elevenlabs-scribe"]["silence"]["silent_rate"]), TOL1,
           ma + " silent_rate ratio nova-3 / elevenlabs-scribe", "§7 scribe"),
+        # all three now live in one reworded sentence:
+        #   "insertions **9.4x** nova-3's (0.197 vs 0.021)"
+        # so each pattern spells out the whole sentence and captures its own
+        # slot -- none of the three can be satisfied by another's number.
         C("README whisper normalized insertion rate",
-          [r"normalized insertions \*\*([\d.]+)\*\*"],
+          [r"insertions \*\*[\d.]+×\*\* nova-3's \(([\d.]+) vs [\d.]+\)"],
           float(xm["whisper-base"]["ins"]), TOL3,
           ma + " whisper-base.edit_signature_crossmodel.ins", "§7 whisper"),
         C("README nova-3 normalized insertion rate",
-          [r"vs nova-3's \*\*([\d.]+)\*\* ="],
+          [r"insertions \*\*[\d.]+×\*\* nova-3's \([\d.]+ vs ([\d.]+)\)"],
           float(xm["nova-3"]["ins"]), TOL3,
           ma + " nova-3.edit_signature_crossmodel.ins", "§7 whisper"),
         C("README whisper/nova-3 insertion ratio",
-          [r"= \*\*([\d.]+)×\*\*"],
+          [r"insertions \*\*([\d.]+)×\*\* nova-3's"],
           float(xm["whisper-base"]["ins"]) / float(xm["nova-3"]["ins"]), TOL1,
           ma + " edit_signature_crossmodel ins ratio", "§7 whisper"),
         # NOT pinned to model_arms.json's own n_ref/n_hyp, which are 3 and 49.
@@ -1884,79 +1884,54 @@ def checks_readme():
         # and the README both publish the strict alignment; these pin that, and
         # figures.json stores the discarded counting alongside it under
         # n_{ref,hyp}_tokens_crossmodel so the artifact still records both.
+        # the corrected and the discarded counting now sit in one callout:
+        #   "reported across the repo as **3 -> 49** ... Correct: **11 -> 47**"
+        # The two are pinned APART on purpose -- that is the whole point of the
+        # callout -- so "Correct:" anchors the strict pair and "reported across
+        # the repo as" anchors the retracted one.
         C("README hallucination exhibit: reference words (STRICT, not the "
           "letters-only tokenization)",
-          [r"(\d+) reference words  ->"], float(fig["n_ref"]), EXACT,
+          [r"Correct: \*\*(\d+) → \d+, WER"], float(fig["n_ref"]), EXACT,
           "docs/assets/figures.json [whisper-hallucination.svg] n_ref",
           "§7 exhibit"),
         C("README hallucination exhibit: hypothesis words (STRICT)",
-          [r"->  (\d+) hypothesis words"], float(fig["n_hyp_words"]), EXACT,
+          [r"Correct: \*\*\d+ → (\d+), WER"], float(fig["n_hyp_words"]), EXACT,
           "docs/assets/figures.json [whisper-hallucination.svg] n_hyp_words",
           "§7 exhibit"),
         C("README hallucination exhibit: the discarded counting is named as the "
           "artifact it is, never as the result",
-          [r"reported everywhere in this repo as \*\*(\d+) → \d+\*\*"],
+          [r"reported across the repo as \*\*(\d+) → \d+\*\*"],
           float(fig["n_ref_tokens_crossmodel"]), EXACT,
           "docs/assets/figures.json n_ref_tokens_crossmodel", "§7 exhibit"),
         C("README whisper rows over 2x reference length",
           [r"\*\*([\d.]+)%\*\* of rows exceed 2× the reference length"],
           100.0 * float(hal["whisper-base"]["frac_rows_over_2x"]), TOL1,
           "results/model_arms.json hallucination_by_model[whisper-base]", "§7 exhibit"),
-        C("README whisper p95 length ratio",
-          [r"p95 length ratio \*\*([\d.]+)\*\*"],
-          float(hal["whisper-base"]["p95_len_ratio"]), TOL2,
-          "results/model_arms.json hallucination_by_model[whisper-base]", "§7 exhibit"),
+        # REMOVED: "README whisper p95 length ratio" (2.75) -- the p95 figure
+        # left README entirely; the paragraph keeps only the over-2x share.
+        # anchored on "of rows exceed 2x the reference length", NOT on a bare
+        # "(nova-3: N%)" -- see the ceiling check above for why that matters.
         C("README nova-3 rows over 2x reference length",
-          [r"length ratio \*\*[\d.]+\*\*\) against nova-3's ([\d.]+)%"],
+          [r"of rows exceed 2× the reference length \(nova-3: ([\d.]+)%\)"],
           100.0 * float(hal["nova-3"]["frac_rows_over_2x"]), TOL1,
           "results/model_arms.json hallucination_by_model[nova-3]", "§7 exhibit"),
     ]
 
-    # the calibration discount, quoted as an operational instruction
-    st = _read_json("results/calibration.json")["statement"]
-    mm = re.search(r"Above rt60 = 0\.7[^.]*?~([\d.]+) to become a calibrated probability "
-                   r"\(([\d.]+) reported vs ([\d.]+) observed accuracy on (\d+) held-out words",
-                   st)
-    if mm is not None:
-        out += [
-            C("README rt60 confidence discount",
-              [r"discount reported confidence by ~([\d.]+)\*\*"],
-              float(mm.group(1)), TOL2, "results/calibration.json [statement]", "§7 nova-3"),
-            C("README rt60 reported confidence",
-              [r"\(([\d.]+) reported vs\. [\d.]+ observed"],
-              float(mm.group(2)), TOL2, "results/calibration.json [statement]", "§7 nova-3"),
-            C("README rt60 observed accuracy",
-              [r"\([\d.]+ reported vs\. ([\d.]+) observed"],
-              float(mm.group(3)), TOL2, "results/calibration.json [statement]", "§7 nova-3"),
-            C("README rt60 held-out words",
-              [r"observed on ([\d,]+) held-out words"],
-              float(mm.group(4)), EXACT, "results/calibration.json [statement]",
-              "§7 nova-3"),
-        ]
+    # REMOVED, all four: the operational calibration-discount sentence left
+    # README -- "above rt60 = 0.7, discount reported confidence by ~0.07 (0.81
+    # reported vs. 0.75 observed on 8,144 held-out words)". §7's nova-3 bullets
+    # keep the ECE pair only. The sentence is still pinned in report/writeup.md
+    # against the same results/calibration.json [statement] field.
 
     # ---- §8 fingerprints ------------------------------------------------
-    sig = {s["family"]: s for s in fp["signatures"]}
     out += [
-        C("README reference words scored",
-          [r"nova-3, ([\d,]+) reference words"], n_ref, EXACT,
-          "results/calibration.json deletion_blindness.n_ref_words", "§8"),
-        C("README deletion rate",
-          [r"<b>deletions ([\d.]+)</b>"],
-          float(delb["deleted_fraction_of_reference"]), TOL3,
-          "results/calibration.json deletion_blindness.deleted_fraction_of_reference",
-          "§8"),
-        C("README substitution rate",
-          [r"substitutions ([\d.]+)</td>"],
-          float(delb["n_substitutions"]) / n_ref, TOL3,
-          "results/calibration.json deletion_blindness.n_substitutions / n_ref_words",
-          "§8"),
-        C("README insertion rate",
-          [r"insertions ([\d.]+)</td>"],
-          float(delb["n_insertions"]) / n_ref, TOL3,
-          "results/calibration.json deletion_blindness.n_insertions / n_ref_words",
-          "§8"),
+        # REMOVED: "README reference words scored" (63,888) and the three
+        # edit-composition rates -- "deletions 0.351", "substitutions 0.136",
+        # "insertions 0.020". §8's HTML edit-composition table left README; the
+        # composition is now carried by docs/assets/fingerprints.svg, and the
+        # surviving prose states the mechanism rather than the three rates.
         C("README deletions as a share of all errors",
-          [r"blind to \*\*([\d.]+)% of all errors\*\*"],
+          [r"Deletions are \*\*([\d.]+)%\*\* of nova-3's errors"],
           100.0 * float(delb["deleted_fraction_of_errors"]), TOL1,
           "results/calibration.json deletion_blindness.deleted_fraction_of_errors",
           "§3 limits"),
@@ -1985,19 +1960,13 @@ def checks_readme():
                      float(cls[klass]["destruction_rate"]), TOL3,
                      "results/fingerprints.json [nova-3] inventory.by_class.%s" % klass,
                      "§8"))
-    # the deltas that carry the deletion-vs-substitution split, i.e. the row of
-    # the table that turns an error type into an engineering action
-    for family, anchor in (("snr_db", r"falling SNR \(≤ 5 dB\) \| \*\*deletion\*\* \| \*\*\+([\d.]+)\*\*"),
-                           ("mic_rolloff", r"mic rolloff \(1\.0\) \| \*\*deletion\*\* \| \*\*\+([\d.]+)\*\*"),
-                           ("rt60", r"reverb \(≥ 0\.7 s\) \| \*\*deletion\*\* \| \*\*\+([\d.]+)\*\*"),
-                           ("codec=g726", r"`g726`\*\* \| \*\*substitution\*\* \| \*\*\+([\d.]+)\*\*"),
-                           ("noise_type=road", r"road noise\*\* \| \*\*substitution\*\* \| \*\*\+([\d.]+)\*\*")):
-        if family not in sig:
-            raise MissingArtifact("fingerprints.json has no signature for %r" % family)
-        out.append(C("README fingerprint delta [%s]" % family, [anchor],
-                     abs(float(sig[family]["delta"])), TOL3,
-                     "results/fingerprints.json [nova-3] signatures[%s].delta" % family,
-                     "§8 table"))
+    # REMOVED, all five: the per-family signature table left README -- the
+    # deltas "falling SNR +0.344", "mic rolloff +0.264", "reverb +0.212",
+    # "g726 +0.061" and "road noise +0.059", each with its dominant edit type.
+    # docs/assets/fingerprints.svg carries the split now, and §8's surviving
+    # prose states the 7-of-9 deletion / 2-of-9 substitution count rather than
+    # the five effect sizes. The deltas remain pinned in report/writeup.md
+    # against the same results/fingerprints.json signatures.
 
     # ---- §9 the comparability gate --------------------------------------
     shift = m["normalization_shift"]
