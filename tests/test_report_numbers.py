@@ -159,7 +159,12 @@ UNDERSTANDING = "report/UNDERSTANDING.md"
 # and pinning them would delete them rather than check them.
 STATUS = "report/STATUS.md"
 INTERVIEW_INTERNAL = "report/INTERVIEW_INTERNAL.md"
-DOCS = [WRITEUP, README, UNDERSTANDING, STATUS, INTERVIEW_INTERNAL]
+# The spoken script, renamed when INTERVIEW_INTERNAL.md was rebuilt as a
+# number-lookup. Its CONTENT is unchanged, so every check written against it
+# still holds -- only the filename moved. Both documents are pinned to the
+# SAME artifacts, which is what stops them drifting apart (SPEC J.7).
+INTERVIEW_PREP = "report/INTERVIEW_PREP.md"
+DOCS = [WRITEUP, README, UNDERSTANDING, STATUS, INTERVIEW_INTERNAL, INTERVIEW_PREP]
 
 # Tolerances, named by the decimal place the prose rounds to. A figure printed
 # to 3 dp is pinned to half a unit in the last place, so 0.8294 -> "0.829"
@@ -2399,8 +2404,8 @@ def _silence_driven_payoff():
             "spoke_acc": 1.0 - _mean(float(r["wer"]) for r in spoke)}
 
 
-def checks_interview_internal():
-    """report/INTERVIEW_INTERNAL.md — the private interview script.
+def checks_interview_prep():
+    """report/INTERVIEW_PREP.md — the private spoken script.
 
     Scope (see the DOCS comment): every figure this document QUOTES ALOUD is
     pinned to the artifact that produced it. Its own commentary — the threshold
@@ -2415,8 +2420,8 @@ def checks_interview_internal():
     the confidence score, actually", so they are exactly the figures that would
     be spoken from memory if they drifted.
     """
-    if not os.path.exists(INTERVIEW_INTERNAL):
-        raise MissingArtifact(INTERVIEW_INTERNAL)
+    if not os.path.exists(INTERVIEW_PREP):
+        raise MissingArtifact(INTERVIEW_PREP)
     b = _cg_block("nova-3")
     cg = "results/confidence_gap.txt [nova-3 block]"
     dz = _headline_dead_zone("nova-3")
@@ -2449,7 +2454,7 @@ def checks_interview_internal():
 
     def C(key, patterns, expected, tol, source):
         return Check(key, patterns, expected, tol, source, "INTERVIEW_INTERNAL.md",
-                     doc=INTERVIEW_INTERNAL)
+                     doc=INTERVIEW_PREP)
 
     return [
         # --- §6 the headline, and §A/Q2's pivot to the threshold-free form ----
@@ -2660,12 +2665,78 @@ def checks_interview_internal():
     ]
 
 
+def checks_interview_internal():
+    """report/INTERVIEW_INTERNAL.md — the number-lookup rebuilt 2026-08-06.
+
+    This document's JOB is to answer "where did that number come from", so its
+    figures are exactly the ones that must not drift. Pinned here are the values
+    it states in prose or in a Table A cell; the `how it was computed` cells are
+    deliberately unpinned (they name functions and formulas, not values), as is
+    the disagreements table, which exists to RECORD a disagreement — a pin there
+    would delete the finding rather than check it.
+
+    It coexists with `report/INTERVIEW_PREP.md`, the spoken script. Both are in
+    DOCS and both read the SAME artifacts, which is the mechanism that stops two
+    presenter documents drifting apart (SPEC J.7 is the record of what that costs).
+    """
+    if not os.path.exists(INTERVIEW_INTERNAL):
+        raise MissingArtifact(INTERVIEW_INTERNAL)
+    b = _cg_block("nova-3")
+    cg = "results/confidence_gap.txt [nova-3 block]"
+    dz = _headline_dead_zone("nova-3")
+    fig = _read_json("docs/assets/figures.json")["figures"]["whisper-hallucination.svg"]
+    n_cond = int(_grab(b, r"conditions: (\d+)"))
+    n_mute = int(_grab(b, r"(\d+) conditions silent on EVERY clip"))
+
+    def C(key, patterns, expected, tol, source):
+        return Check(key, patterns, expected, tol, source, "INTERVIEW_INTERNAL.md",
+                     doc=INTERVIEW_INTERNAL)
+
+    return [
+        C("IIL D1 spearman, paired",
+          [r"\*\*ρ = (−[\d.]+)\*\* \| Spearman rank correlation"],
+          float(_grab(b, r"global spearman\(conf_pct, WER_spoke\) = (-?[\d.]+)")),
+          TOL3, cg + " global spearman(conf_pct, WER_spoke)"),
+        C("IIL D1 non-mute conditions",
+          [r"\*\* \| Spearman rank correlation, confidence vs error \| \*\*(\d+)\*\* non-mute"], n_cond - n_mute, EXACT,
+          cg + " conditions - mute conditions"),
+        # The population trap, pinned as a PAIR: the rule is that neither rate may
+        # be written without its clip count, so each pattern requires the count to
+        # be adjacent. A doc that drops "on 40 clips" fails here rather than
+        # reading as a different, wrong number.
+        C("IIL dead-zone rate, 40-clip population, stated WITH its clip count",
+          [r"\*\*([\d.]+) % \(2/176\)\*\* \| nova-3 dead-zone rate \*\*on 40 clips\*\*"],
+          float(_grab(b, r"categories: \d+ dead zone \(([\d.]+)%\)")), TOL2,
+          cg + " categories: N dead zone (P%)"),
+        C("IIL headline dead zone: confidence",
+          [r"\*\*(0\.\d+)\*\* confidence"], float(dz["mean_conf"]), TOL3,
+          "results/dead_zones.csv [nova-3 #1] mean_conf"),
+        C("IIL headline dead zone: WER",
+          [r"conf \*\*0\.829\*\* at WER \*\*(0\.\d+)\*\*"], float(dz["wer_spoke"]), TOL3,
+          "results/dead_zones.csv [nova-3 #1] wer_spoke"),
+        # The one place in the repo where the DOCUMENT is right and the ARTIFACT
+        # is stale. Pinned to figures.json's strict alignment, never to
+        # model_arms.json, which still prints 3 -> 49.
+        C("IIL hallucination exhibit: reference words (STRICT)",
+          [r"It is \*\*(\d+) → \d+\*\*"], float(fig["n_ref"]), EXACT,
+          "docs/assets/figures.json [whisper-hallucination.svg] n_ref"),
+        C("IIL hallucination exhibit: hypothesis words (STRICT)",
+          [r"It is \*\*\d+ → (\d+)\*\*"], float(fig["n_hyp_words"]), EXACT,
+          "docs/assets/figures.json [whisper-hallucination.svg] n_hyp_words"),
+        C("IIL hallucination exhibit: the stale artifact figure, named as stale",
+          [r"exhibit as \*\*(\d+) → \d+\*\*"],
+          float(fig["n_ref_tokens_crossmodel"]), EXACT,
+          "docs/assets/figures.json n_ref_tokens_crossmodel"),
+    ]
+
+
 CHECK_GROUPS = [
     ("D1 headline", checks_d1_headline),
     ("STATUS doc", checks_status),
     ("README summary", checks_readme),
     ("UNDERSTANDING prep doc", checks_understanding),
-    ("INTERVIEW_INTERNAL script", checks_interview_internal),
+    ("INTERVIEW_PREP spoken script", checks_interview_prep),
+    ("INTERVIEW_INTERNAL lookup", checks_interview_internal),
     ("D1 dead-zone row", checks_dead_zone_row),
     ("D2 fingerprints", checks_fingerprints),
     ("D3a sensitivity", checks_sobol),
