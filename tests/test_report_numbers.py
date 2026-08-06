@@ -1,7 +1,7 @@
 """
-Number-pinning for `report/writeup.md`: every load-bearing figure in the prose
-is re-read from the artifact it came from, and this suite fails when the two
-disagree.
+Number-pinning for `report/writeup.md`, `README.md` and
+`report/UNDERSTANDING.md`: every load-bearing figure in the prose is re-read
+from the artifact it came from, and this suite fails when the two disagree.
 
 WHY THIS EXISTS. Nothing else in this repo asserts anything about a prose
 document. Every other layer is guarded — the trap functions, the loaders, the
@@ -19,8 +19,26 @@ deletion-blindness figures, the exact-Sobol pre-registration gaps and their two
 CI forms, the ECE triple, the sim2real level/order/transfer trio, the L1 and L1b
 arm shapes, the active-learning null, the DRR mechanism and its four-room table,
 the L3 decoupling thresholds, the "listening is not QA" pair, and the
-reproducibility totals. 157 figures across 234 prose sites, from 13 artifacts,
+reproducibility totals. 211 figures across 311 prose sites, from 14 artifacts,
 in under half a second.
+
+SOME FIGURES HAVE NO PRODUCER AND ARE RECOMPUTED HERE. §6.7's three-arm
+overconfidence sentence is written by no script and stored in no artifact —
+`model_compare.py` and `model_arms.py` contain no bootstrap code at all, so that
+table's CIs exist only as prose. What can be re-derived from `results/master.csv`
+is: `_clipped_gap_table` reimplements `confidence_gap.py`'s
+`mean_conf - clip(1 - WER_spoke, 0, 1)` and pins both arms' means AND the two
+populations they may legitimately be quoted over. The published +0.276 / +0.121
+were reproducible under no pairing at all; the clamp is why (see that helper).
+
+IT ALSO PINS THE SCOPE ON THE WEAKEST CLAIM. §6.3's "damage is monotone in DRR,
+not RT60" is the one figure in the write-up with no interval, and it is the one
+an adversarial reader can undercut using a column of the document's own table:
+C50 sits at −0.800, the same magnitude as RT60's +0.800, separated from DRR by a
+single discordant pair 0.19 dB apart, on a sample of four rooms. The hedge — the
+room count, the exact permutation p-values, the C50 correlation, the gap — is
+pinned alongside the claim so a later compression pass cannot drop the scope
+while keeping the sentence.
 
 WHAT IT DELIBERATELY DOES NOT PIN. Numbers with no artifact behind them are left
 alone rather than pinned against a constant: §6.7's repeat-call spread (a 6-clip
@@ -42,7 +60,9 @@ Three properties worth naming:
 
   * EVERY capture must agree. A figure quoted in §1, in §6.1 and again in an
     appendix table is captured at all three sites and all three must match the
-    artifact — so the suite also catches the document disagreeing with *itself*.
+    artifact — so the suite also catches the document disagreeing with *itself*,
+    and (since README.md reads the SAME artifact objects) the two documents
+    disagreeing with *each other*.
   * MISSING ARTIFACTS SKIP, they do not fail. `results/` is gitignored, so a
     fresh checkout has none of it. A red suite there would teach people to
     ignore this file.
@@ -90,15 +110,41 @@ os.chdir(_REPO_ROOT)
 # -------------------------------------------------------------------------
 
 import csv
+import itertools
 import json
 import re
 from collections import defaultdict
 
 WRITEUP = "report/writeup.md"
+README = "README.md"
+UNDERSTANDING = "report/UNDERSTANDING.md"
 
 # Every document this suite is willing to pin. Adding a prose file here is the
 # only step needed to bring it under the gate.
-DOCS = [WRITEUP]
+#
+# README.md is here for the same reason `report/SUMMARY.md` was retired: it is a
+# SUMMARY, it is the first document an outsider reads, and a summary drifts
+# *away from* its body in one direction — toward the stronger claim. It carried
+# three such drifts at once (an active-learning "far fewer oracle calls" that
+# §6.5 reports as a null, a "Whisper is the outlier" that holds only under
+# normalized scoring, and a scope note that reassured about clips while the four
+# correlations it covered sat on three different condition populations). Pinning
+# it to the SAME artifact objects the write-up is pinned to means the two
+# documents cannot disagree without a failure here.
+#
+# report/UNDERSTANDING.md is here for a sharper reason: the EXEMPTION LIST IS
+# WHERE NUMBERS GO TO ROT. `report/measurements.md`, exempt since it was written,
+# has already drifted on five figures (22,411 for 22,416; 35.6 % for 35.1 %; a
+# calibration discount of 0.74 on n = 7,980 for 0.75 on 8,144; an ECE triple
+# rounded to 0.051/0.032/0.006; and a D4 sentence still describing the
+# PRE-correction dead-zone sets). Exempting a second, larger prep document would
+# repeat that. So its HEADLINE figures are pinned instead — the ones it presents
+# as agreeing with `results/`. Its own new computations (the dead-zone threshold
+# sensitivity sweep, the 0.962 confidence anchor) have no artifact and are
+# deliberately NOT pinned, and neither are the passages where it records a
+# disagreement with the write-up: that document exists partly to disagree, and a
+# pin there would delete the disagreement rather than check it.
+DOCS = [WRITEUP, README, UNDERSTANDING]
 
 # Tolerances, named by the decimal place the prose rounds to. A figure printed
 # to 3 dp is pinned to half a unit in the last place, so 0.8294 -> "0.829"
@@ -290,6 +336,54 @@ def _master_nova(columns):
 def _mean(xs):
     xs = list(xs)
     return sum(xs) / len(xs)
+
+
+# --- rank statistics on the four-room reverb axis -------------------------
+# §6.3's DRR claim rests on n = 4 rooms, so its p-values are EXACT permutation
+# tests over 4! = 24 orderings, not asymptotic approximations. Computed here in
+# stdlib rather than read from an artifact because no artifact stores them —
+# but the four (DRR, C50, WER) triples they are computed from ARE read from
+# `results/interactions.json`, so nothing below is a typed constant.
+
+def _ranks(v):
+    order = sorted(range(len(v)), key=lambda i: v[i])
+    out = [0.0] * len(v)
+    for pos, i in enumerate(order):
+        out[i] = pos + 1.0
+    return out
+
+
+def _spearman(xs, ys):
+    """Spearman rho. The four room values carry no ties, so the d^2 form holds."""
+    rx, ry = _ranks(xs), _ranks(ys)
+    n = len(xs)
+    d2 = sum((a - b) ** 2 for a, b in zip(rx, ry))
+    return 1.0 - 6.0 * d2 / (n * (n * n - 1))
+
+
+def _kendall_tau(xs, ys):
+    n = len(xs)
+    conc = disc = 0
+    for i in range(n):
+        for j in range(i + 1, n):
+            s = (xs[j] - xs[i]) * (ys[j] - ys[i])
+            if s > 0:
+                conc += 1
+            elif s < 0:
+                disc += 1
+    return (conc - disc) / (n * (n - 1) / 2.0)
+
+
+def _perm_p(xs, ys, stat, two_sided):
+    """Exact permutation p over every relabelling of `xs` against fixed `ys`."""
+    obs = stat(xs, ys)
+    hits = total = 0
+    for perm in itertools.permutations(xs):
+        total += 1
+        val = stat(list(perm), ys)
+        if (abs(val) >= abs(obs) - 1e-12) if two_sided else (val <= obs + 1e-12):
+            hits += 1
+    return hits / float(total)
 
 
 # =========================================================================
@@ -617,7 +711,107 @@ def checks_drr():
         [r"— ([\d.]+) → [\d.]+ → [\d.]+ → [\d.]+ —",
          r"non-monotonic — ([\d.]+) →"],
         seq[0], TOL3, msrc + " level 0.2", "§1 / §6.3"))
+    out += _checks_drr_scope(it, corr)
     return out
+
+
+def _checks_drr_scope(it, corr):
+    """§1 / §6.3 / limitation 6 / §9 — the SCOPE on the DRR claim.
+
+    This is the one claim in the write-up with no interval, and it is the one an
+    adversarial reader can undercut using a column of the document's own table:
+    C50 sits at −0.800, the same magnitude as RT60's +0.800, separated from DRR
+    by a single discordant pair 0.19 dB apart, on a sample of four rooms. Every
+    figure that states that scope is pinned here, so the hedge cannot be quietly
+    dropped in a later compression pass while the claim survives.
+    """
+    src = "results/interactions.json [rir_mechanism]"
+    levels = sorted(it["rir_mechanism"]["levels"], key=lambda l: l["rt60_requested"])
+    drr = [float(l["drr_db"]) for l in levels]
+    c50 = [float(l["c50_db"]) for l in levels]
+    wer = [float(it["rir_mechanism"]["marginal_wer"][_lvl_key(l)]) for l in levels]
+
+    # the reverb axis is delivered by however many DISTINCT RIRs the grid used —
+    # read from the measured table, not asserted, because "n = 4" is the whole
+    # scope of the claim.
+    n_rooms = len({r["rir_key"] for r in _master_nova(["rir_key"])})
+    n_measured = float(_read_json("results/MANIFEST.json")["assets"]["rirs"]["n_files"])
+
+    # C50's neighbouring pair: the single swap the DRR-vs-C50 separation rests on.
+    gaps = sorted(abs(a - b) for a, b in itertools.combinations(c50, 2))
+
+    minutes_per_call = float(
+        _read_json("results/MANIFEST.json")["cost"]["minutes_per_call_assumed"])
+    rate = float(_read_json("results/MANIFEST.json")["cost"]["usd_per_minute_quoted"])
+    n_clips = float(_read_json("results/MANIFEST.json")["corpus"]["n_utterances"])
+    unused_calls = (n_measured - n_rooms) * n_clips
+
+    return [
+        Check("spearman(C50, WER) — the coordinate that ties RT60's magnitude",
+              [r"ρ\(C50, WER\) = (−?-?[\d.]+)",
+               r"`spearman\(C50, WER\) = (−?-?[\d.]+)`",
+               r"separation from C50 \((−?-?[\d.]+)\)"],
+              float(corr["c50_db"]["spearman"]), TOL3,
+              src + " correlations.c50_db.spearman", "§1 / §6.3 / limitation 6"),
+        Check("distinct RIRs delivering the rt60 axis",
+              [r"n = (\d+) rooms",
+               r"exactly (\d+) distinct RIRs",
+               r"exactly \*\*(\d+)\*\* distinct `rir_key` values",
+               r"snapping onto (\d+) distinct RIRs",
+               r"an \*\*n = (\d+)\*\*"],
+              n_rooms, EXACT,
+              "results/master.csv [nova-3, distinct rir_key]",
+              "§1 / §6.3 / limitation 6"),
+        Check("measured RIRs curated on disk",
+              [r"(\d+) measured RIRs", r"F: (\d+) measured, \d+ used"],
+              n_measured, EXACT,
+              "results/MANIFEST.json assets.rirs.n_files", "§1 / §6.3 / §9 / F"),
+        Check("exact one-sided permutation p for spearman(DRR, WER)",
+              [r"one-sided permutation p = (\d+\.\d+)",
+               r"worth `p = (\d+\.\d+)` one-sided"],
+              _perm_p(drr, wer, _spearman, two_sided=False), TOL3,
+              src + " [exact permutation over 4! orderings]", "§1 / §6.3 / limitation 6"),
+        Check("Kendall tau on the four rooms",
+              [r"Kendall τ = (−?-?\d+\.\d+) at two-sided"],
+              _kendall_tau(drr, wer), TOL3,
+              src + " [kendall tau, DRR vs marginal WER]", "§6.3"),
+        Check("exact two-sided permutation p for Kendall tau",
+              [r"at two-sided p = (\d+\.\d+)"],
+              _perm_p(drr, wer, _kendall_tau, two_sided=True), TOL3,
+              src + " [exact permutation over 4! orderings]", "§6.3"),
+        Check("the C50 gap the DRR/C50 separation rests on",
+              [r"differ by \*\*(\d+\.\d+) dB\*\*", r"pair (\d+\.\d+) dB apart"],
+              gaps[0], TOL2,
+              src + " [min |ΔC50| over the four rooms]", "§1 / §6.3"),
+        Check("unmeasured rooms already on disk",
+              [r"is (\d+) rooms × \d+ clips"],
+              n_measured - n_rooms, EXACT,
+              "MANIFEST assets.rirs.n_files − distinct rir_key in master.csv", "§9"),
+        # NOTE the wording of these three sites is load-bearing: §10's own
+        # `\*\*([\d,]+) Deepgram calls` and `Deepgram calls ≈ ([\d.]+) min`
+        # checks would otherwise capture §9's *hypothetical* follow-up cost as
+        # if it were the realized experiment total. Keep "further" and the bold
+        # boundaries, or the two totals silently cross-pin.
+        Check("§9's calls to finish the reverb axis",
+              [r"clips = \*\*(\d+) further Deepgram calls"],
+              unused_calls, EXACT,
+              "(16 − 4 rooms) × 40 clips, from MANIFEST + master.csv", "§9"),
+        Check("§9's audio minutes for that follow-up",
+              [r"further Deepgram calls\*\* ≈ \*\*(\d+) min\*\*"],
+              unused_calls * minutes_per_call, TOL0,
+              "MANIFEST cost.minutes_per_call_assumed × 480", "§9"),
+        Check("§9's cost for that follow-up",
+              [r"of fresh\naudio ≈ \*\*\$(\d+\.\d+)\*\*"],
+              unused_calls * minutes_per_call * rate, TOL2,
+              "MANIFEST cost.usd_per_minute_quoted × 33 min", "§9"),
+    ]
+
+
+def _lvl_key(lvl):
+    """`marginal_wer` is keyed by the requested rt60 as the JSON wrote it."""
+    req = float(lvl["rt60_requested"])
+    s = ("%.2f" % req).rstrip("0")
+    return s + "0" if s.endswith(".") else s
 
 
 def checks_calibration():
@@ -1015,18 +1209,102 @@ def _spearman(xs, ys):
     return num / (dx * dy)
 
 
-def checks_three_arm_shape():
-    """§6.7 Finding 2, STRICT row — recomputed from master.csv.
+def _clipped_gap_table(model, clip_filter=None):
+    """Per-condition `mean_conf - clip(1 - WER_spoke, 0, 1)`, the module's formula.
 
-    This table exists in no artifact: it was computed while the section was
-    written, on the conditions all three arms spoke on, which is the only
-    population in which three arms can be ranked. So it is re-derived here from
-    the raw rows rather than read from a summary — which is the stronger pin, and
-    the reason this group is longer than the others.
+    THE CLIP IS NOT COSMETIC. `deadzone/analysis/confidence_gap.py` clamps
+    delivered accuracy into [0, 1] before subtracting, which matters for any arm
+    whose WER can exceed 1.0 — i.e. any arm that hallucinates. Recomputing the
+    gap without the clamp reproduces neither artifact, and the discrepancy
+    (+0.2754 against the artifact's +0.272 for Scribe) is small enough to look
+    like rounding. It was published as +0.276 once for exactly that reason.
 
-    Only the STRICT row is pinned. The NORMALIZED row needs both arms re-scored
-    through `cross_model_norm`, which is a different (and much slower) code path;
-    the strict row is what the raw table supports.
+    Only clips that emitted words contribute, so `mean_conf` and `WER` are over
+    the SAME rows — §6.1's correction, applied at recomputation time.
+    """
+    path = "results/master.csv"
+    if not os.path.exists(path):
+        raise MissingArtifact(path)
+    agg = defaultdict(lambda: {"conf": [], "wer": []})
+    with open(path, newline="", encoding="utf-8") as fh:
+        for r in csv.DictReader(fh):
+            if r["model"] != model:
+                continue
+            if str(r["failed"]).strip().lower() in ("true", "1"):
+                continue
+            if r["mean_conf"] in ("", "nan", None):
+                continue
+            if clip_filter is not None and r["clip_id"] not in clip_filter:
+                continue
+            a = agg[r["condition_name"]]
+            a["conf"].append(float(r["mean_conf"]))
+            a["wer"].append(float(r["wer"]))
+    return {c: _mean(a["conf"]) - min(max(1.0 - _mean(a["wer"]), 0.0), 1.0)
+            for c, a in agg.items() if a["conf"]}
+
+
+def _checks_l1b_gaps():
+    """§6.7's overconfidence sentence — recomputed, because NOTHING produces it.
+
+    The three-arm table in §6.7 is written by no script and stored in no
+    artifact, and `model_arms.py` / `model_compare.py` contain no bootstrap code
+    at all, so its CIs live only in the prose. What CAN be re-derived from
+    `results/master.csv` is re-derived here: the two arms' mean gaps and the two
+    populations they are legitimately quoted over.
+
+    The population is the whole point. nova-3 emits nothing on 10 of Scribe's
+    174 spoke-conditions, so "nova-3's gap on the same conditions" is only
+    well-defined on the 164 BOTH arms spoke on — and the paired figure is pinned
+    separately from each arm's own-population figure so the two cannot be
+    silently interchanged. That interchange is §6.1's defect, and it recurred
+    here between two arms instead of between two clip sets.
+    """
+    _pm, _common, clips = _three_arm_populations()
+    scribe = _clipped_gap_table("elevenlabs-scribe")
+    nova10 = _clipped_gap_table("nova-3", clips)
+    nova40 = _clipped_gap_table("nova-3")
+    both = sorted(set(scribe) & set(nova10))
+    src = "results/master.csv [recomputed, clipped gap; see _clipped_gap_table]"
+
+    return [
+        Check("L1b Scribe spoke-conditions (its own population)",
+              [r"positive in \*\*(\d+) of 174\*\* conditions strictly",
+               r"over Scribe's own\n(\d+) spoke-conditions"],
+              float(len(scribe)), EXACT, src + " [scribe spoke-conditions]", "§6.7"),
+        Check("L1b Scribe strict mean gap (own 174)",
+              [r"conditions strictly, mean\n\*\*\+([\d.]+)\*\*"],
+              _mean(scribe.values()), TOL3, src + " [scribe, own population]", "§6.7"),
+        Check("L1b conditions nova-3 is absent from",
+              [r"nothing at all on \*\*(\d+) of\nScribe's 174\*\*"],
+              float(len(scribe) - len(both)), EXACT,
+              src + " [scribe spoke-conds minus the intersection]", "§6.7"),
+        Check("L1b paired population, both arms",
+              [r"On the \*\*(\d+) both arms spoke on\*\*"],
+              float(len(both)), EXACT, src + " [scribe ∩ nova-3 spoke-conditions]", "§6.7"),
+        Check("L1b Scribe mean gap on the paired 164",
+              [r"Scribe runs \*\*\+([\d.]+)\*\*"],
+              _mean(scribe[c] for c in both), TOL3,
+              src + " [scribe, paired population]", "§6.7"),
+        Check("L1b nova-3 mean gap on the paired 164",
+              [r"against nova-3's\n\*\*\+([\d.]+)\*\*"],
+              _mean(nova10[c] for c in both), TOL3,
+              src + " [nova-3, paired population]", "§6.7"),
+        Check("L1b nova-3 corpus-wide gap, named as the OTHER population",
+              [r"corpus-wide gap is \*\*\+([\d.]+)\*\*"],
+              _mean(nova40.values()), TOL3,
+              src + " [nova-3, 40 clips — §6.1's population]", "§6.7"),
+        Check("L1b nova-3 corpus-wide conditions",
+              [r"over 40 clips and (\d+) conditions"],
+              float(len(nova40)), EXACT,
+              src + " [nova-3 spoke-conditions, 40 clips]", "§6.7"),
+    ]
+
+
+def _three_arm_populations():
+    """(per_model, common conditions, common clips) for the three-arm table.
+
+    "spoke" = the arm returned a confidence, i.e. it emitted words. That is the
+    same population rule §6.1's correction turns on, applied to three arms.
     """
     path = "results/master.csv"
     if not os.path.exists(path):
@@ -1046,8 +1324,6 @@ def checks_three_arm_shape():
     clips = set.intersection(*[{c for c, _n, _w, _m in rows}
                                for rows in by_model.values()])
 
-    # "spoke" = the arm returned a confidence, i.e. it emitted words. That is
-    # the same population rule §6.1's correction turns on, applied to three arms.
     per_model = {}
     for model, rows in by_model.items():
         agg = defaultdict(list)
@@ -1060,10 +1336,27 @@ def checks_three_arm_shape():
             for cond, v in agg.items() if v}
 
     common = sorted(set.intersection(*[set(t) for t in per_model.values()]))
+    return per_model, common, clips
+
+
+def checks_three_arm_shape():
+    """§6.7 Finding 2, STRICT row — recomputed from master.csv.
+
+    This table exists in no artifact: it was computed while the section was
+    written, on the conditions all three arms spoke on, which is the only
+    population in which three arms can be ranked. So it is re-derived here from
+    the raw rows rather than read from a summary — which is the stronger pin, and
+    the reason this group is longer than the others.
+
+    Only the STRICT row is pinned. The NORMALIZED row needs both arms re-scored
+    through `cross_model_norm`, which is a different (and much slower) code path;
+    the strict row is what the raw table supports.
+    """
+    per_model, common, clips = _three_arm_populations()
     src = ("results/master.csv [%d conditions all %d arms spoke on, %d common clips]"
            % (len(common), len(per_model), len(clips)))
 
-    out = [Check("L1b three-arm common conditions",
+    out = _checks_l1b_gaps() + [Check("L1b three-arm common conditions",
                  [r"Read on the (\d+)\nconditions \*\*all three arms spoke on\*\*"],
                  float(len(common)), EXACT, src + " condition count", "§6.7 finding 2")]
     row = r"\| \*\*strict\*\* \(spine scorer\) \| "
@@ -1145,8 +1438,202 @@ def checks_clean_baseline():
     ]
 
 
+def checks_readme():
+    """README.md — the summary document, pinned to the write-up's own artifacts.
+
+    Only figures whose artifact the write-up already reads are pinned, and they
+    are read from the SAME objects, so a number that drifts in one document and
+    not the other fails here rather than being discovered by a reader.
+    """
+    if not os.path.exists(README):
+        raise MissingArtifact(README)
+    b = _cg_block("nova-3")
+    cg = "results/confidence_gap.txt [nova-3 block]"
+    dz = _headline_dead_zone("nova-3")
+    m = _read_json("results/model_arms.json")
+    pm = m["per_model"]
+    ma = "results/model_arms.json [per_model]"
+    al = _read_json("results/al_savings.json")
+    _pm3, common, _clips = _three_arm_populations()
+
+    n_mute = int(_grab(b, r"(\d+) conditions silent on EVERY clip"))
+    n_cond = int(_grab(b, r"conditions: (\d+)"))
+
+    def C(key, patterns, expected, tol, source, where):
+        return Check(key, patterns, expected, tol, source, where, doc=README)
+
+    out = [
+        C("README D1 spearman, paired",
+          [r"\*\*Spearman ρ = (−?-?[\d.]+)\*\*"],
+          float(_grab(b, r"global spearman\(conf_pct, WER_spoke\) = (-?[\d.]+)")),
+          TOL3, cg + " global spearman(conf_pct, WER_spoke)", "headline result"),
+        C("README D1 spearman, all-clips",
+          [r"spoke on; (−?-?[\d.]+)\s+> against every clip"],
+          float(_grab(b, r"\[all-clips pairing: (-?[\d.]+)\]")),
+          TOL3, cg + " [all-clips pairing]", "headline result"),
+        C("README D1 conditions that spoke (n)",
+          [r"n = (\d+) either way"], n_cond - n_mute, EXACT,
+          cg + " conditions - mute conditions", "headline result"),
+        C("README D1 overconfident share",
+          [r"overconfident in (\d+)% of conditions"],
+          float(_grab(b, r"overconfident in (\d+)% of conditions")), TOL0,
+          cg + " overconfident in N% of conditions", "headline result"),
+        C("README D1 mean gap",
+          [r"mean gap\s+> \*\*\+([\d.]+)\*\*"],
+          float(_grab(b, r"gap \(same subset\) mean \+?(-?[\d.]+)")), TOL3,
+          cg + " gap (same subset) mean", "headline result"),
+        C("README D1 dead-zone count",
+          [r"\*\*(\d+) of 176 \(\d\.\d+%\)\*\*", r"confidently wrong \((\d+)\)"],
+          float(_grab(b, r"categories: (\d+) dead zone")), EXACT,
+          cg + " categories: N dead zone", "headline result"),
+        C("README D1 dead-zone rate %",
+          [r"\*\*\d+ of 176 \((\d\.\d+)%\)\*\*"],
+          float(_grab(b, r"categories: \d+ dead zone \(([\d.]+)%\)")), TOL2,
+          cg + " categories: N dead zone (P%)", "headline result"),
+        C("README D1 silence-driven count",
+          [r"confident errors \((\d+)\)"],
+          float(_grab(b, r"(\d+) silence-driven")), EXACT,
+          cg + " categories: N silence-driven", "headline result"),
+        C("README D1 mute-zone count",
+          [r"on any of the 40 clips \((\d+)\)"], n_mute, EXACT,
+          cg + " conditions silent on EVERY clip", "headline result"),
+        C("README headline dead zone: confidence",
+          [r"confidence \*\*([\d.]+)\*\* at \*\*WER"], float(dz["mean_conf"]), TOL3,
+          "results/dead_zones.csv [#1 dead_zone row].mean_conf", "headline result"),
+        C("README headline dead zone: WER",
+          [r"at \*\*WER ([\d.]+)\*\*"], float(dz["wer_spoke"]), TOL3,
+          "results/dead_zones.csv [#1 dead_zone row].wer_spoke", "headline result"),
+        # the three drifts this group was added for: the README stated the AL
+        # layer as a win, "Whisper is the outlier" without its scoring condition,
+        # and a scope note that covered clips but not conditions.
+        C("README AL seeds reaching target, active",
+          [r"target was reached by (\d) of 8 active seeds"],
+          float(al["headline"]["n_seeds_reaching_target"]["active_boundary"]), EXACT,
+          "results/al_savings.json headline", "the lens, item 3"),
+        C("README AL seeds reaching target, random",
+          [r"against random's (\d)\s+of 8"],
+          float(al["headline"]["n_seeds_reaching_target"]["random"]), EXACT,
+          "results/al_savings.json headline", "the lens, item 3"),
+        C("README three-arm common conditions",
+          [r"Measured on the (\d+) conditions all three arms spoke on"],
+          float(len(common)), EXACT,
+          "results/master.csv [conditions all three arms spoke on]", "three arms"),
+    ]
+
+    # The per-arm shapes, each on ITS OWN condition population — which is exactly
+    # what the old scope note papered over, so both the rho and its n are pinned.
+    sites = {"nova-3": (r"between Nova-3 \(\*\*(−?-?[\d.]+)\*\*\)",
+                        r"n = \*\*(\d+)\*\* for Nova-3"),
+             "elevenlabs-scribe": (r"shape \(ρ = \*\*(−?-?[\d.]+)\*\*\)",
+                                   r"\*\*(\d+)\*\* for Scribe"),
+             "whisper-base": (r"and Whisper \(\*\*(−?-?[\d.]+)\*\*\)",
+                              r"\*\*(\d+)\*\* for Whisper")}
+    for model, (rho_pat, n_pat) in sites.items():
+        if model not in pm:
+            continue
+        out += [
+            C("README %s strict shape" % model, [rho_pat],
+              float(pm[model]["shape"]["spearman"]), TOL3,
+              ma + " %s.shape.spearman" % model, "three arms"),
+            C("README %s shape n" % model, [n_pat],
+              float(pm[model]["shape"]["n"]), EXACT,
+              ma + " %s.shape.n" % model, "three arms"),
+        ]
+    return out
+
+
+def checks_understanding():
+    """report/UNDERSTANDING.md — headline figures only, same artifacts.
+
+    Scope is deliberate (see the DOCS comment): the figures this document quotes
+    as AGREEING with `results/` are pinned; the ones it computes itself, and the
+    ones where it records a disagreement with the write-up, are not.
+    """
+    if not os.path.exists(UNDERSTANDING):
+        raise MissingArtifact(UNDERSTANDING)
+    b = _cg_block("nova-3")
+    cg = "results/confidence_gap.txt [nova-3 block]"
+    dz = _headline_dead_zone("nova-3")
+    cal = _read_json("results/calibration.json")["primary"]
+    s2r = _read_json("results/sim2real.json")["nova-3"]["headline"]
+    sob = _read_json("results/sobol.json")
+    gap = {g["factor"]: g for g in sob["interaction_gap"]}
+    n_mute = int(_grab(b, r"(\d+) conditions silent on EVERY clip"))
+    n_cond = int(_grab(b, r"conditions: (\d+)"))
+
+    def C(key, patterns, expected, tol, source):
+        return Check(key, patterns, expected, tol, source, "UNDERSTANDING.md",
+                     doc=UNDERSTANDING)
+
+    return [
+        C("U D1 spearman, paired",
+          [r"\*\*Spearman ρ = (−?-?[\d.]+)\*\*", r"\*\*(−?-?[\d.]+) paired"],
+          float(_grab(b, r"global spearman\(conf_pct, WER_spoke\) = (-?[\d.]+)")),
+          TOL3, cg + " global spearman(conf_pct, WER_spoke)"),
+        C("U D1 spearman, all-clips",
+          [r"paired / (−?-?[\d.]+)"],
+          float(_grab(b, r"\[all-clips pairing: (-?[\d.]+)\]")),
+          TOL3, cg + " [all-clips pairing]"),
+        # NOTE the anchors. A bare `mean gap \*\*\+(...)` also matches this
+        # document's RECORD of §6.7's Scribe gap, which is a different arm and a
+        # different population — the same conflation the pin exists to catch, so
+        # the pattern names nova-3's context rather than the phrase alone.
+        C("U D1 mean gap (nova-3, corpus-wide)",
+          [r"\(154/169\)\*\*, mean gap \*\*\+([\d.]+)\*\*",
+           r"mean overconfidence \*\*\+([\d.]+)\*\*"],
+          float(_grab(b, r"gap \(same subset\) mean \+?(-?[\d.]+)")), TOL3,
+          cg + " gap (same subset) mean"),
+        C("U D1 overconfident share",
+          [r"overconfident in (\d+) % of conditions"],
+          float(_grab(b, r"overconfident in (\d+)% of conditions")), TOL0,
+          cg + " overconfident in N% of conditions"),
+        C("U D1 conditions that spoke",
+          [r"overconfident in \*\*\d+ of (\d+)\*\*"], n_cond - n_mute, EXACT,
+          cg + " conditions - mute conditions"),
+        C("U D1 dead-zone count",
+          [r"\*\*(\d+) of 176 conditions \(\d\.\d+ %\)\*\*",
+           r"\*\*(\d+) of 176 \(\d\.\d+ %\)\*\*"],
+          float(_grab(b, r"categories: (\d+) dead zone")), EXACT,
+          cg + " categories: N dead zone"),
+        C("U D1 dead-zone rate %",
+          [r"\*\*\d+ of 176 conditions \((\d\.\d+) %\)\*\*",
+           r"\*\*\d+ of 176 \((\d\.\d+) %\)\*\*"],
+          float(_grab(b, r"categories: \d+ dead zone \(([\d.]+)%\)")), TOL2,
+          cg + " categories: N dead zone (P%)"),
+        C("U headline dead zone: confidence",
+          [r"mean word confidence \*\*([\d.]+)\*\* at WER"],
+          float(dz["mean_conf"]), TOL3,
+          "results/dead_zones.csv [#1 dead_zone row].mean_conf"),
+        C("U headline dead zone: WER",
+          [r"at WER \*\*([\d.]+)\*\*"], float(dz["wer_spoke"]), TOL3,
+          "results/dead_zones.csv [#1 dead_zone row].wer_spoke"),
+        C("U ECE raw", [r"ECE \*\*([\d.]+) →", r"\| ([\d.]+) \| 0\.0346"],
+          float(cal["ece_raw"]["median"]), TOL3, "results/calibration.json"),
+        C("U ECE feature-conditioned",
+          [r"\*\*→ ([\d.]+)\*\* \(feature-conditioned\)",
+           r"0\.0346 \(T = 1\.39\) \| \*\*([\d.]+)\*\* \|"],
+          float(cal["ece_feature"]["median"]), TOL3, "results/calibration.json"),
+        C("U D4 level gap",
+          [r"underestimates WER by ([\d.]+) points",
+           r"correct number is ([\d.]+)\."],
+          abs(float(s2r["mean_gap"])) * 100.0, TOL1, "results/sim2real.json"),
+        C("U D4 rank correlation",
+          [r"Spearman \*\*ρ = ([\d.]+)\*\*"], float(s2r["spearman"]), TOL3,
+          "results/sim2real.json"),
+        C("U ST-S1 gap, rt60",
+          [r"`rt60` \*\*([\d.]+)\*\*, `snr_db`"],
+          float(gap["rt60"]["gap"]), TOL3, "results/sobol.json interaction_gap[rt60]"),
+        C("U ST-S1 gap, snr_db",
+          [r"`snr_db` \*\*([\d.]+)\*\*"],
+          float(gap["snr_db"]["gap"]), TOL3,
+          "results/sobol.json interaction_gap[snr_db]"),
+    ]
+
+
 CHECK_GROUPS = [
     ("D1 headline", checks_d1_headline),
+    ("README summary", checks_readme),
+    ("UNDERSTANDING prep doc", checks_understanding),
     ("D1 dead-zone row", checks_dead_zone_row),
     ("D2 fingerprints", checks_fingerprints),
     ("D3a sensitivity", checks_sobol),
@@ -1200,10 +1687,14 @@ def test_every_pinned_figure_matches_its_artifact():
         print("SKIP: results/ is absent (gitignored) — nothing to pin against")
         return
 
-    failures, n_sites = [], 0
+    failures = []
+    per_doc = defaultdict(lambda: [0, 0])   # doc -> [checks, prose sites]
     for chk in checks:
+        if chk.doc not in docs:
+            continue
+        per_doc[chk.doc][0] += 1
         try:
-            n_sites += apply_check(docs[chk.doc], chk)
+            per_doc[chk.doc][1] += apply_check(docs[chk.doc], chk)
         except Drift as exc:
             failures.append(str(exc))
 
@@ -1214,8 +1705,11 @@ def test_every_pinned_figure_matches_its_artifact():
         raise Drift("\n\n%d of %d pinned figures no longer match their artifact:\n%s"
                     % (len(failures), len(checks), "\n".join(failures)))
 
-    print("OK: %d pinned figures matched their artifacts across %d prose sites in %s"
-          % (len(checks), n_sites, WRITEUP))
+    for doc in DOCS:
+        if doc in per_doc:
+            n_chk, n_sites = per_doc[doc]
+            print("OK: %d pinned figures matched their artifacts across %d prose "
+                  "sites in %s" % (n_chk, n_sites, doc))
 
 
 def test_every_check_can_actually_fail():
@@ -1224,6 +1718,11 @@ def test_every_check_can_actually_fail():
     A pinning test that passes against wrong prose is worse than no test — it
     certifies the drift. So every check is exercised against a document in which
     its own figure has been changed, and is required to notice.
+
+    The mutation is applied to THE CHECK'S OWN DOCUMENT. Mutating a single
+    document for every check would let a README check "pass" this control by
+    noticing a corrupted *write-up* — which is precisely the cross-document
+    confusion the README group exists to prevent.
     """
     docs = _docs()
     if WRITEUP not in docs:
@@ -1234,18 +1733,19 @@ def test_every_check_can_actually_fail():
         print("SKIP: results/ is absent (gitignored)")
         return
 
-    text = docs[WRITEUP]
     blind = []
     for chk in checks:
-        mutated = _mutate_first_site(text, chk)
+        if chk.doc not in docs:
+            continue
+        mutated = _mutate_first_site(docs[chk.doc], chk)
         if mutated is None:
-            blind.append("%s (could not build a mutation)" % chk.key)
+            blind.append("%s [%s] (could not build a mutation)" % (chk.key, chk.doc))
             continue
         try:
             apply_check(mutated, chk)
         except Drift:
             continue
-        blind.append(chk.key)
+        blind.append("%s [%s]" % (chk.key, chk.doc))
 
     if blind:
         raise AssertionError(
@@ -1470,7 +1970,11 @@ def test_the_pin_covers_every_report_document():
     into §1 rather than shipped alongside it. Reference logs are exempt by name.
     """
     exempt = {"report/measurements.md",       # capture-chain log, measured once
-              "report/INTERVIEW_RUNBOOK.md"}  # rehearsal notes, not a deliverable
+              "report/INTERVIEW_RUNBOOK.md",  # rehearsal notes, not a deliverable
+              }
+    # report/UNDERSTANDING.md is NOT exempt — it is in DOCS with its headline
+    # figures pinned (see `checks_understanding`), which is the point of this
+    # assertion rather than an exception to it.
     present = sorted(os.path.join("report", f)
                      for f in os.listdir("report") if f.endswith(".md")) \
         if os.path.isdir("report") else []

@@ -50,11 +50,18 @@ categories needing three different mitigations — **2 dead zones**, **4 silence
 zones** — and the last, where the model emits nothing on any clip, is **invisible to any
 confidence-based monitor**, because absent is not wrong (§6.1).
 
-**Three mechanisms.** (a) Reverb damage is monotone in **direct-to-reverberant ratio, not RT60**:
-the `rt60` marginal is non-monotonic — 0.203 → 0.636 → 0.449 → 0.758 — because each level is
-delivered by a different *measured* room, and **ρ(DRR, WER) = −1.000** against
-**ρ(RT60, WER) = +0.800**, so reverb benchmarks parameterised by RT60 alone will mis-rank
-conditions (§6.3). (b) Failures are **typed, not scalar**: deletions **0.351** of reference words
+**Three mechanisms.** (a) Reverb damage looks monotone in **direct-to-reverberant ratio, not
+RT60**: the `rt60` marginal is non-monotonic — 0.203 → 0.636 → 0.449 → 0.758 — because each level
+is delivered by a different *measured* room, and **ρ(DRR, WER) = −1.000** against
+**ρ(RT60, WER) = +0.800**. **This is the one claim here with no interval, and it is scoped
+accordingly: the grid delivers its reverb axis through exactly 4 distinct RIRs, so n = 4 rooms,
+exact one-sided permutation p = 0.042, and ρ(C50, WER) = −0.800 — the same magnitude as RT60's,
+separated from DRR by a single discordant pair 0.19 dB apart.** It is also **not a new result**:
+early-to-late energy ratios outperforming T60 as intelligibility predictors is decades-old room
+acoustics (Bradley 1986; Appendix I), so this is a known mechanism *reproduced incidentally on
+four rooms*, and the defensible reading is the weak one — **an axis labelled by RT60 alone does
+not order these conditions** (§6.3). (b) Failures are **typed, not scalar**:
+deletions **0.351** of reference words
 against substitutions 0.136, entities degrading faster than words (entity error rate **0.633**
 against WER **0.511**), and each signature implies a different fix (§6.2). (c) Vendor confidence
 is not a calibrated probability, and a feature-conditioned calibrator cuts **ECE 0.051 → 0.008**
@@ -62,7 +69,8 @@ is not a calibrated probability, and a feature-conditioned calibrator cuts **ECE
 
 **Pre-registration: CONFIRMED.** `rt60 × snr_db` was registered as a genuine two-way interaction
 (`d8ddd4f`, 2026-07-27, before any audio existed) under a decision rule fixed in advance. The
-grid is a **complete 4 × 4 × 3 × 3 factorial**, so its Sobol decomposition is an **exact**
+grid is a **complete 4 × 4 × 3 × 3 factorial at `noise_type = babble`**, so its Sobol
+decomposition is an **exact**
 functional-ANOVA partition rather than a Saltelli estimate (`sum(S_u) = 1.000000000000`):
 **ST − S1 = 0.128 [0.091, 0.164]** for `rt60` and **0.112 [0.072, 0.152]** for `snr_db`, S2 rank
 1/6, against a threshold of 0.020 (§6.3).
@@ -211,7 +219,10 @@ nothing downstream was trusted until the JOIN-1 gate passed **9/9** (G).
 
 **Sensitivity is computed *exactly*.** A complete factorial with equal cell counts admits a
 finite variance partition, so §6.3's Sobol indices are an **exact functional-ANOVA decomposition
-of the measured grid**, not a Saltelli estimate (`sum(S_u) = 1.000000000000`) — strictly stronger
+of the measured grid at `noise_type = babble`** — the babble block is the part that is complete,
+so it is the part that is decomposed, and every Sobol number in this document is conditional on
+that level rather than marginal over noise type. It is not a Saltelli estimate
+(`sum(S_u) = 1.000000000000`) — strictly stronger
 than the planned Saltelli-on-a-GP, which would have inherited the surrogate's bias *and* the
 sampler's variance. **CIs bootstrap the 40 clips**, not the cells; the grid-derived
 Plackett–Burman screen costs 0 fresh API calls and all four factors survive (D.5–D.6).
@@ -229,8 +240,12 @@ across the **169 of 176** conditions that returned any words. The danger is the 
 **2 of 176 (1.14 %)** meeting the dead-zone criterion. Ranked #1: **rt60 0.45 s, SNR 0 dB,
 engine, g726, rolloff 0 → mean word confidence 0.829 at WER 0.306** (n = 40 clips, 363 reference
 words) — and **0 of those 40 came back empty**, so confidence and WER cover the same clips and
-the claim needs no asterisk. Both dead zones sit **mid-range, not at the harsh end**; the harsh
-corners are the **7 mute zones** below, where the model emits nothing at all. **The danger is not
+the claim needs no asterisk. **Both dead zones sit at `snr_db = 0`, the harshest of the four SNR
+levels — they are mid-range on the *other* axes, not overall**: `rt60` 0.2 and 0.45 of four
+levels, `mic_rolloff` 0.0 and 0.5 of three, and one of them on `engine`, the least damaging of
+the three noises. What they avoid is the harsh *corner* — the **7 mute zones** below combine
+those same low SNRs with high reverb and full rolloff on babble, and there the model emits
+nothing at all. **The danger is not
 that the model is blind but that it is mostly self-aware**, so a system calibrated on average
 behaviour trusts it precisely where it should not — and silent failure lives in exactly the
 region a deployment considers acceptable.
@@ -274,8 +289,9 @@ fix is target-speaker extraction (D.3b).
 
 ### 6.3 D3a — sensitivity, the pre-registration verdict, and DRR
 
-**Exact Sobol indices** (144-cell factorial, 5760 transcriptions; ±95 % clip-bootstrap
-half-widths):
+**Exact Sobol indices** (the 144-cell factorial **at `noise_type = babble`** — the block
+`results/sobol.json` records as its scope, so `noise_type` is *held fixed* here and is not among
+the factors decomposed; 5760 transcriptions; ±95 % clip-bootstrap half-widths):
 
 | factor | S1 | ST | ST − S1 | 95 % CI on the gap (**quadrature**) | sig |
 |---|---|---|---|---|---|
@@ -316,10 +332,12 @@ primary interaction evidence**, S2 direction only (D.6).
 > conservative form — see above), with
 > S2(`rt60`, `snr_db`) = **0.034 ± 0.006, rank 1/6** — **CONFIRMED**. The weakest of the four
 > factor × interval-form combinations still clears the threshold by **3.58×** (`snr_db`,
-> quadrature). Reverb and noise compound.
+> quadrature). Reverb and noise compound — **at `noise_type = babble`**, which is the block the
+> factorial is complete over and therefore the scope of the verdict; whether it holds on engine
+> and road was not tested at this resolution.
 
-**The best mechanistic finding: the damage is monotone in DRR, not RT60.** The `rt60` marginal
-is **non-monotonic** — 0.2026 → 0.6359 → 0.4495 → 0.7581, a dip at 0.7 of depth **0.1864
+**The best mechanistic finding — and the one with the weakest support, said before it is stated.**
+The `rt60` marginal is **non-monotonic** — 0.2026 → 0.6359 → 0.4495 → 0.7581, a dip at 0.7 of depth **0.1864
 [0.1574, 0.2142]** — because each level is delivered by the **nearest measured RIR, a
 different real room**, and RT60 says nothing about how much direct sound reaches the mic.
 
@@ -330,14 +348,43 @@ different real room**, and RT60 says nothing about how much direct sound reaches
 | 0.7 | Campground Dining | 0.680 | 4.26 | 10.03 | 0.4495 |
 | 1.0 | Shower | 1.011 | **−10.02** | 2.12 | 0.7581 |
 
-`spearman(DRR, WER) = −1.000` against `spearman(RT60, WER) = +0.800`: **reverb benchmarks
-parameterised by RT60 alone will mis-rank conditions.** Sharper still — **non-monotonicity along
-`rt60` is not a property of a response surface at all: each request indexes an unrelated real
-room, so whether a dip exists depends on which RIRs were curated.** Re-sample the axis and it
-moves, which is why **0 of 6** surrogate-proposed cells reproduced under real oracle calls and
-why my own explanation for that was itself **falsified** (D.7). A GP given `rt60` as a
-*continuous* coordinate assumes a smoothness the instrument lacks; the defensible coordinate is
-**DRR**.
+`spearman(DRR, WER) = −1.000` against `spearman(RT60, WER) = +0.800`. **The honest scope, stated
+at the claim rather than in an appendix, because every other number in this document carries an
+interval and this one cannot.** The whole table is **n = 4 rooms** — the nova-3 grid delivers its
+reverb axis through exactly **4** distinct `rir_key` values, one per requested level, out of the
+16 measured RIRs on disk (F). Four points is the entire sample, so:
+
+- **A perfect rank correlation on n = 4 is worth `p = 0.042` one-sided** (exact permutation:
+  1 of the 4! = 24 orderings is this good) and **Kendall τ = −1.000 at two-sided p = 0.083.** It
+  clears 0.05 in one direction and does not in the other. There is no bootstrap CI to quote
+  because there is nothing to resample.
+- **C50, printed in the table above, gets `spearman(C50, WER) = −0.800` — the same magnitude as
+  RT60's `+0.800`.** The entire DRR-beats-C50 separation is **one discordant pair**: Bar
+  (C50 10.22 dB, WER 0.6359) against Campground (**10.03 dB**, 0.4495). Those two clarity values
+  differ by **0.19 dB**, comfortably inside the measurement noise of a Schroeder-integrated
+  estimate on a single measured IR. Swap that pair and DRR and C50 are indistinguishable. Any
+  reader can find this in the project's own table in thirty seconds, so it is stated here.
+- **And it is not a new result.** That early-to-late energy ratios (C50/C80) and
+  useful-to-detrimental ratios predict speech intelligibility in rooms better than reverberation
+  time is **decades-old room acoustics** — Bradley 1986 and the STI lineage — and the
+  reverberant-ASR literature already parameterises conditions by RT60 *and* source–mic distance
+  for exactly this reason (REVERB; the ACE Challenge estimates RT60 and DRR as two separate
+  channel parameters). Appendix I carries the lineage. This is a **known mechanism reproduced
+  incidentally**, not a discovery, and §3's no-novelty positioning applies to it like everything
+  else here.
+
+So the claim is demoted to what four rooms can carry: **a mechanism *hypothesis*, consistent with
+prior work and consistent with these four measurements** — that the delivered early/direct energy,
+not the decay slope, is what orders these conditions, and that **a reverb axis labelled by RT60
+alone does not order them**. The negative half is the solid half and needs no coordinate at all.
+Sharper still, and independent of which coordinate wins — **non-monotonicity along `rt60` is not a
+property of a response surface at all: each request indexes an unrelated real room, so whether a
+dip exists depends on which RIRs were curated.** Re-sample the axis and it moves, which is why
+**0 of 6** surrogate-proposed cells reproduced under real oracle calls and why my own explanation
+for that was itself **falsified** (D.7). A GP given `rt60` as a *continuous* coordinate assumes a
+smoothness the instrument lacks — and when DRR was substituted as that coordinate it changed
+nothing (§6.5, D.8b), which is the second reason the four-room result is a hypothesis rather than
+a lever. §9 says what would settle it and what it would cost.
 
 **A corollary, and the reason listening is not QA.** Two conditions isolating one degradation
 each are **statistically indistinguishable** to the model: **A**, Shower RIR at SNR 20 dB
@@ -492,10 +539,16 @@ What *is* supported under **both** scorings with the CI clear of zero is narrowe
 tempting to write: **nova-3 beats the open baseline** (+0.277 [0.171, 0.406] strict, +0.262
 [0.157, 0.390] normalized) — but *"both commercial arms beat the open baseline"* is **not**, because
 Scribe's lead over Whisper is the one that collapses under strict scoring. What also survives both
-is that Scribe is **overconfident essentially everywhere**: its gap `mean_conf − (1 − WER)` is
-positive in **174 of 174** conditions strictly and 173 of 174 normalized, mean **+0.276** and
-**+0.210**, against nova-3's **+0.121** on the same conditions. That is a *level* error of the kind
-§6.4's calibrator removes and a fixed threshold does not.
+is that Scribe is **overconfident essentially everywhere**: its gap
+`mean_conf − clip(1 − WER_spoke, 0, 1)` is positive in **174 of 174** conditions strictly, mean
+**+0.272**, and **173 of 174** normalized, mean **+0.207**. **Both figures are over Scribe's own
+174 spoke-conditions** — the population the *"174 of 174"* count is taken over, and the one
+`results/confidence_gap.txt` reports. Against nova-3 the comparison has to be made **like for
+like, because "the same conditions" is not literal**: nova-3 emits nothing at all on **10 of
+Scribe's 174**. On the **164 both arms spoke on**, Scribe runs **+0.255** against nova-3's
+**+0.103** — a 2.5× level offset, of the kind §6.4's calibrator removes and a fixed threshold does
+not. (nova-3's corpus-wide gap is **+0.147** over 40 clips and 169 conditions — §6.1's population,
+not this one; quoting that against Scribe's 174 would repeat §6.1's own defect one level up.)
 
 **Finding 3 — the failure modes differ 5.5×, and this half is robust.** On the matched subset
 nova-3 returns an **empty transcript on 24.5 %** of clip-rows (431/1757) and goes fully **mute on
@@ -589,8 +642,12 @@ L1 independently surfaces as nova-3's sole dead zone on that subset (§6.6).
 4. **Elevated capture noise floor** — room tone **−52.9 dBFS** against −60 dBFS, constant across
    takes: an offset, not a confound.
 5. **Commercial model literals move** — Deepgram **`nova-3`**, run **2026-08-05**.
-6. **The `rt60` axis is realized by nearest-match snapping**, so a continuous sweep sees a step
-   function (the other face of §6.3).
+6. **The `rt60` axis is realized by nearest-match snapping onto 4 distinct RIRs**, so a
+   continuous sweep sees a step function — and §6.3's DRR result is therefore an **n = 4**
+   rank correlation (one-sided permutation p = 0.042) whose separation from C50 (−0.800) is a
+   single discordant pair. It is the one claim in the document with no interval, it is a
+   reproduction of a known room-acoustics result rather than a finding (I), and §9 prices the
+   experiment that would settle it.
 7. **Deletions carry no confidence** — 35.1 % of reference words, 69.3 % of errors, and **31.4 %
    of clip-rows produced no words at all**, so confidence and WER average over different clip
    sets unless paired; both pairings are published (§6.1).
@@ -650,7 +707,14 @@ measure more rooms, not a better reverb coordinate.** Re-parameterising the axis
 obvious fix for §6.5's null and it has now been tested and refuted (D.8b) — with only four
 distinct RIRs the axis is four points, so a relabelling cannot help. What would help is a grid
 whose reverb axis is *sampled* rather than snapped: a dozen or more rooms chosen to tile DRR
-evenly, which would also retire limitation 6. **Third, measure a genuinely streaming arm**, which
+evenly, which would also retire limitation 6 **and is the one experiment that would settle §6.3's
+n = 4 DRR-versus-C50 question — the single largest piece of unearned confidence in this
+document.** It is also the cheapest thing on this list, which is why it is second and not last:
+**the other 12 of those rooms are already curated on disk** (F: 16 measured, 4 used), so the
+missing measurement is 12 rooms × 40 clips = **480 further Deepgram calls** ≈ **33 min** of fresh
+audio ≈ **$0.14** at the §10 rate, holding every other factor at a fixed benign level. That buys a **16-room** reverb
+axis, a real interval on both coordinates, and a genuine separation test between DRR and C50
+instead of one discordant pair. **Third, measure a genuinely streaming arm**, which
 would retire limitation 17 — the one gap between what this document maps and what the title
 implies. It is now the *shortest* remaining step rather than an aspiration: the batch
 `scribe_v2` arm is built and run (§6.7), and `scribe_v2_realtime` exposes the **same per-word
@@ -938,8 +1002,12 @@ the top two ranks were produced by that mismatch**; the two `dead_zone` rows sur
 
 The mute zones have no confidence row at all, which is the point: they are the seven worst
 conditions in the grid and **no confidence-based analysis in this report can see them**. All
-seven are `rt60 ≥ 0.45` × `snr_db ≤ 5` × babble — the harsh corner §6.1 says the dead zones
-avoid, confirming by measurement what the pre-correction text could only assert.
+seven are `rt60 ≥ 0.45` × `snr_db ≤ 5` × babble, and five of the seven are at full
+`mic_rolloff = 1.0`. **`snr_db` is not what separates them from the two dead zones — both of
+those are at `snr_db = 0` too.** The separation is on the other three axes: the dead zones sit
+at `rt60` 0.2 / 0.45 and `mic_rolloff` 0.0 / 0.5, one of them on `engine` rather than babble.
+So "the dead zones avoid the harsh corner" is true of the *corner*, not of any single axis, and
+the axis it does not avoid is the loudest one.
 
 **D.2 Failure fingerprints by factor family**, Δ as a fraction of reference words,
 `d` = Cohen's d. Source: `./.venv/bin/python -m deadzone.analysis.fingerprints`.
@@ -994,8 +1062,8 @@ noise types rather than a babble-only artifact. Worked example
 scored: deletions 0.351, substitutions 0.136, insertions 0.020; micro-averaged WER
 0.507, mean per-condition WER 0.511.
 
-**D.5 Exact main-effect screen** (marginal contrasts from the complete factorial; 0
-API calls), with the genuine 8-run PB design computed on 8 of the 144 measured cells
+**D.5 Exact main-effect screen** (marginal contrasts from the complete factorial at
+`noise_type = babble`; 0 API calls), with the genuine 8-run PB design computed on 8 of the 144 measured cells
 as a check on how much Resolution-III aliasing would have bitten:
 
 | factor | exact effect | 95 % CI | PB(8-run) |
@@ -1566,6 +1634,18 @@ Expanded from §3. Nothing in the method here is novel; this is the genre it sit
   evaluation.
 - **Scheibler et al. 2018 (pyroomacoustics)** — the image-source simulator used for the
   synthetic arm in §7.
+- **Room-acoustics intelligibility predictors — the lineage §6.3's DRR result belongs to, and
+  the reason that result is presented as reproduced rather than found.** That reverberation time
+  is a poor predictor of speech intelligibility, and that **early-to-late energy ratios do
+  better**, is long established: the useful-to-detrimental ratio (Lochner & Burger 1964),
+  **Bradley 1986, "Predictors of speech intelligibility in rooms" (JASA)**, and the C50/C80
+  clarity indices in routine room-acoustic practice; the **Speech Transmission Index** (Houtgast
+  & Steeneken) predicts from modulation transfer rather than decay time for the same reason. The
+  reverberant-ASR literature inherited it: **REVERB** specifies its conditions by RT60 *and*
+  source–mic distance rather than RT60 alone, and the **ACE Challenge** (Eaton et al.) treats
+  **RT60 and DRR as two separate channel parameters** to be blind-estimated, which is only
+  sensible if RT60 does not determine DRR. §6.3 measures the same ordering on four rooms and
+  claims nothing more than consistency with this body of work.
 - **Carlini & Wagner** — audio adversarial examples: the extreme case of a confidently wrong
   transcript, and the reason "confident and wrong" is a studied failure mode rather than a
   novel framing.
