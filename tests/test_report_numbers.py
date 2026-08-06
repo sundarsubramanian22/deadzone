@@ -144,7 +144,8 @@ UNDERSTANDING = "report/UNDERSTANDING.md"
 # deliberately NOT pinned, and neither are the passages where it records a
 # disagreement with the write-up: that document exists partly to disagree, and a
 # pin there would delete the disagreement rather than check it.
-DOCS = [WRITEUP, README, UNDERSTANDING]
+STATUS = "report/STATUS.md"
+DOCS = [WRITEUP, README, UNDERSTANDING, STATUS]
 
 # Tolerances, named by the decimal place the prose rounds to. A figure printed
 # to 3 dp is pinned to half a unit in the last place, so 0.8294 -> "0.829"
@@ -1630,8 +1631,55 @@ def checks_understanding():
     ]
 
 
+def checks_status():
+    """report/STATUS.md — the handful of figures its state table quotes.
+
+    A status document is the LEAST likely thing to be re-derived and the most
+    likely to be copied forward from a log, which is exactly the drift SPEC C.7
+    records costing five numbers. So its scalars are pinned to the same artifact
+    objects the write-up uses. Its scope/limitation prose carries no figures and
+    is deliberately not pinned.
+    """
+    if not os.path.exists(STATUS):
+        raise MissingArtifact(STATUS)
+    cal = _read_json("results/calibration.json")["primary"]
+    s2r = _read_json("results/sim2real.json")["nova-3"]["headline"]
+    b = _cg_block("nova-3")
+
+    def C(key, patterns, expected, tol, source):
+        return Check(key, patterns, expected, tol, source, "STATUS.md",
+                     doc=STATUS)
+
+    return [
+        C("S dead-zone count after the G correction",
+          [r"dead zones 6 → (\d+)"],
+          float(_grab(b, r"categories: (\d+) dead zone")), EXACT,
+          "results/confidence_gap.txt [nova-3] categories: N dead zone"),
+        C("S D1 spearman, paired",
+          [r"ρ to (−?-?[\d.]+) paired"],
+          float(_grab(b, r"global spearman\(conf_pct, WER_spoke\) = (-?[\d.]+)")),
+          TOL3, "results/confidence_gap.txt [nova-3] global spearman"),
+        C("S ECE raw", [r"ECE ([\d.]+) → 0\.0346"],
+          float(cal["ece_raw"]["median"]), TOL3,
+          "results/calibration.json primary.ece_raw.median"),
+        C("S ECE temperature", [r"ECE 0\.0507 → ([\d.]+) →"],
+          float(cal["ece_temperature"]["median"]), TOL3,
+          "results/calibration.json primary.ece_temperature.median"),
+        C("S ECE feature-conditioned", [r"→ 0\.0346 → ([\d.]+)"],
+          float(cal["ece_feature"]["median"]), TOL3,
+          "results/calibration.json primary.ece_feature.median"),
+        C("S D4 level gap (points)", [r"([\d.]+) pts optimistic"],
+          abs(float(s2r["mean_gap"])) * 100.0, TOL1,
+          "results/sim2real.json [nova-3.headline] mean_gap"),
+        C("S D4 rank correlation", [r"pts optimistic, ρ ([\d.]+)"],
+          float(s2r["spearman"]), TOL3,
+          "results/sim2real.json [nova-3.headline] spearman"),
+    ]
+
+
 CHECK_GROUPS = [
     ("D1 headline", checks_d1_headline),
+    ("STATUS doc", checks_status),
     ("README summary", checks_readme),
     ("UNDERSTANDING prep doc", checks_understanding),
     ("D1 dead-zone row", checks_dead_zone_row),
