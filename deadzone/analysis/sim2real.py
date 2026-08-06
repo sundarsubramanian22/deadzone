@@ -38,11 +38,37 @@ simulated one — and reporting the reverb mismatch you introduced yourself as a
 sim2real finding. Every join here goes through `rir_rt60_measured` and every pair
 is bounded by `rt60_tol`; anything outside it is reported UNMATCHED, not fudged.
 
+THE SECOND HALF OF THE SAME TRAP — THE CLIP SET. "Same clips" is half of the
+premise above and it is the half that is easy to lose, because nothing about the
+two tables looks wrong when it breaks. The real arm ran all 40 utterances; the
+sim arm was deliberately run on the 10-clip AL subset to save API spend. Average
+a condition's WER over 40 clips on one side and over a *different-sized* 10-clip
+set on the other and the difference you report is (RIR provenance) + (clip
+difficulty), with no way to separate them afterwards. On this project's own grid
+that confound was worth 7.8 WER points out of a 19.9-point "finding" — i.e. 39%
+of the headline number was the corpus, not the simulator. Counterfactual
+isolation is the entire premise of the instrument (SPEC §1), so the one layer
+whose job is to validate the simulation must not be the layer that breaks it.
+
+So: both arms are restricted to the INTERSECTION of their clip sets before any
+aggregation (`clip_intersection`), and the restriction is REPORTED — clip counts
+per arm, the common set, and the rows dropped — in the payload and in the
+formatted block. A partial mismatch is the expected situation and is handled by
+restriction, not by an exception; only an empty or implausibly small intersection
+raises (`ClipSetMismatchError`). What must never happen is that it is silent.
+
 Reuse, not reimplementation: the master-table schema/failure handling comes from
-`analysis/__init__.py`, and dead zones come from `model_compare.dead_zone_flags`
+`deadzone/analysis/__init__.py`, and dead zones come from `model_compare.dead_zone_flags`
 (so D4 flags exactly the cells D1 and L1 flag).
 
-    python3 -m analysis.sim2real results/master.csv results/master_sim.csv
+    ./.venv/bin/python -m deadzone.analysis.sim2real results/master.csv results_sim/master_sim.csv
+
+Note the SECOND path: `results_sim/`, not `results/`. The simulated arm keeps its
+own results directory on purpose. The run cache is keyed on
+`(clip_id, condition_name, model)` and does NOT encode which RIR library produced
+the row, so a shared cache would be 100% false hits and would report a sim-vs-real
+gap of exactly zero (SPEC B.2 item 7). Pointing this at `results/master_sim.csv`
+finds nothing; pointing it at the real table twice reports no gap at all.
 
 Deps: numpy, scipy.
 """
@@ -56,15 +82,15 @@ from typing import Sequence
 
 import numpy as np
 
-# Allow `python analysis/sim2real.py` as well as `import analysis.sim2real`
-_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# Allow `python deadzone/analysis/sim2real.py` as well as `import deadzone.analysis.sim2real`
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
-from analysis import (                       # noqa: E402  (after the path shim)
+from deadzone.analysis import (                       # noqa: E402  (after the path shim)
     as_float, failure_summary, load_master_table, split_by_model, split_failures,
 )
-from model_compare import dead_zone_flags    # noqa: E402  — REUSED, not reimplemented
+from deadzone.model_compare import dead_zone_flags    # noqa: E402  — REUSED, not reimplemented
 from scipy.optimize import linear_sum_assignment   # noqa: E402
 from scipy.stats import kendalltau, spearmanr      # noqa: E402
 
@@ -92,6 +118,26 @@ CONF_PCT_HI = 0.60
 # Verdict thresholds for the rank-agreement claim.
 RANK_STRONG = 0.80      # >= : ordering preserved, a sim-only benchmark can rank
 RANK_WEAK = 0.50        # <  : ordering not preserved, sim-only rankings unsafe
+
+# The clip-set invariant. A PARTIAL mismatch is the expected case (the sim arm
+# was run on the 10-clip AL subset by design) and is handled by restricting both
+# arms to the intersection and saying so. Below this many common clips there is
+# nothing worth restricting to: a per-condition mean over one or two utterances
+# is dominated by which utterances they were, so we refuse instead of publishing
+# a gap that is really a two-clip anecdote.
+MIN_COMMON_CLIPS = 3
+
+
+class ClipSetMismatchError(ValueError):
+    """
+    Raised when the two arms share too few clips to be comparable at all.
+
+    Loud on purpose, and deliberately NOT raised for the ordinary 10-vs-40 case:
+    a silent inner join would still produce a full pair table, and every gap in
+    it would be a mixture of an RIR-provenance effect and a clip-difficulty
+    effect with no way to separate them afterwards. Restriction plus a reported
+    clip census is the fix; this exception is only the floor under it.
+    """
 
 
 # ============================================================================
@@ -125,7 +171,22 @@ def _mean(vals: Sequence[float]) -> float:
     return float(a.mean()) if a.size else float("nan")
 
 
-def aggregate_conditions(rows: Sequence[dict], model: str | None = None) -> list[dict]:
+def usable_rows(rows: Sequence[dict], model: str | None = None) -> list[dict]:
+    """
+    The rows that may contribute a measurement: this model's, minus the failures.
+
+    Both halves matter and both are exclusions, not filters: a `failed=True` row
+    is a MISSING measurement carrying WER 1.0 and NaN confidence (see
+    analysis/__init__.py), and another model's rows are a different system. This
+    is also the population the clip census is taken over, so a clip that only
+    ever failed on one arm is correctly not counted as a clip that arm ran.
+    """
+    ok, _bad = split_failures(_select_model(rows, model))
+    return ok
+
+
+def aggregate_conditions(rows: Sequence[dict], model: str | None = None,
+                         clips: Sequence[str] | None = None) -> list[dict]:
     """
     Master-table rows (one per clip x condition) -> one row per CONDITION.
 
@@ -133,8 +194,16 @@ def aggregate_conditions(rows: Sequence[dict], model: str | None = None) -> list
     WER 1.0 with NaN confidence; averaging it manufactures a fake dead zone —
     see analysis/__init__.py). Each output row carries `wer` and `mean_conf` under
     exactly those names, so it drops straight into `model_compare.dead_zone_flags`.
+
+    `clips`, when given, restricts to exactly that clip set BEFORE averaging.
+    Callers on the sim2real path always pass the intersection of the two arms'
+    clip sets — see `clip_intersection` for why averaging two different clip sets
+    silently folds clip difficulty into the reported gap.
     """
-    ok, _bad = split_failures(_select_model(rows, model))
+    ok = usable_rows(rows, model)
+    if clips is not None:
+        keep = set(clips)
+        ok = [r for r in ok if str(r.get("clip_id")) in keep]
     by_cond: dict[str, list[dict]] = {}
     for r in ok:
         by_cond.setdefault(str(r.get("condition_name", "?")), []).append(r)
@@ -151,6 +220,7 @@ def aggregate_conditions(rows: Sequence[dict], model: str | None = None) -> list
             MEASURED_RT60: _mean([r.get(MEASURED_RT60) for r in group]),
             REQUESTED_RT60: _mean([r.get(REQUESTED_RT60) for r in group]),
             "model": str(group[0].get("model", "unknown")),
+            "n_clips": len({str(r.get("clip_id")) for r in group}),
             "rir_key": group[0].get("rir_key"),
             "n_ref": int(np.nansum([as_float(r.get("n_ref")) for r in group])),
         }
@@ -172,11 +242,94 @@ def _match_key(cond: dict) -> tuple:
 
 
 # ============================================================================
+# CLIP CENSUS — the other half of "same clips, same conditions"
+# ============================================================================
+
+def clip_intersection(real_rows: Sequence[dict], sim_rows: Sequence[dict],
+                      model: str | None = None,
+                      min_common: int = MIN_COMMON_CLIPS) -> dict:
+    """
+    The clip set both arms actually ran, plus the census that makes any
+    restriction visible instead of silent.
+
+    WHY THIS EXISTS. This module's premise is "same clips, same condition list,
+    only the reverb ingredient swapped". The RT60 machinery below enforces the
+    condition half; nothing enforced the clip half, and on this project's own
+    tables the real arm ran 40 utterances against the sim arm's 10-clip AL
+    subset. Each condition's real mean was then taken over 40 clips and its sim
+    mean over 10 *different* ones, so `wer_sim - wer_real` measured
+
+        (simulated vs measured rooms)  +  (the 30 clips only one arm ever saw)
+
+    and the second term is indistinguishable from the first once it is in the
+    table. Measured cost on the real grid: 7.8 WER points of a 19.9-point gap.
+
+    REPORT-AND-PROCEED, NOT RAISE. A 10-vs-40 mismatch is the EXPECTED situation
+    — the sim arm is subset by design to save API spend — so refusing it would
+    just delete a legitimate finding. The fix is to restrict both arms to the
+    intersection and state the clip set the numbers were computed on. The only
+    raise is the floor: an empty or implausibly small intersection (<
+    `min_common`), where a per-condition mean is an anecdote about which two
+    utterances happened to overlap.
+
+    The census is taken over `usable_rows` (this model, failures excluded), so a
+    clip that only ever failed on one arm is correctly not counted as run there.
+    """
+    real_ok = usable_rows(real_rows, model)
+    sim_ok = usable_rows(sim_rows, model)
+    clips_r = {str(r.get("clip_id")) for r in real_ok}
+    clips_s = {str(r.get("clip_id")) for r in sim_ok}
+    common = clips_r & clips_s
+
+    if len(common) < max(1, int(min_common)):
+        raise ClipSetMismatchError(
+            f"the two arms share only {len(common)} clip(s) "
+            f"(real {len(clips_r)}: {sorted(clips_r)[:6]}..., "
+            f"sim {len(clips_s)}: {sorted(clips_s)[:6]}...) — fewer than the "
+            f"{min_common} needed for a per-condition mean to describe an "
+            f"acoustic condition rather than the particular utterances that "
+            f"happened to overlap. Re-run one arm on the other's clip set; do "
+            f"NOT compare unmatched clip sets, which folds clip difficulty into "
+            f"the reported sim2real gap."
+        )
+
+    kept_r = sum(1 for r in real_ok if str(r.get("clip_id")) in common)
+    kept_s = sum(1 for r in sim_ok if str(r.get("clip_id")) in common)
+    matched = clips_r == clips_s
+    return {
+        "matched": bool(matched),
+        "common": sorted(common),
+        "n_common": len(common),
+        "n_clips_real": len(clips_r),
+        "n_clips_sim": len(clips_s),
+        "real_only": sorted(clips_r - clips_s),
+        "sim_only": sorted(clips_s - clips_r),
+        "n_rows_real": len(real_ok),
+        "n_rows_sim": len(sim_ok),
+        "n_rows_real_kept": kept_r,
+        "n_rows_sim_kept": kept_s,
+        "n_rows_real_dropped": len(real_ok) - kept_r,
+        "n_rows_sim_dropped": len(sim_ok) - kept_s,
+        "min_common": int(min_common),
+        "note": (
+            f"clip sets identical ({len(common)} clips); no restriction applied"
+            if matched else
+            f"clip sets DIFFER (real {len(clips_r)}, sim {len(clips_s)}); both "
+            f"arms restricted to the {len(common)} common clip(s) before "
+            f"aggregation, dropping {len(real_ok) - kept_r} real and "
+            f"{len(sim_ok) - kept_s} sim row(s). Every number below is computed "
+            f"on that common clip set, not on either arm's full corpus."
+        ),
+    }
+
+
+# ============================================================================
 # PAIRING — on MEASURED RT60 (the whole methodological point)
 # ============================================================================
 
 def pair_conditions(real_rows: Sequence[dict], sim_rows: Sequence[dict],
-                    model: str | None = None, rt60_tol: float = RT60_TOL) -> dict:
+                    model: str | None = None, rt60_tol: float = RT60_TOL,
+                    min_common_clips: int = MIN_COMMON_CLIPS) -> dict:
     """
     Pair each real-run condition with the sim-run condition that delivered the
     same acoustics: identical non-reverb factors AND measured RT60 within
@@ -185,9 +338,17 @@ def pair_conditions(real_rows: Sequence[dict], sim_rows: Sequence[dict],
     One-to-one inside each non-reverb group (Hungarian assignment on
     |delta measured RT60|): greedy nearest-match could spend the same simulated
     condition twice and double-count it in the average.
+
+    BOTH ARMS ARE FIRST RESTRICTED TO THEIR COMMON CLIP SET (`clip_intersection`)
+    — the condition half of "same clips, same conditions" is enforced by the
+    RT60 join below, and this is the clip half. The census is returned under
+    `clip_match` and must be surfaced by every caller.
     """
-    real_agg = aggregate_conditions(real_rows, model)
-    sim_agg = aggregate_conditions(sim_rows, model)
+    clip_match = clip_intersection(real_rows, sim_rows, model=model,
+                                   min_common=min_common_clips)
+    common = clip_match["common"]
+    real_agg = aggregate_conditions(real_rows, model, clips=common)
+    sim_agg = aggregate_conditions(sim_rows, model, clips=common)
     _require_measured_rt60(real_agg, "real")
     _require_measured_rt60(sim_agg, "sim")
 
@@ -238,6 +399,7 @@ def pair_conditions(real_rows: Sequence[dict], sim_rows: Sequence[dict],
         "unmatched_sim": unmatched_sim,
         "real_table": real_agg,
         "sim_table": sim_agg,
+        "clip_match": clip_match,
         "rt60_tol": float(rt60_tol),
         "matched_on": MEASURED_RT60,
         "max_abs_rt60_delta": (float(max(abs(p["rt60_delta"]) for p in pairs))
@@ -430,9 +592,11 @@ def dead_zone_agreement(paired: dict, wer_hi: float = WER_HI,
 def sim2real_report(real_rows: Sequence[dict], sim_rows: Sequence[dict],
                     model: str | None = None, rt60_tol: float = RT60_TOL,
                     wer_hi: float = WER_HI, conf_pct_hi: float = CONF_PCT_HI,
-                    n_boot: int = 2000, seed: int = 0) -> dict:
+                    n_boot: int = 2000, seed: int = 0,
+                    min_common_clips: int = MIN_COMMON_CLIPS) -> dict:
     """One call: pair -> level gap -> rank agreement -> dead-zone set -> payload."""
-    paired = pair_conditions(real_rows, sim_rows, model=model, rt60_tol=rt60_tol)
+    paired = pair_conditions(real_rows, sim_rows, model=model, rt60_tol=rt60_tol,
+                             min_common_clips=min_common_clips)
     # Failures are counted for the MODEL UNDER ANALYSIS only. Counting them over
     # the whole table would report another arm's outages (Whisper timing out, say)
     # as this arm's missing measurements — the header number would be wrong in the
@@ -448,6 +612,7 @@ def sim2real_report(real_rows: Sequence[dict], sim_rows: Sequence[dict],
         "pairs": paired["pairs"],
         "unmatched_real": paired["unmatched_real"],
         "unmatched_sim": paired["unmatched_sim"],
+        "clip_match": paired["clip_match"],
         "rt60_tol": paired["rt60_tol"],
         "matched_on": paired["matched_on"],
         "max_abs_rt60_delta": paired["max_abs_rt60_delta"],
@@ -530,6 +695,7 @@ def plot_payload(res: dict) -> dict:
             ({"rt60_measured_real": p["rt60_measured_real"], "gap": p["gap"],
               "condition": p["condition_real"]} for p in pairs),
             key=lambda d: d["rt60_measured_real"]),
+        "clip_match": res["clip_match"],
         "headline": {
             "model": res["model"],
             "n_pairs": len(pairs),
@@ -539,6 +705,11 @@ def plot_payload(res: dict) -> dict:
             "kendall": res["order"]["kendall"],
             "dead_zone_jaccard": dz["jaccard"],
             "verdict": res["headline"]["verdict"],
+            # The clip set the numbers above were computed on. Carried into the
+            # headline itself so a consumer that reads nothing else still cannot
+            # quote the gap without knowing what it is a gap over.
+            "n_clips": res["clip_match"]["n_common"],
+            "clips_matched": res["clip_match"]["matched"],
         },
     }
 
@@ -546,12 +717,24 @@ def plot_payload(res: dict) -> dict:
 def format_sim2real(res: dict) -> str:
     """The human-readable D4 block — the two numbers plus the interpretation."""
     lv, od, dz = res["level"], res["order"], res["dead_zones"]
+    cm = res["clip_match"]
     L = [f"SIM-VS-REAL (D4) — model {res['model']}, {len(res['pairs'])} paired "
          f"conditions",
          f"  matched on : {res['matched_on']} (NOT the requested rt60); "
          f"max |delta| {res['max_abs_rt60_delta']:.3f} s "
          f"(tolerance {res['rt60_tol']:.3f})",
-         f"  LEVEL      : {lv['verdict']}",
+         f"  CLIP SET   : real arm {cm['n_clips_real']} clips, sim arm "
+         f"{cm['n_clips_sim']}, common {cm['n_common']} "
+         f"-> {'MATCHED' if cm['matched'] else 'RESTRICTED to the intersection'}",
+         f"               {cm['note']}"]
+    if not cm["matched"]:
+        L += [f"               rows dropped: real "
+              f"{cm['n_rows_real_dropped']}/{cm['n_rows_real']}, sim "
+              f"{cm['n_rows_sim_dropped']}/{cm['n_rows_sim']}",
+              f"               computed on clips: "
+              f"{', '.join(cm['common'][:12])}"
+              + (" ..." if len(cm["common"]) > 12 else "")]
+    L += [f"  LEVEL      : {lv['verdict']}",
          f"               mean |gap| {lv['mean_abs_gap'] * 100:.1f} pts, "
          f"median {lv['median_gap'] * 100:+.1f} pts",
          f"  ORDER      : Spearman rho = {od['spearman']:.3f} "
@@ -592,25 +775,37 @@ def main(argv: Sequence[str] | None = None) -> int:
     ap.add_argument("--wer-hi", type=float, default=WER_HI)
     ap.add_argument("--conf-pct-hi", type=float, default=CONF_PCT_HI)
     ap.add_argument("--out", default="results/sim2real.json")
+    ap.add_argument("--out-txt", default="results/sim2real.txt",
+                    help="the printed report, verbatim (the clip census lives "
+                         "here as well as in the JSON)")
+    ap.add_argument("--min-common-clips", type=int, default=MIN_COMMON_CLIPS)
     args = ap.parse_args(argv)
 
     real_rows = load_master_table(args.real_table)
     sim_rows = load_master_table(args.sim_table)
     models = ([args.model] if args.model
               else sorted(set(split_by_model(real_rows)) & set(split_by_model(sim_rows))))
-    payloads = {}
+    payloads, blocks = {}, []
     for m in models:
         res = sim2real_report(real_rows, sim_rows, model=m,
                               rt60_tol=args.rt60_tol, wer_hi=args.wer_hi,
-                              conf_pct_hi=args.conf_pct_hi)
-        print(format_sim2real(res))
+                              conf_pct_hi=args.conf_pct_hi,
+                              min_common_clips=args.min_common_clips)
+        block = format_sim2real(res)
+        print(block)
         print()
+        blocks.append(block)
         payloads[res["model"]] = res["plot"]
 
     os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
     with open(args.out, "w", encoding="utf-8") as fh:
         json.dump(payloads, fh, indent=2)
     print(f"wrote plot payload -> {args.out}")
+    if args.out_txt:
+        os.makedirs(os.path.dirname(args.out_txt) or ".", exist_ok=True)
+        with open(args.out_txt, "w", encoding="utf-8") as fh:
+            fh.write("\n\n".join(blocks) + "\n")
+        print(f"wrote report      -> {args.out_txt}")
     return 0
 
 
