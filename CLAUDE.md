@@ -7,10 +7,11 @@ full detail lives in `SPEC.md`.
 Deadzone is a general, domain-neutral testbed that maps where a **streaming-capable
 ASR model** fails **silently** (confident but wrong) under controlled acoustic
 degradation — the "dead zones" — what *kind* of failure each condition causes,
-and a cheap early-warning signal. Any streaming ASR, any acoustic domain. Note the
-measured grid is **batch**: Deepgram via the pre-recorded endpoint
-(`listen.v1.media.transcribe_file`), Whisper locally — no arm uses `listen.live`.
-Full brief: @SPEC.md
+and a cheap early-warning signal. Any streaming ASR, any acoustic domain. The grid
+runs **three arms** (10,560 rows): Deepgram Nova-3, Whisper-base, ElevenLabs
+Scribe. Note it is all **batch**: Deepgram via the pre-recorded endpoint
+(`listen.v1.media.transcribe_file`), Whisper locally, Scribe via its batch
+endpoint — no arm uses `listen.live`. Full brief: @SPEC.md
 
 ## Build / test / run commands
 - Run unit tests: `python3 tests/test_pipeline.py`  (offline, synthetic — must stay green)
@@ -27,6 +28,10 @@ Full brief: @SPEC.md
   needs the edit types, not just a scalar. Normalize ref & hyp identically.
 - Always pull **per-word confidence** from the streaming ASR model (the Deepgram
   adapter) — it is the headline signal.
+- **`elevenlabs-scribe` is rank-only: never put it in a cross-model WER
+  comparison.** Its orthography is non-deterministic across identical calls, so
+  its offset is variance, not bias, and cannot be normalized away. Enforced in
+  code (`model_compare` raises); measured within-arm only.
 
 ## Working rules
 - Build in DAG order (see SPEC §9). Do not start an analysis layer until the

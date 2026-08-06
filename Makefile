@@ -1,7 +1,12 @@
 # Deadzone — demo kit (SPEC A.R9)
 #
-# One command per demo. Nothing here is multi-step, nothing here needs an API
-# key, and nothing here touches the network. Rehearse with wifi OFF.
+# One command per demo, nothing multi-step. The entire on-stage path — `make demo`
+# and every target it chains — needs NO API key and touches NO network. Rehearse
+# with wifi OFF.
+#
+# `make demo-live` is the sole exception: an OPTIONAL extra beat that needs both.
+# It is deliberately not a prerequisite of `demo`, and it falls back to cache and
+# exits 0 when either is missing.
 #
 #   make help          what you can run
 #   make demo          the full scripted path, in order
@@ -28,7 +33,7 @@ OPEN := $(shell command -v open 2>/dev/null || command -v xdg-open 2>/dev/null)
 
 help:
 	@echo ""
-	@echo "  Deadzone demo kit — every target runs OFFLINE, no API key required."
+	@echo "  Deadzone demo kit — the whole ON-STAGE path runs OFFLINE, no API key required."
 	@echo ""
 	@echo "  ON STAGE (in this order)"
 	@echo "    make test-core        30 s  the trap functions + the demo kit, green"
