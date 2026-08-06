@@ -8,7 +8,7 @@
 #
 .DEFAULT_GOAL := help
 .PHONY: help lock test test-core demo demo-prep demo-break demo-al demo-check \
-        dashboard dashboard-build clean-demo
+        dashboard dashboard-build clean-demo demo-live
 
 PY       := ./.venv/bin/python
 # NOTE: `./.venv/bin/pip` is a broken console script on this machine — its shebang
@@ -36,6 +36,11 @@ help:
 	@echo "    make demo-al          30 s  the surrogate walking onto the boundary"
 	@echo "    make dashboard         —    open the self-contained HTML from file://"
 	@echo "    make demo                   all four, in sequence"
+	@echo ""
+	@echo "  OPTIONAL — the only target that touches the network"
+	@echo "    make demo-live        20 s  the same beat, transcribed LIVE"
+	@echo "                                NEEDS wifi + DEEPGRAM_API_KEY. Skippable:"
+	@echo "                                it falls back to cache and exits 0."
 	@echo ""
 	@echo "  BEFORE STAGE"
 	@echo "    make demo-check             preflight: is every artifact present?"
@@ -103,6 +108,20 @@ demo-break: results/demo/demo_cache.json
 ## the active-learning loop, against a GP surrogate fitted to the real grid
 demo-al:
 	@$(PY) demos/demo_al.py
+
+## OPTIONAL LIVE BEAT — the ONLY target here that needs network + an API key.
+## Two real nova-3 calls (~$0.001) on one clip: clean, then the #1 measured
+## dead zone, showing the per-word confidences as they come back.
+##
+## Deliberately NOT a prerequisite of `demo`. The spine is offline by design and
+## must stay that way — if this were in the chain, a conference wifi outage
+## would take the whole demo down, which is the exact failure the kit exists to
+## prevent. It is safe to run anyway: no key, no network, a vendor error or a
+## timeout all print one explanatory line, fall back to the cached results, and
+## exit 0. Rehearse it with `demos/demo_live.py --offline`; preflight it with
+## `demos/demo_live.py --check` before you decide whether to schedule the beat.
+demo-live:
+	@$(PY) demos/demo_live.py
 
 ## open the self-contained dashboard from file:// — no server, no wifi
 dashboard:
