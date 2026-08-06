@@ -1,0 +1,242 @@
+{
+  "generated_utc": "2026-08-06T06:42:15+00:00",
+  "git": {
+    "sha": "0d7d8f57c3e053e82a65168bfe23829d9f17869b",
+    "branch": "main",
+    "dirty": false,
+    "describe": "0d7d8f5"
+  },
+  "models": {
+    "streaming_commercial": {
+      "provider": "deepgram",
+      "literal": "nova-3",
+      "api": "pre-recorded (listen.v1.media.transcribe_file)",
+      "exposes_word_confidence": true,
+      "caveat": "Server-side literal. Deepgram may re-point 'nova-3' at new weights without notice; this run is only reproducible as of the date above."
+    },
+    "open_baseline": {
+      "provider": "openai-whisper (local)",
+      "literal": "base",
+      "exposes_word_confidence": "derived, not native -- see _parse_whisper_result in audio_pipeline.py"
+    }
+  },
+  "environment": {
+    "python": "3.11.9",
+    "platform": "Darwin 24.6.0 arm64",
+    "ffmpeg": "ffmpeg version 8.1.2 Copyright (c) 2000-2026 the FFmpeg developers",
+    "requirements_lock": "requirements.lock.txt"
+  },
+  "codec_decision": {
+    "narrowband_codec": "g726",
+    "ffmpeg_encoder": "adpcm_g726 @ 16 kbit/s, 8 kHz",
+    "why_not_amr": "Stock ffmpeg ships AMR-NB decode-only. Building a homebrew-tap ffmpeg with --with-opencore-amr would make the grid depend on a source build that may not exist on the next machine, for a codec-family difference the write-up can simply state. G.726 is a genuine telephony codec present in every stock ffmpeg.",
+    "wideband_codec": "opus-lowrate"
+  },
+  "corpus": {
+    "n_utterances": 40,
+    "manifest": "recording_manifest.csv",
+    "clean_wer_floor": 0.0165,
+    "clean_wer_floor_note": "6 errors / 363 reference words; 35/40 clips exact; every non-zero row adjudicated by ear",
+    "speakers": 1
+  },
+  "grid": {
+    "design": "interaction_grid()",
+    "n_conditions": 176,
+    "core": "complete 4x4x3x3 factorial (rt60 x snr_db x codec x mic_rolloff) at noise_type=babble, 40 clips/cell",
+    "noise_arm": "32 cells over engine/road",
+    "snr_db_ceiling": 20.0,
+    "snr_db_ceiling_why": "corpus inherent SNR measures ~25-28 dB, so a 25 dB request under-delivers by ~2.5 dB"
+  },
+  "calls": {
+    "real": {
+      "nova-3": {
+        "ok": 7220,
+        "failed": 0
+      },
+      "whisper-base": {
+        "ok": 1757,
+        "failed": 3
+      },
+      "elevenlabs-scribe": {
+        "ok": 1760,
+        "failed": 0
+      }
+    },
+    "sim": {
+      "nova-3": {
+        "ok": 3855,
+        "failed": 11
+      }
+    }
+  },
+  "cost": {
+    "per_model": {
+      "elevenlabs-scribe": {
+        "calls_ok": 1760,
+        "calls_failed": 0,
+        "calls": 1760,
+        "audio_minutes_est": 120.3,
+        "costed": true,
+        "provider": "elevenlabs",
+        "billing": "per hour of audio",
+        "usd_per_minute_quoted": 0.0036666666666666666,
+        "usd_per_hour_quoted": 0.22,
+        "rate_as_of": "2026-08-05",
+        "rate_source": "ElevenLabs pricing, Scribe BATCH (scribe_v2). The websocket arm scribe_v2_realtime bills at $0.39/hr \u2014 a DIFFERENT rate, so a realtime arm needs its own row here rather than reusing this one.",
+        "usd_est": 0.44
+      },
+      "nova-3": {
+        "calls_ok": 11075,
+        "calls_failed": 11,
+        "calls": 11086,
+        "audio_minutes_est": 757.5,
+        "costed": true,
+        "provider": "deepgram",
+        "billing": "per minute of audio",
+        "usd_per_minute_quoted": 0.0043,
+        "usd_per_hour_quoted": null,
+        "rate_as_of": "2026-08-04",
+        "rate_source": "Deepgram pricing, Nova-3 pre-recorded (listen.v1)",
+        "usd_est": 3.26
+      },
+      "whisper-base": {
+        "calls_ok": 1757,
+        "calls_failed": 3,
+        "calls": 1760,
+        "audio_minutes_est": 120.3,
+        "costed": true,
+        "provider": "openai-whisper (local)",
+        "billing": "local \u2014 no vendor charge",
+        "usd_per_minute_quoted": 0.0,
+        "usd_per_hour_quoted": null,
+        "rate_as_of": "n/a (local)",
+        "rate_source": "runs on this machine; the cost is wall clock, not money",
+        "usd_est": 0.0
+      }
+    },
+    "billed_models": [
+      "elevenlabs-scribe",
+      "nova-3"
+    ],
+    "uncosted_models": [],
+    "total_calls": 14606,
+    "total_audio_minutes_est": 998.1,
+    "usd_total_est": 3.7,
+    "minutes_per_call_assumed": 0.06833,
+    "deepgram_calls": 11086,
+    "audio_minutes_est": 757.5,
+    "usd_per_minute_quoted": 0.0043,
+    "rate_as_of": "2026-08-04",
+    "legacy_field_note": "`deepgram_calls` / `audio_minutes_est` / `usd_per_minute_quoted` / `rate_as_of` describe the DEEPGRAM arm alone and are retained under their original names because the write-up quotes them. For the whole experiment read `total_calls`, `total_audio_minutes_est` and `usd_total_est`.",
+    "note": "Vendors bill per minute of audio, not per call. Local arms (whisper, vosk) are listed at $0 rather than omitted, so an absent model means 'no rate on file', not 'free'. Re-check vendor pricing before quoting any of this."
+  },
+  "assets": {
+    "rirs": {
+      "n_files": 16,
+      "files": {
+        "mit_rt60-0.20_h114_Restaurant_txts.wav": "29b8615a40ef7bb143cc75e00cad038c753f0d8eaf2e21b51dfd431cc723e9cb",
+        "mit_rt60-0.25_h006_Bedroom_42txts.wav": "bf19ecef9ba64fd1476423fb4966c05c0387065dd71040672767402b8b15d582",
+        "mit_rt60-0.31_h098_Bedroom_2txts.wav": "134447efcd416ae455225082bfd1f9425b5e41284ebc9fe5e64a4a7aa93da640",
+        "mit_rt60-0.36_h259_Classroom_1txts.wav": "59e8376a40bb3f46847cfd61cc313d1ee2a20b3908baa2fcf831d85579e35507",
+        "mit_rt60-0.41_h151_Train_BostonTOrangeLine_1txts.wav": "4bc279ca7ae6e02c5d280234ca18fa84f74db48dd584eb7c2defd583a54f6710",
+        "mit_rt60-0.47_h174_Bar_1txts.wav": "614a7c16106a5f862f122eff5c280c635feb24dd5d3dee0bccb2698231657904",
+        "mit_rt60-0.52_h105_Classroom_2txts.wav": "ce99a1e623ea3258327380e8216b3212d641d314dadbe10b1a048e927bcf8eaf",
+        "mit_rt60-0.57_h101_Classroom_2txts.wav": "1d39d5a1c6b51fc16dbacd79b25e2d9b056bbb8c0dde4ace438c191837f2daf1",
+        "mit_rt60-0.63_h269_Office_ConferenceRoom_1txts.wav": "94b432da619ba7d2166ac8aa4df0a95e04be9c69c09a08b44d02dc37654da43a",
+        "mit_rt60-0.68_h058_Campground_Dininghall_3txts.wav": "2a556f432afcbbd848d4c0b25d4929ab0d23f7432d4edc198bb106dc6d05cfb3",
+        "mit_rt60-0.73_h258_Classroom_1txts.wav": "f0e31e838c0cded1229003ff4f054f8e1401bb48997da906d2828daf5c7cb447",
+        "mit_rt60-0.79_h065_Classroom_3txts.wav": "9fcffb87695cfb419207f3911d8f26e5d077a202123c8cc2a0741f35312e16ec",
+        "mit_rt60-0.84_h063_Cafeteria_3txts.wav": "31bc9d133f46456f27075de09f32a65d6b74b7b01d6e716dd3f59688d1525522",
+        "mit_rt60-0.90_h034_Classroom_6txts.wav": "db348a44f2093fe7d8848727a35e7dc5d512df18d26fee41a7a4182f9425cc2f",
+        "mit_rt60-0.95_h244_Classroom_1txts.wav": "59690954d65d25a2506c391a2ac98e0dd2be1dde088cbc3b0e33fcb20766f6cd",
+        "mit_rt60-0.99_h081_Shower_2txts.wav": "33fd126601bdf6a5fce1116727bd4158d7753bd42b1eb049be105b94545d3ac7"
+      }
+    },
+    "rirs_sim": {
+      "n_files": 16,
+      "files": {
+        "sim_rt60-0.19_booth_d0.5_r00.wav": "5912c8260e94551642102ee8fb4a1f9a638d8ef83f3440cb59b46bcd1080a53c",
+        "sim_rt60-0.26_booth_d1.0_r01.wav": "2a6a3438ec11fcf6bfe50dee3e3360cbee3b5fd63e2fdb853e6233f5c30f0b05",
+        "sim_rt60-0.28_booth_d0.5_r02.wav": "b23aa8d881edea1d56ee8f6c0244c596b8dbc5bff0a46b2f4d21ceb12bcb5941",
+        "sim_rt60-0.35_booth_d1.0_r03.wav": "9c6042ad3105314a61c4cb59dd65d2144011d42d3636def82fcf9a499e9ff7c7",
+        "sim_rt60-0.41_office_d1.0_r04.wav": "b82382a15aabdb0ca27697ed92c42fdcbea669144d3ff8d26a3e120c9d238e73",
+        "sim_rt60-0.48_office_d2.0_r05.wav": "bc99424b27c72c8a68fe3436fffa9d2820dd436dfd0ebe26948cf427aba35c7a",
+        "sim_rt60-0.52_office_d1.0_r06.wav": "27ecce09d39df6ad0d95b95a30d5109e7e0868a1c2de493bf0a61b606543b376",
+        "sim_rt60-0.57_office_d2.0_r07.wav": "0b134fabc11795375ba8581a42978867c170e57b8fdf26b1ecabc2e9d5243bda",
+        "sim_rt60-0.62_meeting_d1.5_r08.wav": "f676f6284978d47d82ebb71d847ea15c989eb90558fa09eec2130a01ac6a2b4a",
+        "sim_rt60-0.66_meeting_d3.0_r09.wav": "d514ff9f44749e9bd544b9756a94527b61111b6ae92b3285d0037d0c45bce3f0",
+        "sim_rt60-0.74_meeting_d3.0_r11.wav": "616ede909c9c870b1f1f9099cd3828db4970be32050553066dd3630329a829fe",
+        "sim_rt60-0.75_meeting_d1.5_r10.wav": "84765b870b7e64a9d4b18f67ad407bcbf8ea5359464906453c2221746f579c1b",
+        "sim_rt60-0.81_hall_d2.5_r12.wav": "4e0f8793d116a69c041e936fc2d87f0b77f2da45e23bfad1385ba5636d5c3f47",
+        "sim_rt60-0.90_hall_d5.0_r13.wav": "6daadfdf57630eb489655be883b1eb72c091f974072588da422c934824ac8110",
+        "sim_rt60-0.95_hall_d2.5_r14.wav": "0b3b46c3de703d098b05539212ac3e6716dce7100a8d131a09a14c3bc2b1715f",
+        "sim_rt60-1.02_hall_d5.0_r15.wav": "4ad4305cc55dc6f481e959f8b38d054aa01fde212f41c3cf7323559c6c80b3be"
+      }
+    },
+    "noise": {
+      "n_files": 12,
+      "files": {
+        "babble/demand_PCAFETER_ch01.wav": "854dd0e5ef334a66abdd02d6d2b3e9d01b685df033d0acd1cd06e471c062550b",
+        "babble/demand_PCAFETER_ch02.wav": "482e304874e94081a635aa76ef24fccbe164d43da745a027229b3ca600de3d90",
+        "babble/demand_PSTATION_ch01.wav": "965f1a6b6ff7956d5d5bd687f493c7783bd2b452a38cc019817ca475eb609ac2",
+        "babble/demand_PSTATION_ch02.wav": "5cebc47ece4a3fa2426e09e9c645b9b71917bc35f15aeefa7cac8d9c1ca3a8b9",
+        "engine/demand_TBUS_ch01.wav": "d3a0412801945488cab88dc23125b1cccaf31f0579ce9037aad5cdcc667810b6",
+        "engine/demand_TBUS_ch02.wav": "aa725e2dd8df0554cef0064b733422f270aa7b05bc6433037f3bdfc6ab82bb4e",
+        "engine/demand_TCAR_ch01.wav": "ffe4cac12ed78705a52fce5d14f17a4ee838c6f5922446fc66258841323d4a59",
+        "engine/demand_TCAR_ch02.wav": "ec6cc44a94dbb2a4f550c95b10226c93d116bdca036017c622761dda49133cd2",
+        "road/demand_SPSQUARE_ch01.wav": "f2ff54e482c642d3964a42139e9bbe73d7f5b20751d4974c4bcb024b8d0d25b6",
+        "road/demand_SPSQUARE_ch02.wav": "74e676eeed82d66c333cfe9e70123b596226b32b12d86f36aa6fc4c3e3a4d197",
+        "road/demand_STRAFFIC_ch01.wav": "8fa49dcf3996af655a3ecef8d06f0d9ef217c35410e3adce3d461da797987dbb",
+        "road/demand_STRAFFIC_ch02.wav": "d332801ff96926a029322d8a01013f374829402011d4366c25fc900357e58a8a"
+      }
+    },
+    "recordings": {
+      "n_files": 43,
+      "files": {
+        "_roomtone.wav": "1224ddd9a6321f1143b35b73d784084c4358de4a84ac49d7b283625b1655d581",
+        "public_sample.wav": "154e291ecfa8be6ab8343560bcc109008fa7853eb5372533e8efdefc9b504c33",
+        "sample.wav": "e8f8bb42e4f4a804ca910f5b0fc7b1dd51c577384e153ee3a48a707a31c6979d",
+        "u01.wav": "2595c306d2964ac3fd9b148f4de2822fbaccd7291fa9c9238df6e18be8740d88",
+        "u02.wav": "ae7f26d2a1f056c7f4ac6eb2e41e4c0d03b1a292709d3794382c244350231427",
+        "u03.wav": "e03c9cb12cff0f9ab677cdef2d41ff30badff046f9008555b9f44a2c448bc4c1",
+        "u04.wav": "de0176029c34206472b7bb2ff25b0a9ee13aee81fdd2a3ff6bf46f4e7bcddd7f",
+        "u05.wav": "f202237dc39f193f4d74646d33b3e14b0e2cbe1e315d78dcbdad3ac05ea6ad66",
+        "u06.wav": "6947f8552f67334c5ca909b02ae3e9fbf3ad5d6dcd03ed6769cd7ea441c83e52",
+        "u07.wav": "53b803edf58a058cc96507adbe3ad873b3e08c8782e05fb22be45d5900c66109",
+        "u08.wav": "0e3737d190dfde952cfdc7d16f1cc9d7154dd93e87ecade230a2def31d4ffa35",
+        "u09.wav": "1a9fd869f0a26272d78c838bb2cb75e3df602fb375c7c78f66e2e6d2858b646d",
+        "u10.wav": "ff4f51d39e98476c08cdba885b8a25ae23e9ee54111883abfee8ec2223ec1298",
+        "u11.wav": "bba2097e02c208d4483d8741b11433e2296c4362e446a223dd6575c6c52f8d55",
+        "u12.wav": "ce2c04520e9612b5c9ed60eddb863426afc3ba6c41b0ded509c05aa6f7645b09",
+        "u13.wav": "dbe52f1ab49a7e7772f0bbd5050cc15ebf52ca52351563ae5d520b4909ba4e96",
+        "u14.wav": "1538f3778eb2aeb16ab33693393c20728f7026a3ee2d6d7a0d987c5efd2a0954",
+        "u15.wav": "13f156191343311bbe9828d827f957e77cf529efae976f9194ba59ffc325e4d6",
+        "u16.wav": "1ce0f354d67184f809eb5c8c4d85a8a04874580bfe2568c110e4165ad0f27cfc",
+        "u17.wav": "914ee8c7dfbcd6624443eb56472262fb161bff94a7bf68f2744c5bf8f91bc632",
+        "u18.wav": "42b05a73b7e08199d3ae6093e038ef0a9627f2627e71355b9bbe52f9641fe079",
+        "u19.wav": "a0d4184f1051f84d946bd89526e96184ca5603c9e13a2dc145d1f7ad7b6a003d",
+        "u20.wav": "6f6ebc89ee252d0baa0a7dfa403da3d791cbe8aa304aa42ec490ff3ebfc2d210",
+        "u21.wav": "4837d62d1a9c7c613a4b068afb83ceee6a92c9c12832e0b689972e8e81523d3c",
+        "u22.wav": "938abfd33bf12ba443d1c474d26e0b43c72476f3cb881b3b73aed26027656cb8",
+        "u23.wav": "bcdd31ae6ffe1699e32d30a88e73bba2e41f72db0e9ed4692a1c01d7f3cb049b",
+        "u24.wav": "4e645a0a9602e1678cb9d8e89423532a1152c06335f349c022d17d08ca26ac7b",
+        "u25.wav": "a6c0070cabc776299790777c6512486f1c73db9d253de9d42cd3995538220b07",
+        "u26.wav": "40517eec0f9ce127fb8fc1e1b384f429eea96497e3b9cc897139c0a7db050b07",
+        "u27.wav": "8b7544ee7b8024b3e6604252843c28b6cf28573bc44cd20e7936bbb5f13e00af",
+        "u28.wav": "3650d7ec931718e606a49475bcfa3d3eebe24a7edba5e6e6130e6debbbfcb303",
+        "u29.wav": "77b0a0484e313b2f91d1773dcd26d255c842fbb35b56d95d8492a7a4b00ca9d4",
+        "u30.wav": "77ab1b9534171bd89dc41dc783efee9c414afb06a1af0b389f697c4d79b6ba74",
+        "u31.wav": "5e96cd5252b0054541576cbd89231e409b2e0861d1ae23d9f555aabab4a0e3f7",
+        "u32.wav": "f9fe8646b2ab1a1961d6b633a966abdec1d65b4c46d5c74e322feae96f74d8b8",
+        "u33.wav": "dee106bcb05e77a19d75a5b242dd0cc1dea5a9acfa4a6f4c1f08c5de35cbb10f",
+        "u34.wav": "fdcb534235bc91f1582c64a754509790d0b5b8c3ab835a9c40f8e62c03c7977a",
+        "u35.wav": "c3e479b0fd79d404f987208897716c888c8ce064a80ff7e21feae53e490cc9e5",
+        "u36.wav": "1832820a8562248867e61a8b626b469122d3295b6ebee67eab5e772ccbac2727",
+        "u37.wav": "27497a449136b6eda468e9a1fcdf742aa3cc9c6fd4d521d1137599747df9bcfe",
+        "u38.wav": "bf5399916152bd2a6b6592875a028d5a0b97c455aaa5a9dcd7c1ba350fbe24db",
+        "u39.wav": "b09eca434533d8d4d3c58e54beee6d51e8da5d334c7242a241903ca08e03955e",
+        "u40.wav": "f3c26df0cab03042ba5c83ad1b034a800ed1894078a5600f09bf321782cba170"
+      }
+    }
+  }
+}
