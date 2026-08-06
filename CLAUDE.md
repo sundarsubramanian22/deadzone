@@ -1,17 +1,27 @@
-# CLAUDE.md — Deadzone: Streaming-ASR Silent-Failure Map
+# CLAUDE.md — Deadzone: Silent Failures in Speech Recognition
 
 Persistent project context. Read at the start of every session. Keep this lean;
 full detail lives in `SPEC.md`.
 
 ## What this is
-Deadzone is a general, domain-neutral testbed that maps where a **streaming-capable
-ASR model** fails **silently** (confident but wrong) under controlled acoustic
-degradation — the "dead zones" — what *kind* of failure each condition causes,
-and a cheap early-warning signal. Any streaming ASR, any acoustic domain. The grid
-runs **three arms** (10,560 rows): Deepgram Nova-3, Whisper-base, ElevenLabs
-Scribe. Note it is all **batch**: Deepgram via the pre-recorded endpoint
-(`listen.v1.media.transcribe_file`), Whisper locally, Scribe via its batch
-endpoint — no arm uses `listen.live`. Full brief: @SPEC.md
+Deadzone is a general, domain-neutral testbed that maps where an **ASR model that
+exposes per-word confidence** fails **silently** (confident but wrong) under controlled
+acoustic degradation — the "dead zones" — what *kind* of failure each condition causes,
+and a cheap early-warning signal. Any ASR that returns per-word confidence, any acoustic
+domain. The grid runs **three arms** (10,560 rows): Deepgram Nova-3, Whisper-base,
+ElevenLabs Scribe.
+
+**SCOPE — do not reintroduce the streaming claim.** The project was originally scoped
+as a *streaming*-ASR study; that scope was **dropped**, and **nothing was ever
+streamed**. Every arm is **batch**: Deepgram via the pre-recorded endpoint
+(`listen.v1.media.transcribe_file`), Whisper locally with full-file lookahead, Scribe
+via its batch REST endpoint — **no arm uses `listen.live`**. "Streaming" and
+"streaming-capable" are therefore **claims, not descriptions**: never write either into
+forward-facing framing (titles, abstracts, captions, README, dashboard, demo script).
+It stays, prominently, as a **stated limitation** (write-up limitation 17) and as
+accurate history in dated logs. Where deployment relevance is the point, the honest
+form is: *the failure mode matters for a live voice agent, though everything here was
+measured batch.* Full brief: @SPEC.md
 
 ## Build / test / run commands
 - Run unit tests: `python3 tests/test_pipeline.py`  (offline, synthetic — must stay green)
@@ -26,8 +36,8 @@ endpoint — no arm uses `listen.live`. Full brief: @SPEC.md
   SNR otherwise). Both are already correct in `audio_pipeline.py`; keep them.
 - Scoring returns WER **and typed edits** (sub/del/ins) — the fingerprint layer
   needs the edit types, not just a scalar. Normalize ref & hyp identically.
-- Always pull **per-word confidence** from the streaming ASR model (the Deepgram
-  adapter) — it is the headline signal.
+- Always pull **per-word confidence** from the commercial ASR arms (the Deepgram
+  adapter) — it is the headline signal, and it is the whole reason those arms are here.
 - **`elevenlabs-scribe` is rank-only: never put it in a cross-model WER
   comparison.** Its orthography is non-deterministic across identical calls, so
   its offset is variance, not bias, and cannot be normalized away. Enforced in
@@ -48,6 +58,7 @@ endpoint — no arm uses `listen.live`. Full brief: @SPEC.md
 This is a known evaluation genre (WildASR, Speech Robustness Bench, "When
 Denoising Hinders"). Do **not** frame it as novel. The angle = the silent-failure
 lens (confidence–accuracy gap) + typed failure fingerprints + the active-learning
-surrogate + testing commercial streaming models that expose per-word confidence,
+surrogate + testing commercial models that expose per-word confidence,
 with actionable guidance. Cite prior work up front. Name the Lombard-effect
-boundary explicitly (SPEC §4).
+boundary explicitly (SPEC §4), and name the batch-not-streaming boundary explicitly
+(write-up limitation 17) — volunteering it is a strength, being caught on it is not.

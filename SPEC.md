@@ -4094,3 +4094,117 @@ J.7), `b33c40a` (runbook).
 `grid-v1` remains **untagged**, for F.2's reason plus J.7's: the demo script, the
 dashboard and the write-up must agree before a tag ratifies them. J.7's four
 narration defects are exactly the disagreement F.2 warned against.
+
+---
+
+# Appendix K: the streaming scope was DROPPED — forward framing only (2026-08-06)
+
+> **Supersedes nothing measured.** Not one number, artifact, appendix or dated
+> record below or above changes. This is a **framing** decision, recorded forward
+> per the project's own rule — supersede, never edit backward. Appendices A–J
+> stay verbatim, including every "streaming" they contain, because they are an
+> accurate record of what the project was scoped as *at the time they were
+> written*.
+
+## K.1 The decision
+
+The project was originally scoped as a **streaming**-ASR study — §0, §1, §5, §6,
+§7 and this document's own title all say so. **That scope was dropped, and
+nothing was ever streamed.** Every row of every arm went through a whole-file
+endpoint:
+
+| arm | endpoint | not |
+|---|---|---|
+| Deepgram Nova-3 | `listen.v1.media.transcribe_file` (pre-recorded) | `listen.live` |
+| ElevenLabs `scribe_v2` | `POST /v1/speech-to-text` (batch REST) | `scribe_v2_realtime` |
+| `whisper-base` | local, full-file lookahead | — |
+
+That was already true and already disclosed — write-up **limitation 17**,
+Appendix D.4 ("the grid today has **no genuinely streaming arm at all**"), and
+Appendix I.0 ("the arm that ran is **batch**"). What changes is that the framing
+now matches the measurement instead of trailing it.
+
+## K.2 The rule
+
+**"Streaming" and "streaming-capable" are CLAIMS, not descriptions.** Both are
+barred from forward-facing framing: titles, abstracts, panel captions, README,
+dashboard, demo narration, CLAUDE.md. Note that *"streaming-capable"* is barred
+too — it was the previous compromise wording, and it still puts the word on the
+cover of a document with no streaming row in it.
+
+The honest replacements:
+
+- **"a commercial ASR model that exposes per-word confidence"** — which is the
+  real reason those arms are in the study at all. The literature's usual subjects
+  (Whisper, Conformer, wav2vec) do not expose one, so the silent-failure question
+  is unanswerable on them. That is the arm's justification, and it never needed
+  the word "streaming".
+- Where deployment relevance is the point: **"the failure mode matters for a live
+  voice agent, though everything here was measured batch."**
+
+**Kept, and strengthened rather than softened:** every sentence whose *point* is
+the limitation. "No arm streamed", "this is batch, not streaming", "the dead-zone
+map is not a live-agent map" — these get more prominent, not less. The audience
+this was written for builds streaming products; the boundary being volunteered is
+a competence signal, and being caught on it is not.
+
+**Kept as history:** everything in Appendices A–J, SPEC §0–§13, and any dated log
+entry. Do not rewrite them.
+
+## K.3 The new external title
+
+**Deadzone: Silent Failures in Speech Recognition** — used by `README.md`,
+`report/writeup.md`, `dashboard/shell.html` (`<title>` and `<h1>`) and `CLAUDE.md`.
+
+## K.4 What this touched
+
+`CLAUDE.md` (title, "What this is", now carrying the scope decision as a standing
+instruction so a future session cannot reintroduce the claim), `report/writeup.md`
+(title, abstract, §3's delta sentence, §1's limitation paragraph, §9's
+"what the title implies" clause — **no number, result or appendix touched**),
+`dashboard/{shell.html,build.py,DEMO.md}` and the rebuilt `dashboard/deadzone.html`.
+
+Two of those were **defects**, not merely stale framing:
+
+1. **`dashboard/shell.html` panel 7 read "Two commercial streaming models against
+   an open baseline"** — flatly contradicting limitation 17, on the page whose
+   subject is that a plausible sentence with no error in it is the dangerous kind.
+   Flagged in `report/UNDERSTANDING.md` §4.11 and now repaired.
+2. **The dashboard made no batch disclosure at all.** It now does, three times:
+   the header, the "How to read this honestly" footer, and a build note emitted by
+   `dashboard/build.py:collect()` so it travels with the payload rather than
+   depending on someone remembering to write it into the shell.
+
+`dashboard/DEMO.md` gained the disclosure in the 0:00 frame — said first, not
+extracted — and a "Things you must NOT say" row. Its measured read-aloud count was
+recounted rather than left stale: **588 → 608 words, ~3:55 → ~4:03 at 150 wpm**,
+and the six section splits shifted with it.
+
+## K.5 Known residue, deliberately not fixed here
+
+Each of these still carries a forward-facing streaming claim and belongs to
+another surface. Listed so the next session can close them rather than rediscover
+them:
+
+- **`SPEC.md` itself** — the title line and §0/§1/§5/§6/§7. Left verbatim by the
+  supersede-forward rule; this appendix is the supersession.
+- **`deadzone/analysis/model_arms.py:5`** — module docstring, "the commercial
+  streaming model that exposes per-word confidence (the spine)". A claim; the
+  replacement is the K.2 phrasing minus the word.
+- **`scripts/make_manifest.py:265`** — the arm taxonomy key `"streaming_commercial"`,
+  which is written into `results/MANIFEST.json`. Its own `api` field immediately
+  below it reads `"pre-recorded (listen.v1.media.transcribe_file)"`, so the key
+  contradicts its own value. Renaming it changes a frozen artifact's schema, so it
+  wants doing deliberately, with the manifest regenerated.
+- **`report/INTERVIEW_RUNBOOK.md`** — recommends saying *"streaming-capable,
+  measured in batch"*, which K.2 supersedes, and asserts *"The project says
+  'streaming ASR' throughout"*, which is now false of every forward-facing surface.
+- **`report/STATUS.md` §"No arm is streaming"** — accurate on the fact, stale on
+  the framing: it says *"The framing says 'streaming-capable model'"*, and it no
+  longer does.
+
+**Correctly left alone** (the word appears, the claim does not):
+`deadzone/audio_pipeline.py:883` and `deadzone/model_compare.py:54` both name the
+streaming call precisely in order to say the adapter does not make it;
+`README.md:91` is the limitation stated well; `demos/demo_break.py:162` and
+`demos/demo_hero.py:445` mean a streaming *read* of a CSV.

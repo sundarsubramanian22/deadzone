@@ -1,11 +1,11 @@
-# Deadzone: mapping where a streaming-capable ASR model fails *silently*
+# Deadzone: Silent Failures in Speech Recognition
 
 A controlled-degradation study of Deepgram Nova-3 across 176 acoustic conditions, with
-the confidence–accuracy gap as the headline measurement. Nova-3 is a streaming-capable
-commercial model and it is studied here for the per-word confidence that makes the
-silent-failure question askable — but **every row was measured through its batch
-(pre-recorded) endpoint**, so what is mapped is acoustic robustness, not streaming
-behaviour (limitation 17).
+the confidence–accuracy gap as the headline measurement. Nova-3 is a commercial model
+that exposes **per-word confidence**, which is what makes the silent-failure question
+askable at all — but **every row was measured through its batch
+(pre-recorded) endpoint**, and **no arm streamed**, so what is mapped is acoustic
+robustness, not streaming behaviour (limitation 17).
 
 *Sundar Subramanian · grid run 2026-08-05 · `run-20260805T070146Z-6a77c4`*
 
@@ -98,9 +98,11 @@ functional-ANOVA partition rather than a Saltelli estimate (`sum(S_u) = 1.000000
    makes **single-call benchmarking of a commercial ASR unsound on entity-bearing speech** (§6.7).
 
 **The limitation that binds hardest.** **Every arm ran in batch mode, not streaming**
-(limitation 17): Deepgram through the pre-recorded endpoint, never `listen.live`. Nova-3 is
-streaming-*capable* and is studied here for the per-word confidence that makes the silent-failure
-question askable at all, but what is mapped is **acoustic robustness, not streaming behaviour**,
+(limitation 17): Deepgram through the pre-recorded endpoint, never `listen.live`; ElevenLabs
+through its batch REST endpoint; Whisper locally with full-file lookahead. **Nothing here was
+streamed, and no streaming result is claimed.** The commercial arms are studied for the per-word
+confidence that makes the silent-failure question askable at all, but what is mapped is
+**acoustic robustness, not streaming behaviour**,
 and the dead-zone map should not be read as a live-agent map. Behind it: **one speaker, one
 accent, 40 utterances**, and the **Lombard effect** bracketed out by construction — in noise
 people involuntarily change pitch, loudness and timing, so noise does not merely mask the signal,
@@ -147,7 +149,7 @@ and **CHiME**; **Scheibler et al. 2018 (pyroomacoustics)**; and **Carlini & Wagn
 **The delta is modest and specific — a lens, not a method:** the confidence–accuracy gap per
 condition rather than WER per condition; typed fingerprints naming which *class* of reference
 word dies, so each condition implies a fix; an active-learning surrogate, which here returns a
-null (§6.5); and a **commercial streaming-capable model that exposes per-word confidence**,
+null (§6.5); and a **commercial ASR model that exposes per-word confidence**,
 where the literature overwhelmingly uses Whisper, Conformer and wav2vec — none of which expose
 one, so the question is unanswerable on them. The confidence is what earns the arm its place;
 the measurements themselves are batch (limitation 17).
@@ -715,8 +717,9 @@ missing measurement is 12 rooms × 40 clips = **480 further Deepgram calls** ≈
 audio ≈ **$0.14** at the §10 rate, holding every other factor at a fixed benign level. That buys a **16-room** reverb
 axis, a real interval on both coordinates, and a genuine separation test between DRR and C50
 instead of one discordant pair. **Third, measure a genuinely streaming arm**, which
-would retire limitation 17 — the one gap between what this document maps and what the title
-implies. It is now the *shortest* remaining step rather than an aspiration: the batch
+would retire limitation 17 — the one gap between what this document maps and the live,
+latency-bound setting the failure mode actually matters in. It is now the *shortest* remaining
+step rather than an aspiration: the batch
 `scribe_v2` arm is built and run (§6.7), and `scribe_v2_realtime` exposes the **same per-word
 `logprob` over a websocket**, so the confidence signal the whole silent-failure lens depends on
 survives the move to streaming and the comparison would be batch-vs-streaming *within one vendor*

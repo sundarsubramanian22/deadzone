@@ -756,6 +756,19 @@ def collect(master_path: str, with_al: bool = True, sobol_n: int = 1024,
                                  os.path.join(REPO, "results/l3_decoupling.json")), notes),
     }
 
+    # SCOPE, stated on the page rather than left for someone to ask about. The
+    # project was originally framed as a streaming-ASR study; nothing was ever
+    # streamed. Every arm went through a whole-file endpoint, so "streaming" is
+    # a claim this page must not make -- it survives only as this limitation.
+    # (Write-up limitation 17; the arms were audited for a mode difference
+    # BETWEEN them and came back clean, which matters because a mismatch would
+    # have manufactured this project's own thesis rather than contradicting it.)
+    notes.append("BATCH, NOT STREAMING: every arm was measured through a whole-file "
+                 "endpoint -- Deepgram's pre-recorded API (never listen.live), "
+                 "ElevenLabs' batch REST endpoint, Whisper locally with full-file "
+                 "lookahead. What is mapped is acoustic robustness, not streaming "
+                 "behaviour, and this is not a live-agent map.")
+
     is_synth = "synthetic" in os.path.basename(master_path)
     if is_synth:
         notes.insert(0, "SYNTHETIC DATA: this build reads results/synthetic_master.csv, a "

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Deadzone — streaming-ASR silent-failure map</title>
+<title>Deadzone — silent failures in speech recognition</title>
 <style>/*__CSS__*/</style>
 </head>
 <body>
@@ -12,14 +12,16 @@
   <header class="top">
     <div class="id">
       <span class="eyebrow">Controlled acoustic degradation &middot; measurement report</span>
-      <h1>Deadzone: where a streaming ASR model is <em>confident</em> and wrong</h1>
+      <h1>Deadzone: where a speech-recognition model is <em>confident</em> and wrong</h1>
       <p class="sub">Aggregate WER hides both <em>where</em> a model fails and <em>how</em>. The
       question this instrument asks is narrower and more useful to a deployment:
       <strong>does the model know it is breaking?</strong> Confidence is what decides whether a voice
       agent commits to a transcript or asks the speaker to repeat, so a confidently wrong model is
       more dangerous than one that knows it is struggling. Every panel below reads the same master
       results table — one row per clip &times; condition &times; model, with typed edits and per-word
-      confidence.</p>
+      confidence. <strong>Every row on every arm was measured through a batch endpoint, never a
+      streaming one</strong> — Deepgram's pre-recorded API, not <code>listen.live</code> — so what is
+      mapped here is acoustic robustness, and this is not a live-agent map.</p>
     </div>
     <div class="hdr-right">
       <span id="source-badge" class="badge">loading</span>
@@ -107,7 +109,8 @@
     <div class="head">
       <span class="num">every arm, one grid</span>
       <h2>Do the models have the same dead zones?</h2>
-      <p class="caption">Two commercial streaming models against an open baseline. Confidence is
+      <p class="caption">Two commercial models against an open baseline, all three measured through
+      their <em>batch</em> endpoints. Confidence is
       comparable <em>within</em> a model and never across arms — one returns an acoustic confidence,
       another the decoder's token probability — so each arm is ranked against its own distribution.
       An arm whose orthography is not stable across identical calls is marked <em>‡</em> and is
@@ -140,6 +143,13 @@
         what it buys is <em>counterfactual isolation</em>, not fidelity to any one deployment: you
         turn one knob and hold everything else still, which is the one thing field recordings cannot
         give you.</p>
+        <p>The limitation that binds hardest: <strong>nothing here was streamed.</strong> All three
+        arms ran whole-file, batch — Deepgram's pre-recorded endpoint, ElevenLabs' batch REST
+        endpoint, Whisper locally with full-file lookahead. A streaming decoder commits words under a
+        latency budget with almost no right context, which is a different failure surface, and the
+        interaction between that and reverb — where the acoustic evidence for a word arrives late —
+        is exactly what is missing here. The commercial arms are studied for the per-word confidence
+        that makes the silent-failure question askable at all.</p>
         <p>Behavioural factors are deliberately out of scope: accent, code-switching, disfluency,
         speaking rate, and above all the <em>Lombard effect</em> — in real noise people involuntarily
         change how they speak, so noise does not merely mask the signal, it changes how the signal is
@@ -152,8 +162,9 @@
         Bench, "When Denoising Hinders", the RIR-augmentation lineage. Nothing here claims novelty of
         method. What this adds is the lens: the confidence–accuracy gap as the headline rather than a
         scalar WER, typed failure fingerprints that imply specific fixes, an active-learning
-        surrogate over the failure boundary, and a commercial streaming model that exposes per-word
-        confidence where the literature mostly uses open models.</p>
+        surrogate over the failure boundary, and a commercial ASR model that exposes per-word
+        confidence where the literature mostly uses open models. The confidence is what earns that
+        arm its place; the measurements themselves are batch.</p>
         <h3>Build</h3>
         <ul id="build-notes"></ul>
         <p><code id="built-at"></code></p>

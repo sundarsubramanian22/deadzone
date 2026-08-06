@@ -70,7 +70,7 @@ single-arm result and blanks on the others; panels 7 and 8 sit outside the toggl
 ---
 
 **Timing, measured rather than asserted.** Read **only the block-quoted lines aloud**:
-588 words, **~3:55 at a normal 150 wpm**, ~4:25 with the pointing and the two clicks. The
+608 words, **~4:03 at a normal 150 wpm**, ~4:33 with the pointing and the two clicks. The
 headings below carry the measured splits, not aspirational ones. Everything that did not fit
 in a quote sits under it as a *Note* — for questions, and for the days you have room.
 
@@ -80,16 +80,18 @@ one finding that costs nothing to state later). That leaves frame + hero + finge
 pre-registration + sim2real ≈ **3:00**. Do not cut panel 4 to save time — the
 pre-registration verdict is the discipline highlight, and it is 36 seconds.
 
-## 0:00–0:25 — Frame it (header, no clicking)
+## 0:00–0:33 — Frame it (header, no clicking)
 
-> "Streaming ASR is reported as one aggregate WER. That hides what a deployment dies of: not
+> "ASR is reported as one aggregate WER. That hides what a deployment dies of: not
 > that the model is wrong, but wrong **and confident** — confidence decides whether the agent
 > commits or asks you to repeat. Every input here is real; only the assembly is synthetic.
-> That buys one knob at a time, everything else held still."
+> That buys one knob at a time, everything else held still. And say the limitation before
+> anyone asks: **every arm ran batch, not streaming.** This is acoustic robustness, not a
+> live-agent map."
 
 Point at the badge and read it: real grid, 12,320 rows, 176 conditions, three arms.
 
-## 0:25–1:30 — Panel 1, the hero. This is the whole project.
+## 0:33–1:38 — Panel 1, the hero. This is the whole project.
 
 **The readout is already loaded on the worst dead zone — you do not need to hover to get the
 headline.** Hover later, to show it is live.
@@ -114,7 +116,7 @@ vanished, and **7** returned nothing on any clip — a confidence-based monitor 
 blind to those, because there is no confidence to be low. Confidence is the **64th
 percentile** within nova-3, over 40 clips and 363 reference words.
 
-## 1:30–2:05 — Panel 2, where in factor space?   *(first to cut)*
+## 1:38–2:13 — Panel 2, where in factor space?   *(first to cut)*
 
 > "The same conditions in factor space, one per cell — the facets split noise, codec and
 > rolloff, so nothing is averaged away. Solid red is a dead zone; dashed red is a cell where
@@ -129,7 +131,7 @@ accuracy); confidently-*wrong* is the rare part. The engine and road facets are 
 because those arms ran a reduced design — two rt60 × two SNR levels. That is the experiment,
 not a missing panel.
 
-## 2:05–2:50 — Panel 3, the mechanism, and the "so what"
+## 2:13–2:58 — Panel 3, the mechanism, and the "so what"
 
 > "Stop counting errors and classify them. Every family here has the same dominant signature:
 > **deletions**. Falling SNR takes them to 0.53 of reference words, rolloff 0.51, reverb 0.46
@@ -141,7 +143,7 @@ not a missing panel.
 > rate: **0.63 against an overall WER of 0.51**. Entities degrade faster than the transcript,
 > and entities are what the agent is for."
 
-## 2:50–3:30 — Panel 4, and the discipline point
+## 2:58–3:38 — Panel 4, and the discipline point
 
 Read the grey **SINGLE-ARM RESULT** banner first, then the green verdict box.
 
@@ -159,7 +161,7 @@ transcription **did not reproduce** — shown as unconfirmed rather than quietly
 the verdict ever reads NOT CONFIRMED, read it with the *same* emphasis; the panel gives both
 statuses equal prominence on purpose.
 
-## 3:30–4:25 — Close on panels 5 through 8   *(panel 5 is second to cut)*
+## 3:38–4:33 — Close on panels 5 through 8   *(panel 5 is second to cut)*
 
 Click **step ▶** three or four times on panel 5, then deliver the null in one breath.
 
@@ -198,6 +200,7 @@ panel 8.
 | "Panel 4 is this arm's sensitivity" | It is **nova-3's**, always, and it blanks on the other arms. |
 | "Scribe has the best WER of the three" | `elevenlabs-scribe` is marked ‡ and is **excluded from cross-arm WER**: its orthography is non-deterministic across identical calls, so its offset is a per-call draw, not a constant that can be subtracted. Its dead-zone rate and confidence shape *are* comparable — they are computed within the arm. Rank it on those, never on WER. |
 | "Active learning saved us N calls" | It is a **null**. Report the budget. |
+| "This is a streaming-ASR study" / "we measured a streaming model" | **Nothing was streamed.** All three arms are batch: Deepgram's pre-recorded endpoint (never `listen.live`), ElevenLabs' batch REST endpoint (never `scribe_v2_realtime`), Whisper locally with full-file lookahead. The commercial arms are here for their **per-word confidence**, not for their streaming mode. Say it first, in the frame — it is limitation 17 in the write-up and it is stronger volunteered than extracted. |
 | "Panel 6's gap is 19.9 points" | That number was a corpus-difference artifact and is dead. The clip-matched gap is **12.1**. |
 
 ## If something goes wrong
