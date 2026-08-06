@@ -2019,6 +2019,11 @@ def test_the_pin_covers_every_report_document():
     """
     exempt = {"report/measurements.md",       # capture-chain log, measured once
               "report/INTERVIEW_RUNBOOK.md",  # rehearsal notes, not a deliverable
+              # Stage directions moved off the demo's screen. Same category as
+              # the runbook -- not a deliverable, never quoted -- and it is
+              # written to quote no figures at all, naming the artifact each
+              # note depends on instead, so there is nothing in it to drift.
+              "report/_demo_internal_notes.md",
               }
     # report/UNDERSTANDING.md is NOT exempt — it is in DOCS with its headline
     # figures pinned (see `checks_understanding`), which is the point of this

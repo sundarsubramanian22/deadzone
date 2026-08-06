@@ -12,24 +12,39 @@ anything. Then they learn that the model scores every pair **exactly equal**.
     ./.venv/bin/python demos/demo_listen.py --sheet     # print the paper sheet
     ./.venv/bin/python demos/demo_listen.py --check     # preflight the artifacts
 
-WHY THIS BEAT EXISTS. Every other demo in this kit shows you a number. This one
-manufactures a disagreement and puts the human on the wrong side of it -- which
-is the only way to make "you cannot QA a voice agent by listening to it" land as
-something the listener discovered rather than something they were told.
+WHY THIS BEAT EXISTS -- AND WHAT IT IS NOT. This is the MOTIVATING HOOK, not a
+finding. It exists to manufacture, live, the one question the whole project was
+built to answer: a person hears a difference between two clips, and the model
+reports none at all. That gap is the reason there is an instrument downstream of
+this segment. It is deliberately NOT presented as a result, because with one
+listener and three clips it cannot be one.
+
+NO PRESENTER NOTES ON SCREEN. Stage directions used to print into the terminal
+alongside the content -- fine when rehearsing alone, wrong the moment the screen
+is shared, because the audience reads the instructions being given about them.
+They now live in `report/_demo_internal_notes.md` and nothing in this file writes
+an aside to stdout. `tests/test_demo_listen.py` asserts that, with a negative
+control that finds the same phrasings in the notes file so the matcher is real.
+
+NOTHING PLAYS UNTIL SOMEONE PRESSES ENTER. The preamble states the task, the
+controls and that "about the same" is a valid answer, and only then does audio
+start; there is a second hold between the pairs. Sound arriving before anyone
+knows a question is coming costs you the first clip.
 
 THE SCREEN IS SAFE TO SHOW until the reveal. Every line printed before the
-listener commits is routed through `bprint()`, which runs `find_leaks()` over it
-and REDACTS anything naming a condition, a room, an SNR, an RT60 or a WER. The
-guarantee is structural, not a promise in a comment: `tests/test_demo_listen.py`
-asserts the whole pre-commit half of a real run is clean, and carries a negative
-control that plants a condition name and checks the detector catches it.
+listener commits -- the preamble and both holds included -- is routed through
+`Blind.__call__`, which runs `find_leaks()` over it and REDACTS anything naming a
+condition, a room, an SNR, an RT60 or a WER. The guarantee is structural, not a
+promise in a comment: `tests/test_demo_listen.py` asserts the whole pre-commit
+half of a real run is clean, and carries a negative control that plants a
+condition name and checks the detector catches it.
 
 WHAT IS MEASURED AND WHAT IS NOT -- the script says this out loud and so should
 you. The model-side result (paired difference -0.0178 WER, 95% CI spanning zero,
 over all 40 clips) is a measurement. The listener half is **n=1, unblinded to the
 hypothesis, not counterbalanced, not level-matched, and the three clips were
-selected precisely because the model tied on them**. It is an intuition pump. It
-is not data, and the script refuses to present it as data.
+selected precisely because the model tied on them**. It is the hook. It is not
+data, and the script refuses to present it as data.
 
 THE DIRECTION IS NOT THE FINDING. A sealed prediction (results/audio/demo/
 PREREGISTERED_PREDICTION.md) said the babble arm would be the harder one; the one
@@ -90,6 +105,13 @@ REVEAL_BANNER = "WHAT THE MODEL SCORED"
 
 DEFAULT_N_PAIRS = 2          # the target beat: two pairs, ~3 minutes including talk
 MAX_ASK_RETRIES = 5          # never loop forever on unparseable input
+
+# The two holds. Named here rather than typed at the call site because the tests
+# assert on them: one pins that no audio is played before the first, the other
+# that the second exists between the pairs. A string typed in two places is a
+# test that can pass while the screen says something else.
+READY_PROMPT = "press enter when you are ready"
+NEXT_PAIR_PROMPT = "Ready for the next pair?"
 
 
 # ==========================================================================
@@ -334,7 +356,7 @@ class Turn:
         return self.mode == "live" and not self.eof and not self.interrupted
 
 
-def ask(prompt: str, turn: Turn) -> str | None:
+def ask(prompt: str, turn: Turn, *, eof_ends_the_beat: bool = True) -> str | None:
     """
     One line of input. Returns None on EOF or Ctrl-C, having recorded which.
 
@@ -342,19 +364,54 @@ def ask(prompt: str, turn: Turn) -> str | None:
     cutting the segment short. Neither may raise, and neither may leave the
     caller in a loop -- both flip `turn` out of live mode so every later prompt
     short-circuits without touching stdin again.
+
+    `eof_ends_the_beat=False` is for the holds (`hold()`), and the asymmetry is
+    deliberate: a hold is a courtesy to a live room, so a run with nobody at the
+    keyboard must walk straight past it rather than have the *waiting* be what
+    ends the session. Ctrl-C is the opposite case -- somebody IS there and wants
+    out -- so it is honoured at a hold like anywhere else. The consequence worth
+    knowing: with EOF on stdin the stop reason is still decided by the first real
+    question, which is where it belongs.
     """
     if not turn.live:
         return None
     try:
         return input(prompt).strip().lower()
     except EOFError:
-        turn.eof = True
+        if eof_ends_the_beat:
+            turn.eof = True
         print()
         return None
     except KeyboardInterrupt:
         turn.interrupted = True
         print()
         return None
+
+
+def hold(line: str, turn: Turn, blind: "Blind", on_replay=None) -> None:
+    """
+    Stop and wait for a human before anything else happens.
+
+    Prints NOTHING when there is no live turn to wait for: a rehearsal that
+    displays "press enter" and then does not wait is lying about its own
+    controls, and `--replay` is meant to run start to finish untouched.
+
+    `on_replay`, when given, is what [r] does -- used by the between-pairs hold
+    so the pair just revealed can be heard again, now that the listener knows
+    what was in it.
+    """
+    if not turn.live:
+        return
+    blind("")
+    blind(line)
+    for _ in range(MAX_ASK_RETRIES):
+        raw = ask("  > ", turn, eof_ends_the_beat=False)
+        if raw is None:
+            return
+        if on_replay is not None and raw in ("r", "rr", "again", "replay"):
+            on_replay()
+            continue
+        return
 
 
 # ==========================================================================
@@ -404,26 +461,47 @@ def replay_answer(pair: dict, calls: dict) -> dict:
 # ==========================================================================
 
 def intro_lines(n_pairs: int, ink: Ink, width: int, mode: str) -> list[str]:
-    """The framing. Says nothing about what is being varied."""
+    """
+    The preamble. Says what is about to happen and nothing about what is varied.
+
+    It exists because the first version of this beat started playing the instant
+    the command was invoked. On a screen-share that means sound arrives before
+    anyone knows a question is coming, and the first clip is spent working out
+    what is going on instead of listening to it. Everything here is framing the
+    listener needs BEFORE they hear anything -- including, explicitly, that "about
+    the same" is a real answer, because a menu that only offers 1 and 2 is a menu
+    that manufactures a preference.
+    """
     L = [
         "",
         ink.bold("  A LISTENING TEST — you go first"),
         ink.dim("  " + "─" * (width - 4)),
         "",
-        f"  {n_pairs} pairs of short clips. Same voice throughout; within a pair,",
-        "  the same sentence twice.",
+        "  Before I show you a single number out of this project, I want one",
+        "  judgement from you — made before you have seen anything that could",
+        "  steer it.",
         "",
-        "  For each pair, one question:  " + ink.bold("which one is harder to understand?"),
+        "  " + ink.bold("How it works"),
+        f"    · {n_pairs} pairs of short clips, three minutes or so in total. Same",
+        "      voice throughout; within a pair, the same sentence twice, damaged",
+        "      two different ways.",
+        "    · For each pair, one question:  "
+        + ink.bold("which one is harder to understand?"),
+        "    · Replay as much as you like — [r] plays both again, [r1] or [r2]",
+        "      plays just one. No hurry, no limit.",
+        "    · " + ink.bold("\"About the same\" is a real answer") + " — that is [s]. Take it if it",
+        "      is true; it is not a cop-out and it is not the wrong answer.",
+        "    · You commit first. Then I show you what the model scored.",
         "",
         ink.dim("  Use the volume however you like — the clips are not level-matched,"),
-        ink.dim("  and loudness is not what you are being asked to judge. Replay as"),
-        ink.dim("  often as you want. \"About the same\" is a real answer; take it if"),
-        ink.dim("  it is true."),
+        ink.dim("  and loudness is not what you are being asked to judge. Nothing"),
+        ink.dim("  printed before you answer names what is being varied; that is"),
+        ink.dim("  enforced by a redactor in the print path, not by me remembering."),
         "",
     ]
     if mode == "replay":
         L += [ink.yellow("  [replay] no live listener — playing back a recorded "
-                         "session's answers."), ""]
+                         "session's answers, and never waiting for input."), ""]
     return L
 
 
@@ -508,7 +586,8 @@ def reveal_lines(pair: dict, order: list[tuple[str, dict]], answer: dict,
     if equal:
         L += [ink.bold(ink.red("      identical.  not close — EQUAL.")), ""]
     else:
-        L += [ink.yellow("      (these two are not equal — check the manifest)"), ""]
+        L += [ink.yellow("      (these two are not equal — this demo set has drifted "
+                         "from the grid table)"), ""]
 
     L += [
         "  what was actually said:",
@@ -529,10 +608,6 @@ def reveal_lines(pair: dict, order: list[tuple[str, dict]], answer: dict,
     L += [
         "  " + ink.bold("Two different degradations. Two different broken words."),
         "  " + ink.bold("One number, the same for both."),
-        "",
-        ink.dim("  (presenter note: three clips — do not read an edit-type signature"),
-        ink.dim("   off them. At grid level rt60 >= 0.7 drives DELETIONS, which runs"),
-        ink.dim("   opposite to what these three happen to show.)"),
     ]
     return L
 
@@ -590,48 +665,62 @@ def prediction_lines(man: dict, ink: Ink, width: int) -> list[str]:
     """
     The sealed prediction, and the fact that it lost.
 
-    Delivered whichever way the listener went, because the direction is not the
-    claim. The temptation on stage is to reach for DRR the moment someone finds
-    the reverberant clip harder -- that is post-hoc, n=1 cannot adjudicate it,
-    and it is exactly the move the failed prediction should make you distrust.
+    Delivered whichever way the listener went, because the direction was never
+    the claim. Written to be READ ALOUD to a room: it is a first-person account
+    of getting something wrong, not a note to the presenter about it. The
+    stage-direction version of the last paragraph -- which named the mechanism it
+    was telling you not to reach for, and so put it on screen anyway -- is in
+    `report/_demo_internal_notes.md`.
     """
     sess = (man.get("listener_sessions") or [{}])[0]
     calls = sess.get("calls") or {}
     n_opposite = sum(1 for c in calls.values()
                      if c.get("harder_arm") and c["harder_arm"] != sess.get("predicted_harder_arm"))
+    n_pref = sum(1 for c in calls.values() if c.get("harder_arm"))
     return [
         "",
         ink.dim("  " + "─" * (width - 4)),
         ink.bold("  THE PREDICTION I GOT WRONG"),
         "",
-        "  Before anyone listened, I sealed a prediction: that the buried-in-babble",
-        "  clip would be the harder one. The listener I ran this on",
-        f"  " + ink.bold(f"went the OTHER way in {n_opposite} of {len(calls)} pairs."),
+        "  Before anyone listened I sealed a prediction about which clip a person",
+        "  would find harder, and committed it so it could not be edited after the",
+        "  fact. The listener I ran this on "
+        + ink.bold(f"went the OTHER way in {n_opposite} of {len(calls)} pairs."),
         "",
         ink.dim("      results/audio/demo/PREREGISTERED_PREDICTION.md — OUTCOME"),
         "",
-        "  My own rubric had two outcomes: 'they rank them unequal' and 'they rank",
-        "  them equal.' It never considered " + ink.bold("'unequal, but backwards'") + " — so the miss",
-        "  scored as a pass under a rubric that could not fail. That is the failure",
-        "  mode this whole project is about, committed against my own demo.",
+        "  The worse half is the rubric I sealed with it. It listed two outcomes:",
+        "  they rank a pair unequal, or they rank it equal. It never considered",
+        "  " + ink.bold("'unequal, but backwards'") + " — so a miss scores as a pass against a rule",
+        "  that could not fail. A pre-registration that cannot fail is decoration,",
+        "  and I wrote one, in the project about not fooling yourself with a number.",
         "",
-        "  " + ink.bold("What survived is the half that never needed a direction:"),
-        "  a confident human preference in 3 pairs out of 3, and a model with none.",
+        "  " + ink.bold("What survives is the half that never needed a direction:"),
+        f"  a stated human preference in {n_pref} pairs out of {len(calls)}, and a model with none.",
         "",
-        ink.dim("  (presenter note: do NOT repair this on stage with the DRR number."),
-        ink.dim("   It fits the result now in view and it is post-hoc. The model-side"),
-        ink.dim("   DRR result — spearman(RT60, WER) +0.800 vs spearman(DRR, WER)"),
-        ink.dim("   −1.000 across the grid — is measured and stands on its own.)"),
+        "  There is a tidy mechanism I could hand you for why it went the way it",
+        "  did. I am not going to. I thought of it after seeing the result, one",
+        "  listener cannot settle it, and reaching for it is exactly the move this",
+        "  failure should make you distrust.",
     ]
 
 
 def honesty_lines(man: dict, n_answered: int, ink: Ink, width: int) -> list[str]:
+    """
+    The disclaimer, which is doing a different job than it looks like.
+
+    It is NOT a retraction of a finding, because the listening half was never
+    offered as one -- it is the hook, and its job is to raise a question a room
+    can feel. Saying so out loud is what makes the two halves separable: the
+    hook is n=1 and the interval underneath it is a measurement, and neither is
+    improved by being confused with the other.
+    """
     sess = (man.get("listener_sessions") or [{}])[0]
     pr = man.get("paired_result") or {}
     return [
         "",
         ink.dim("  " + "─" * (width - 4)),
-        ink.bold(ink.yellow("  n = 1. THIS HALF IS AN INTUITION PUMP, NOT DATA.")),
+        ink.bold(ink.yellow("  n = 1. THIS HALF IS THE HOOK — AN INTUITION PUMP, NOT DATA.")),
         "",
         f"  That was {n_answered} judgement{'' if n_answered == 1 else 's'} from one "
         f"listener, one speaker, one accent, one",
@@ -642,6 +731,7 @@ def honesty_lines(man: dict, n_answered: int, ink: Ink, width: int) -> list[str]
         "  pairs it cannot be. And these clips were selected " + ink.bold("because") + " the model tied",
         "  on them: defensible for a demonstration, indefensible as an estimate.",
         "",
+        "  So what you just did is the " + ink.bold("question") + ", not the answer.",
         "  " + ink.bold("The measured half is the model-side interval") +
         f" — {float(pr.get('paired_diff_A_minus_B', 0)):+.4f} WER,",
         f"  CI [{float(pr.get('ci_lo', 0)):+.4f}, {float(pr.get('ci_hi', 0)):+.4f}], "
@@ -657,16 +747,69 @@ def honesty_lines(man: dict, n_answered: int, ink: Ink, width: int) -> list[str]
     ]
 
 
-def takeaway_lines(ink: Ink, width: int) -> list[str]:
+def takeaway_lines(man: dict, responses: list[dict], ink: Ink,
+                   width: int) -> list[str]:
+    """
+    The close, and it is a QUESTION rather than a verdict.
+
+    This used to end on "you cannot QA a voice agent by listening to it" — a
+    conclusion, stated in the voice of a finding, off one listener and three
+    clips. It cannot carry that. What the segment actually earns is the reason
+    the rest of the repo exists: a person reports a difference, the model
+    reports none, and there was no way to adjudicate that by listening harder.
+
+    The opening and the punch line both adapt to what the listener really said.
+    Telling somebody who called every pair a tie that they "had a preference" is
+    the same class of error as the rest of this project — asserting a result the
+    data does not contain — and it would be committed in the closing sentence.
+    A listener who agrees with the model gets told that agreeing is worth no more
+    than disagreeing, which is true and is why the interval underneath exists.
+    """
+    pr = man.get("paired_result") or {}
+    n_pick = sum(1 for r in responses if r.get("answer") == "pick")
+    n_same = sum(1 for r in responses if r.get("answer") == "same")
+    n_answered = n_pick + n_same
+
+    punch = "Your ears and that number are not measuring the same thing."
+    if n_pick and n_pick == n_answered:
+        head = ["  You heard a difference in the pair you judged." if n_pick == 1
+                else f"  You heard a difference in every one of the {n_pick} pairs "
+                     f"you judged."]
+    elif n_pick:
+        head = [f"  You heard a difference in {n_pick} of the {n_answered} pairs "
+                f"you judged."]
+    elif n_same:
+        head = ["  You called them about the same."]
+        punch = "One listener agreeing is worth no more than one listener disagreeing."
+    else:
+        head = ["  However you would have called those pairs —"]
+        punch = "A judgement by ear and that number are not the same measurement."
+
     return [
         "",
         ink.dim("  " + "─" * (width - 4)),
+        ink.bold("  THE QUESTION THAT STARTED THIS"),
         "",
-        "  " + ink.bold(ink.red("You cannot QA a voice agent by listening to it.")),
+        *head,
+        "  " + ink.bold("The model reports no difference at all.") + " Not a small one — none:",
+        "  every pair you heard scored identically, and across all "
+        f"{int(pr.get('n_clips', 0))} clips the",
+        "  two kinds of damage differ by "
+        + ink.bold(f"{float(pr.get('paired_diff_A_minus_B', 0)):+.4f} WER") +
+        ", an interval that spans zero.",
         "",
-        "  \"Sounds fine to me\" is not evidence the ASR works, and \"sounds terrible\"",
-        "  is not evidence it fails. If your acceptance test is a person with",
-        "  headphones, you are measuring the wrong system.",
+        "  " + ink.bold(ink.red(punch)),
+        "",
+        "  Whether those two ever track each other is where this project started,",
+        "  in a conversation about how voice models actually get tuned: move a",
+        "  slider, watch the error rate come down, ship it — and rarely be able to",
+        "  say WHY it came down, or whether a person and the model are even failing",
+        "  on the same audio.",
+        "",
+        "  \"Sounds fine to me\" is an opinion, and I could not check it. So I built",
+        "  something that could measure it instead. Everything after this segment",
+        "  is that instrument — and this segment is the question it was built for,",
+        "  not one of its results.",
         "",
     ]
 
@@ -840,9 +983,23 @@ def run(man: dict, ink: Ink, width: int, *, n_pairs: int, audio: bool,
         blind(ink.dim("  (stdin is not a terminal: answers are read from it if present,"))
         blind(ink.dim("   otherwise the recorded session takes over and the beat still runs)"))
 
+    # NOTHING PLAYS BEFORE THIS RETURNS. The hold is the whole reason the
+    # preamble above is worth printing: audio that starts on invocation lands
+    # before the room knows a question is coming.
+    hold("  " + ink.bold(READY_PROMPT), turn, blind)
+
     responses = []
+    prev_order: list[tuple[str, dict]] | None = None
     for i, pair in enumerate(pairs, start=1):
         order = arms_in_play_order(pair)
+        if prev_order is not None:
+            hold("  " + ink.bold(NEXT_PAIR_PROMPT)
+                 + ink.dim("   [enter] continue   ·   replay this one [r]"),
+                 turn, blind,
+                 # Bound as a default so the loop variable cannot rebind under it;
+                 # [r] here means the pair just revealed, heard again now that the
+                 # listener knows what was in it.
+                 on_replay=lambda o=prev_order: play_pair(o, ink, audio))
         for line in pair_prompt_lines(i, len(pairs), ink, width):
             blind(line)
         play_pair(order, ink, audio)
@@ -889,6 +1046,7 @@ def run(man: dict, ink: Ink, width: int, *, n_pairs: int, audio: bool,
                 "ref": pair["ref"],
             },
         })
+        prev_order = order
 
     live = measured_from_master(man)
     for line in measured_lines(man, live, ink, width):
@@ -903,7 +1061,7 @@ def run(man: dict, ink: Ink, width: int, *, n_pairs: int, audio: bool,
     n_answered = sum(1 for r in responses if r["answer"] in ("pick", "same"))
     for line in honesty_lines(man, n_answered, ink, width):
         print(line)
-    for line in takeaway_lines(ink, width):
+    for line in takeaway_lines(man, responses, ink, width):
         print(line)
 
     return {
@@ -1008,7 +1166,8 @@ def print_sheet() -> int:
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
         description="A blind listening test, run live: the listener ranks the "
-                    "clips, then learns the model scores them equal.")
+                    "clips, then learns the model scores them equal. The "
+                    "motivating hook for the project, not one of its findings.")
     ap.add_argument("--replay", action="store_true",
                     help="run the whole beat with a previously recorded listener's "
                          "answers (rehearsal, or when nobody wants to participate)")

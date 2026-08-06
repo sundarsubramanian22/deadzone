@@ -5,7 +5,18 @@ test_demo_listen.py — the interactive beat cannot leak, cannot hang, cannot li
     ./.venv/bin/python tests/test_demo_listen.py
 
 `demos/demo_listen.py` is the one demo that puts a human on the spot in front of
-an audience. Three ways it can fail, and all three are silent:
+an audience. Five ways it can fail, and all five are silent:
+
+  * IT STARTS PLAYING BEFORE ANYONE IS READY. Audio that begins on invocation
+    lands before the room knows a question is coming, and the first clip is spent
+    working out what is happening. The preamble hold is asserted STRUCTURALLY —
+    an ordered log of play/input events, not a comment saying it is fine.
+
+  * IT PUTS STAGE DIRECTIONS ON A SHARED SCREEN. The presenter notes used to
+    print into the terminal, where an audience reads the instructions being given
+    about them. They now live in `report/_demo_internal_notes.md`; the check that
+    they are gone carries a negative control that finds the same phrasings in
+    that file, so the matcher is proven able to match.
 
   * IT TELLS THEM THE ANSWER FIRST. A listening test that primes the listener
     still "works" — they still rank the clips, the ranking is still recorded, and
@@ -39,6 +50,7 @@ if _REPO_ROOT not in _sys.path:
     _sys.path.insert(0, _REPO_ROOT)
 # -------------------------------------------------------------------------
 
+import builtins
 import contextlib
 import copy
 import csv
@@ -65,6 +77,25 @@ MASTER = REPO / "results" / "master.csv"
 # The documents in results/audio/demo/ are HAND-AUTHORED and carry a record that
 # derives from no artifact (SPEC: REGENERATION_HAZARD.md). This demo may read
 # them and must never write them.
+# Stdin lines that are eaten by the two holds rather than by a question. Named
+# so the scripted flows below read as "hold, answer, hold, answer" instead of a
+# wall of \n, and so a third hold is one edit here rather than five string
+# literals quietly falling out of step with the script.
+READY = "\n"          # the preamble hold, before any audio
+NEXT = "\n"           # the hold between the pairs
+
+# The stage directions this demo used to print. Kept as data because two tests
+# share them: one asserts they never reach stdout, the other asserts they ARE
+# findable in the handoff file — which is what makes the first test a check
+# rather than a spelling of something that could never have matched.
+PRESENTER_NOTE_MARKERS = (
+    "(presenter note",
+    "presenter note:",
+    "do not read an edit-type signature",
+    "do not repair this on stage",
+)
+INTERNAL_NOTES = "report/_demo_internal_notes.md"
+
 PROTECTED = [
     "results/audio/demo/KEY.md",
     "results/audio/demo/DEMO_SCRIPT.md",
@@ -240,13 +271,17 @@ class TheBeatRuns(unittest.TestCase):
                        "spans zero",
                        "the prediction i got wrong",
                        "intuition pump, not data",
-                       "you cannot qa a voice agent by listening to it"):
+                       "the question that started this"):
             self.assertIn(needed, out.lower(), f"missing beat: {needed!r}")
 
     def test_replay_never_prompts(self):
         """A rehearsal that stops for input is not a rehearsal you can run alone."""
         self.assertNotIn("[1] clip 1 is harder", self.r.stdout)
         self.assertNotIn("[c] clear", self.r.stdout)
+        # The holds included: printing "press enter when you are ready" and then
+        # not waiting is the script lying about its own controls.
+        self.assertNotIn(dl.READY_PROMPT, self.r.stdout)
+        self.assertNotIn(dl.NEXT_PAIR_PROMPT, self.r.stdout)
 
     def test_replay_reproduces_the_recorded_listeners_calls(self):
         calls = dl.recorded_calls(self.man)
@@ -284,11 +319,21 @@ class InputCannotHangOrCrash(unittest.TestCase):
     """It reads stdin in front of an audience. Every degenerate case exits 0."""
 
     def test_eof_finishes_the_beat_and_exits_zero(self):
+        """
+        EOF at the preamble hold must NOT be what ends the beat.
+
+        A hold is a courtesy to a live room; a piped run has nobody to press
+        enter and must walk past it, leaving the stop reason to be decided by the
+        first real question. If the hold claimed the EOF instead, this run would
+        still exit 0 and still print a closing — and the `stopped_reason` below
+        would be recorded against the wrong prompt.
+        """
         with tempfile.TemporaryDirectory() as d:
             r = run_listen("--sessions-dir", d, stdin="")
             self.assertEqual(r.returncode, 0, r.stderr[-3000:])
+            self.assertIn(dl.READY_PROMPT, r.stdout, "the hold never printed")
             self.assertIn("switching to the recorded session", r.stdout)
-            self.assertIn("you cannot qa a voice agent", r.stdout.lower())
+            self.assertIn("the question that started this", r.stdout.lower())
             rec = json.loads(sorted(Path(d).glob("*.json"))[-1].read_text())
             self.assertEqual(rec["stopped_reason"], "eof")
             self.assertTrue(rec["stopped_early"])
@@ -344,7 +389,8 @@ class InputCannotHangOrCrash(unittest.TestCase):
         man = manifest()
         pairs = dl.ordered_pairs(man, dl.DEFAULT_N_PAIRS)
         with tempfile.TemporaryDirectory() as d:
-            r = run_listen("--sessions-dir", d, stdin="1\nc\ns\ny\n")
+            r = run_listen("--sessions-dir", d,
+                           stdin=READY + "1\nc\n" + NEXT + "s\n" + "y\n")
             self.assertEqual(r.returncode, 0, r.stderr[-3000:])
             rec = json.loads(sorted(Path(d).glob("*.json"))[-1].read_text())
             first, second = rec["responses"]
@@ -363,7 +409,7 @@ class InputCannotHangOrCrash(unittest.TestCase):
 
     def test_replaying_a_clip_is_counted_not_refused(self):
         with tempfile.TemporaryDirectory() as d:
-            r = run_listen("--sessions-dir", d, stdin="r\nr2\n2\nt\n\n")
+            r = run_listen("--sessions-dir", d, stdin=READY + "r\nr2\n2\nt\n\n")
             self.assertEqual(r.returncode, 0, r.stderr[-3000:])
             rec = json.loads(sorted(Path(d).glob("*.json"))[-1].read_text())
             self.assertEqual(rec["responses"][0]["n_replays"], 2)
@@ -374,7 +420,8 @@ class SessionRecord(unittest.TestCase):
 
     def test_it_is_well_formed_and_self_describing(self):
         with tempfile.TemporaryDirectory() as d:
-            r = run_listen("--sessions-dir", d, stdin="1\nc\n2\nl\ny\n")
+            r = run_listen("--sessions-dir", d,
+                           stdin=READY + "1\nc\n" + NEXT + "2\nl\n" + "y\n")
             self.assertEqual(r.returncode, 0, r.stderr[-3000:])
             files = sorted(Path(d).glob("*.json"))
             self.assertEqual(len(files), 1)
@@ -413,7 +460,8 @@ class SessionRecord(unittest.TestCase):
 
     def test_no_write_suppresses_it_entirely(self):
         with tempfile.TemporaryDirectory() as d:
-            r = run_listen("--no-write", "--sessions-dir", d, stdin="s\ns\n\n")
+            r = run_listen("--no-write", "--sessions-dir", d,
+                           stdin=READY + "s\n" + NEXT + "s\n" + "\n")
             self.assertEqual(r.returncode, 0, r.stderr[-3000:])
             self.assertEqual(list(Path(d).glob("*.json")), [])
 
@@ -567,10 +615,288 @@ class HonestFraming(unittest.TestCase):
         self.assertIn("the measured half is the model-side interval",
                       self.out.lower())
 
-    def test_the_drr_story_is_flagged_as_post_hoc_for_the_human_side(self):
+    def test_the_post_hoc_mechanism_is_declined_out_loud_not_printed(self):
+        """
+        The old version of this was a stage direction telling the presenter not to
+        reach for a mechanism — and it NAMED the mechanism, with its correlations,
+        on screen. An aside that leaks its own subject is worse than no aside: it
+        hands the room the post-hoc story while claiming to withhold it.
+
+        What must survive is the refusal itself, said to the room in the first
+        person. What must not survive is the mechanism's numbers anywhere in that
+        section.
+        """
         low = self.out.lower()
-        self.assertIn("post-hoc", low)
-        self.assertIn("do not repair", low)
+        self.assertIn("i am not going to", low,
+                      "the refusal to offer a post-hoc mechanism is gone entirely")
+        self.assertIn("after seeing the result", low)
+
+        section = "\n".join(dl.prediction_lines(self.man, dl.Ink(False), 90)).lower()
+        self.assertIn("i am not going to", section, "…and it is not in this section")
+        for named in ("spearman", "drr", "rt60", "+0.800", "−1.000", "-1.000"):
+            self.assertNotIn(named, section,
+                             f"the section names {named!r} — it is describing the "
+                             f"very mechanism it says it will not offer")
+
+
+class NothingPlaysBeforeSomebodyIsReady(unittest.TestCase):
+    """
+    The preamble, and the hold that makes it worth printing.
+
+    Sound arriving on invocation is not a cosmetic problem: on a screen-share the
+    first clip is spent working out what is happening, and that clip is one of
+    only two or three judgements the segment gets.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.man = manifest()
+
+    def _events(self, **kw) -> tuple[list[tuple[str, str]], str]:
+        """
+        Run the beat in-process with `play` and `input` replaced by recorders.
+
+        Returns the ORDERED event log, which is the only form in which "no audio
+        before the enter" is checkable — a comment cannot be asserted and a
+        stdout ordering check would pass against a `play()` that printed nothing.
+        """
+        events: list[tuple[str, str]] = []
+        real_play, real_input = dl.play, builtins.input
+
+        def fake_play(path, ink, enabled):
+            events.append(("play", Path(str(path)).name))
+
+        def fake_input(prompt=""):
+            events.append(("input", str(prompt).strip()))
+            return ""
+
+        buf = io.StringIO()
+        try:
+            dl.play, builtins.input = fake_play, fake_input
+            with contextlib.redirect_stdout(buf):
+                dl.run(self.man, dl.Ink(False), 90, n_pairs=2, audio=True,
+                       mode="live", payoff=True, **kw)
+        finally:
+            dl.play, builtins.input = real_play, real_input
+        return events, buf.getvalue()
+
+    def test_no_audio_is_played_before_the_first_prompt(self):
+        events, _ = self._events()
+        kinds = [k for k, _ in events]
+        # Anti-vacuity in both directions: an implementation that plays nothing,
+        # or one that never reads input, would satisfy an ordering check for the
+        # wrong reason.
+        self.assertIn("play", kinds, "nothing was played at all")
+        self.assertIn("input", kinds, "nothing was read at all")
+        self.assertEqual(kinds[0], "input",
+                         f"the first thing the beat did was {events[0]!r}; audio "
+                         f"must not start before somebody says go")
+        self.assertLess(kinds.index("input"), kinds.index("play"))
+
+    def test_the_first_prompt_is_the_ready_hold_and_the_preamble_precedes_it(self):
+        events, out = self._events()
+        first_prompt_index = next(i for i, (k, _) in enumerate(events) if k == "input")
+        self.assertEqual(first_prompt_index, 0)
+        self.assertIn(dl.READY_PROMPT, out)
+        # Everything the listener needs in order to answer is stated BEFORE the
+        # hold; a preamble printed after the audio is not a preamble.
+        head = out[:out.index(dl.READY_PROMPT)].lower()
+        for needed in ("which one is harder to understand?",
+                       "about the same",
+                       "replay as much as you like",
+                       "you commit first"):
+            self.assertIn(needed, head, f"the preamble never says: {needed!r}")
+        self.assertNotIn("(audio off", head)
+
+    def test_the_hold_really_consumes_a_line(self):
+        """
+        Anti-vacuity for the hold itself. `q` is fed first: if the hold reads it,
+        the first question gets `s` and the answer is "same". If the hold prints a
+        prompt and reads nothing, `q` reaches the first question instead and the
+        answer is "skipped" — so the two outcomes are distinguishable and only one
+        of them is a hold.
+        """
+        with tempfile.TemporaryDirectory() as d:
+            r = run_listen("--sessions-dir", d, stdin="q\n" + "s\n" + NEXT + "s\n")
+            self.assertEqual(r.returncode, 0, r.stderr[-3000:])
+            rec = json.loads(sorted(Path(d).glob("*.json"))[-1].read_text())
+            self.assertEqual(rec["responses"][0]["answer"], "same",
+                             "the hold printed a prompt but did not read a line")
+
+    def test_a_rehearsal_neither_prompts_nor_blocks(self):
+        r = run_listen("--replay")
+        self.assertEqual(r.returncode, 0, r.stderr[-3000:])
+        self.assertNotIn(dl.READY_PROMPT, r.stdout)
+
+
+class ThePauseBetweenPairs(unittest.TestCase):
+
+    @classmethod
+    def setUpClass(cls):
+        cls.man = manifest()
+        cls.pairs = dl.ordered_pairs(cls.man, dl.DEFAULT_N_PAIRS)
+        with tempfile.TemporaryDirectory() as d:
+            cls.r = run_listen("--sessions-dir", d,
+                               stdin=READY + "1\nc\n" + NEXT + "2\nc\n" + "y\n")
+
+    def test_the_pause_exists_and_sits_between_the_two_pairs(self):
+        out = self.r.stdout
+        self.assertIn(dl.NEXT_PAIR_PROMPT, out, "there is no hold between the pairs")
+        at_pause = out.index(dl.NEXT_PAIR_PROMPT)
+        self.assertLess(out.index(dl.REVEAL_BANNER), at_pause,
+                        "the pause comes before the first reveal")
+        self.assertLess(at_pause, out.index("pair 2 of 2"),
+                        "the pause comes after the second pair has already played")
+
+    def test_there_is_no_pause_before_the_first_pair(self):
+        """One hold per gap, not one per pair — n pairs means n-1 pauses."""
+        self.assertEqual(self.r.stdout.count(dl.NEXT_PAIR_PROMPT),
+                         dl.DEFAULT_N_PAIRS - 1)
+        with tempfile.TemporaryDirectory() as d:
+            three = run_listen("--replay", "--write", "--pairs", "3",
+                               "--sessions-dir", d).stdout
+        self.assertEqual(three.count(dl.NEXT_PAIR_PROMPT), 0,
+                         "a rehearsal must not print a hold it will not honour")
+
+    def test_r_at_the_pause_replays_the_pair_just_revealed(self):
+        """
+        [r] there means "that pair again, now that you know what was in it" — so
+        it must replay the pair BEHIND the hold, not the one in front of it.
+        """
+        first = [a["blind"] for _, a in dl.arms_in_play_order(self.pairs[0])]
+        second = [a["blind"] for _, a in dl.arms_in_play_order(self.pairs[1])]
+        with tempfile.TemporaryDirectory() as d:
+            r = run_listen("--sessions-dir", d,
+                           stdin=READY + "1\nc\n" + "r\n" + NEXT + "2\nc\n" + "y\n")
+            self.assertEqual(r.returncode, 0, r.stderr[-3000:])
+            self.assertEqual(r.stdout.count(first[0]), 2,
+                             "[r] at the pause did not replay the pair just heard")
+            self.assertEqual(r.stdout.count(second[0]), 1,
+                             "[r] at the pause played the NEXT pair — that is a leak, "
+                             "not a replay")
+
+
+class NoPresenterNotesOnScreen(unittest.TestCase):
+    """
+    Stage directions belong in `report/_demo_internal_notes.md`, never on a shared
+    screen. The negative control is the point: the same matcher must find the same
+    phrasings in the notes file, or "no presenter notes reached stdout" is a
+    sentence about a matcher that could never match anything.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.replay = run_listen("--replay").stdout
+        with tempfile.TemporaryDirectory() as d:
+            cls.live = run_listen("--sessions-dir", d, "--pairs", "3",
+                                  stdin=READY + "1\nc\n" + NEXT + "s\n"
+                                  + NEXT + "2\nt\n" + "y\n").stdout
+
+    @staticmethod
+    def _found(text: str) -> list[str]:
+        low = text.lower()
+        return [m for m in PRESENTER_NOTE_MARKERS if m in low]
+
+    def test_no_presenter_note_reaches_stdout(self):
+        for label, out in (("--replay", self.replay), ("live", self.live)):
+            with self.subTest(run=label):
+                self.assertGreater(len(out), 2000, "the run produced almost nothing")
+                self.assertEqual(self._found(out), [],
+                                 "a stage direction printed onto the shared screen")
+
+    def test_negative_control_the_matcher_finds_them_in_the_notes_file(self):
+        notes = REPO / INTERNAL_NOTES
+        self.assertTrue(notes.is_file(), f"{INTERNAL_NOTES} is missing — the notes "
+                                         f"were deleted rather than moved")
+        found = self._found(notes.read_text())
+        self.assertEqual(sorted(found), sorted(PRESENTER_NOTE_MARKERS),
+                         "the notes file does not carry every phrasing this test "
+                         "searches for, so the assertion above proves nothing")
+
+    def test_the_notes_file_says_where_the_notes_came_from(self):
+        low = (REPO / INTERNAL_NOTES).read_text().lower()
+        self.assertIn("demos/demo_listen.py", low)
+        self.assertIn("reveal_lines", low)
+        self.assertIn("prediction_lines", low)
+
+    def test_the_source_carries_no_aside_ready_to_be_printed(self):
+        """A note parked in a branch nobody exercised is still on the screen the
+        day that branch runs."""
+        src = (REPO / "demos" / "demo_listen.py").read_text().lower()
+        self.assertNotIn("(presenter note", src)
+
+
+class TheClosingIsTheQuestionNotAVerdict(unittest.TestCase):
+    """
+    The reframe. This segment is the MOTIVATING HOOK, not a finding, and the close
+    has to say so — one listener and three clips cannot carry a conclusion about
+    how anyone should test a voice agent.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.man = manifest()
+        cls.out = run_listen("--replay").stdout
+
+    def test_it_closes_on_the_question_and_the_tie(self):
+        low = self.out.lower()
+        for needed in ("the question that started this",
+                       "the model reports no difference at all",
+                       "every pair you heard scored identically",
+                       "an interval that spans zero",
+                       "is that instrument"):
+            self.assertIn(needed, low, f"the closing lost: {needed!r}")
+
+    def test_it_no_longer_states_the_old_verdict_as_a_finding(self):
+        low = self.out.lower()
+        self.assertNotIn("you cannot qa a voice agent by listening to it", low,
+                         "the close is back to asserting a conclusion off n=1")
+        self.assertIn("not one of its results", low,
+                      "nothing on screen says this segment is not a result")
+
+    def test_the_hook_framing_sits_next_to_the_n_equals_one_label(self):
+        low = self.out.lower()
+        self.assertIn("n = 1", low)
+        self.assertIn("this half is the hook", low,
+                      "the disclaimer reads as a retraction rather than as the "
+                      "hook/measurement split")
+        self.assertIn("intuition pump, not data", low)
+        self.assertIn("the measured half is the model-side interval", low)
+
+    def test_the_close_does_not_invent_a_preference_the_listener_never_stated(self):
+        """
+        A listener who called every pair a tie must not be told they heard a
+        difference. That would be this project's own signature failure — asserting
+        a result the data does not contain — committed in the closing sentence.
+        """
+        tie = [{"answer": "same"}, {"answer": "same"}]
+        pick = [{"answer": "pick"}, {"answer": "pick"}]
+        tie_text = "\n".join(dl.takeaway_lines(self.man, tie, dl.Ink(False), 90)).lower()
+        pick_text = "\n".join(dl.takeaway_lines(self.man, pick, dl.Ink(False), 90)).lower()
+
+        self.assertNotIn("you heard a difference", tie_text)
+        self.assertIn("about the same", tie_text)
+        self.assertIn("agreeing is worth no more than", tie_text)
+        # The control: the same function DOES say it when the listener did.
+        self.assertIn("you heard a difference", pick_text)
+        # And the reason the segment exists survives either way.
+        for text in (tie_text, pick_text):
+            self.assertIn("where this project started", text)
+
+    def test_the_motivation_is_told_as_the_authors_own_and_claims_nothing_about_anyone(self):
+        """
+        The origin story is "a conversation made me want to build this", never a
+        claim about what some company has or has not looked into. The second form
+        is unverifiable, and it would be said in a room where somebody would know.
+        """
+        low = self.out.lower()
+        self.assertIn("in a conversation about how voice models actually get tuned", low)
+        self.assertIn("so i built", low)
+        for banned in ("deepgram", "nobody has", "no one has", "has never been",
+                       "hasn't been studied", "has not been studied",
+                       "unexplored", "nobody at"):
+            self.assertNotIn(banned, low,
+                             f"the origin story makes a claim about others: {banned!r}")
 
 
 class Hygiene(unittest.TestCase):
@@ -601,7 +927,8 @@ class Hygiene(unittest.TestCase):
         before = digest()
         self.assertTrue(before, "no protected documents found — check the paths")
         with tempfile.TemporaryDirectory() as d:
-            run_listen("--sessions-dir", d, stdin="1\nc\n2\nc\ny\n")
+            run_listen("--sessions-dir", d,
+                       stdin=READY + "1\nc\n" + NEXT + "2\nc\n" + "y\n")
         self.assertEqual(before, digest(),
                          "the demo rewrote a hand-authored document")
 
