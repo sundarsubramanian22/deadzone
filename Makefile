@@ -13,7 +13,7 @@
 #
 .DEFAULT_GOAL := help
 .PHONY: help lock test test-core demo demo-prep demo-break demo-al demo-check \
-        dashboard dashboard-build clean-demo demo-live
+        dashboard dashboard-build clean-demo demo-live demo-listen
 
 PY       := ./.venv/bin/python
 # NOTE: `./.venv/bin/pip` is a broken console script on this machine — its shebang
@@ -39,6 +39,7 @@ help:
 	@echo "    make test-core        30 s  the trap functions + the demo kit, green"
 	@echo "    make demo-break       60 s  one clip, clean -> measured dead zone"
 	@echo "    make demo-al          30 s  the surrogate walking onto the boundary"
+	@echo "    make demo-listen      3 min INTERACTIVE — they listen, rank, then see the tie"
 	@echo "    make dashboard         —    open the self-contained HTML from file://"
 	@echo "    make demo                   all four, in sequence"
 	@echo ""
@@ -113,6 +114,15 @@ demo-break: results/demo/demo_cache.json
 ## the active-learning loop, against a GP surrogate fitted to the real grid
 demo-al:
 	@$(PY) demos/demo_al.py
+
+## THE INTERACTIVE BEAT — the interviewer listens and ranks, THEN learns the
+## model scored those clips exactly equal. Offline, no API key, plays wavs
+## through afplay/aplay/play/ffplay. It waits for a human, so it is
+## deliberately NOT in the `demo` chain, which must run unattended.
+##   demos/demo_listen.py --check     preflight
+##   demos/demo_listen.py --replay    rehearse with the recorded 2026-08-05 session
+demo-listen:
+	@$(PY) demos/demo_listen.py
 
 ## OPTIONAL LIVE BEAT — the ONLY target here that needs network + an API key.
 ## Two real nova-3 calls (~$0.001) on one clip: clean, then the #1 measured
