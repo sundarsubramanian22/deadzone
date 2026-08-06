@@ -459,7 +459,17 @@ class Rendering(unittest.TestCase):
     #     provenance, not about model family. A model with no sim arm therefore
     #     has genuinely nothing to plot, and build_sim2real returns an explained
     #     empty state rather than the raw KeyError it used to raise.
-    MODEL_CONDITIONAL_EMPTY = {"panel-sim2real"}
+    #
+    #   panel-sensitivity: results/sobol.json is an EXACT functional ANOVA of the
+    #     complete 4x4x3x3 factorial with 40 clips per cell (5,760
+    #     transcriptions), and only the nova-3 arm ran that factorial. The
+    #     secondary arms ran a 10-clip subset, which is not a complete factorial
+    #     and admits no exact decomposition. Serving the artifact under every arm
+    #     put nova-3's indices and its "N=144, 5760 model evaluations" verdict
+    #     under the whisper/scribe labels -- the SPEC Appendix G defect class, on
+    #     the page about that defect class. Same remedy as sim2real, deliberately:
+    #     one convention for "this analysis exists for one arm only".
+    MODEL_CONDITIONAL_EMPTY = {"panel-sim2real", "panel-sensitivity"}
 
     def test_model_toggle_re_renders_every_panel(self):
         """Switching model must re-render every panel.
@@ -488,6 +498,137 @@ class Rendering(unittest.TestCase):
                         f"explains nothing -- an unexplained blank panel is a bug")
                 continue
             self.assertEqual(empties, 0, f"{pid} went empty after switching model")
+
+
+class SensitivityIsSingleArm(unittest.TestCase):
+    """
+    results/sobol.json belongs to EXACTLY ONE ARM and must never be served under
+    another.
+
+    It is an exact functional-ANOVA decomposition of the complete 4x4x3x3 babble
+    factorial with 40 clips in every cell, and it records the arm in its `model`
+    field. Only nova-3 ran that factorial. Before the fix, build_sensitivity
+    loaded the file for whichever arm was selected, so the whisper and scribe
+    toggles asserted "N=144, 5760 model evaluations" -- nova-3's row count -- for
+    arms that ran 1,760 rows on 10 clips. Two quantities computed over different
+    rows, presented as one.
+
+    The failure was invisible: the panel rendered, the chart drew, the verdict
+    box was green, and every number in it was internally consistent. Nothing but
+    the arm label was wrong. That is why this is pinned by a test rather than by
+    a comment.
+    """
+
+    # The exact clause a presenter reads off panel 4. It is nova-3's row count.
+    # Under any other arm this string is the defect, in the literal form it took.
+    NOVA_ONLY_CLAIM = "N=144, 5760 model evaluations"
+
+    def _sobol(self, tmp, model):
+        """The real saved decomposition, re-stamped with an arm label."""
+        with open(os.path.join(REPO, "results/sobol.json"), encoding="utf-8") as fh:
+            art = json.load(fh)
+        art["model"] = model
+        path = os.path.join(tmp, "sobol.json")
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(art, fh)
+        return path
+
+    @staticmethod
+    def _rows(model, n_clips, n_conditions=8):
+        """Enough shape for the census; too few conditions to fit a surrogate,
+        which is deliberate -- the surrogate branch is a different code path."""
+        return [{"model": model, "clip_id": f"u{c:02d}",
+                 "condition_name": f"cond{k}", "wer": 0.3}
+                for c in range(n_clips) for k in range(n_conditions)]
+
+    def test_another_arm_cannot_be_served_the_saved_decomposition(self):
+        rows = self._rows("nova-3", 40) + self._rows("whisper-base", 10)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = self._sobol(tmp, "nova-3")
+            panel = B.build_sensitivity(rows, "whisper-base", 256, path)
+
+        self.assertEqual(panel["status"], "missing",
+                         "the saved nova-3 decomposition was served under whisper-base")
+        self.assertIsNone(panel["data"])
+        reason = panel["reason"]
+        # It must EXPLAIN itself -- a blank panel and a crashed panel are
+        # indistinguishable to someone demoing this (same bar as sim2real).
+        self.assertGreater(len(reason.strip()), 120)
+        self.assertIn("nova-3", reason)
+        self.assertIn("whisper-base", reason)
+        # ...and no nova-3 RESULT may travel with it. The empty state may cite
+        # nova-3's factorial size to explain why it is not transferable -- that
+        # is attributed -- but the verdict clause a presenter reads aloud must
+        # not be reachable under this arm in any form.
+        blob = json.dumps(B.jsonable(panel))
+        self.assertNotIn(self.NOVA_ONLY_CLAIM, blob,
+                         "nova-3's evaluation-count claim reached the whisper-base payload")
+        for key in ("gap_bars", "s2_pairs", "verdict"):
+            self.assertNotIn(key, blob,
+                             f"a {key} payload was served under an arm that has none")
+
+    def test_the_owning_arm_still_renders_in_full(self):
+        """
+        NEGATIVE CONTROL. Without it the test above passes on a build where
+        panel 4 is simply always empty -- which would 'fix' the mislabelling by
+        deleting the finding. The arm that OWNS the decomposition must still get
+        the whole thing: indices, the S2 ranking, and the pre-registration
+        verdict with its real evaluation count.
+        """
+        rows = self._rows("nova-3", 40) + self._rows("whisper-base", 10)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = self._sobol(tmp, "nova-3")
+            panel = B.build_sensitivity(rows, "nova-3", 256, path)
+
+        self.assertEqual(panel["status"], "ok", panel.get("reason"))
+        d = panel["data"]
+        self.assertTrue(d["gap_bars"], "the owning arm lost its Sobol indices")
+        self.assertTrue(d["s2_pairs"], "the owning arm lost its S2 ranking")
+        self.assertIn(d["verdict"]["status"],
+                      {"CONFIRMED", "NOT CONFIRMED", "UNRESOLVED"})
+        self.assertIn(self.NOVA_ONLY_CLAIM, d["verdict"]["sentence"],
+                      "the owning arm lost its evaluation count -- the panel was "
+                      "emptied rather than scoped")
+        # and the page must be able to SAY it is single-arm, above the fold
+        self.assertTrue(d["arm_locked"])
+        self.assertEqual(d["arm"], "nova-3")
+
+    def test_the_arm_label_follows_the_artifact_not_the_selection(self):
+        """
+        Guards the direction of the fix. Relabelling the artifact 'whisper-base'
+        must move BOTH outcomes: whisper-base now renders and nova-3 now does
+        not. A fix that special-cased the literal 'nova-3' would fail here.
+        """
+        rows = self._rows("nova-3", 40) + self._rows("whisper-base", 10)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = self._sobol(tmp, "whisper-base")
+            served = B.build_sensitivity(rows, "whisper-base", 256, path)
+            refused = B.build_sensitivity(rows, "nova-3", 256, path)
+        self.assertEqual(served["status"], "ok", served.get("reason"))
+        self.assertEqual(served["data"]["arm"], "whisper-base")
+        self.assertEqual(refused["status"], "missing")
+
+    def test_the_real_build_serves_it_to_one_arm_only(self):
+        """The property as it holds on the artifact that actually ships."""
+        if not os.path.exists(BUILT):
+            self.skipTest("dashboard/deadzone.html not built yet")
+        with open(BUILT, encoding="utf-8") as fh:
+            html = fh.read()
+        m = re.search(r"window\.__DEADZONE_DATA__ = (.*?);\n?</script>", html, re.S)
+        data = json.loads(m.group(1).replace("<\\/", "</"))
+        served = {mdl: p["sensitivity"] for mdl, p in data["models"].items()
+                  if p.get("sensitivity", {}).get("status") == "ok"}
+        self.assertEqual(len(served), 1,
+                         f"the decomposition is served under {sorted(served)} -- "
+                         f"it belongs to exactly one arm")
+        arm = next(iter(served))
+        self.assertEqual(served[arm]["data"]["arm"], arm)
+        for mdl, p in data["models"].items():
+            if mdl == arm:
+                continue
+            self.assertEqual(p["sensitivity"]["status"], "missing")
+            self.assertNotIn(self.NOVA_ONLY_CLAIM, json.dumps(p["sensitivity"]),
+                             f"{arm}'s evaluation count reached the {mdl} payload")
 
 
 class ModelArmsPanelIsNArm(unittest.TestCase):

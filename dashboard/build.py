@@ -303,32 +303,94 @@ def build_fingerprints(rows_real, model):
 # PANEL 4 — sensitivity + the pre-registration verdict
 # ===========================================================================
 
+def _arm_census(rows_real, model) -> tuple[int, int]:
+    """(rows, clips) this arm actually ran — for the empty state's arithmetic."""
+    rows = [r for r in rows_real if r.get("model") == model]
+    return len(rows), len({str(r.get("clip_id")) for r in rows})
+
+
 def build_sensitivity(rows_real, model, sobol_n: int, sobol_path: str):
+    """
+    The saved Sobol artifact belongs to EXACTLY ONE ARM and must never be served
+    under another.
+
+    results/sobol.json is an exact functional-ANOVA decomposition of the complete
+    4x4x3x3 babble factorial with 40 clips in every cell — 5,760 real
+    transcriptions — and it records the arm it was computed on in its `model`
+    field. Only the nova-3 arm ran that factorial; the local/secondary arms ran a
+    10-clip subset, which is not a complete factorial and admits no exact
+    decomposition. Loading the artifact for every arm therefore served nova-3's
+    indices, nova-3's ST-S1 gaps and nova-3's pre-registration verdict under the
+    whisper and scribe toggles, asserting "N=144, 5760 model evaluations" for arms
+    that ran 1,760 rows. Two quantities computed over different rows, presented as
+    one — SPEC Appendix G's defect class, on the page whose subject is that defect
+    class.
+
+    The remedy follows `build_sim2real` deliberately, rather than inventing a
+    second convention for the same situation (an analysis that exists for one arm
+    only): the panel renders an EXPLAINED empty state naming the arm the
+    decomposition belongs to, what it would cost to produce for this arm, and
+    where to read the nova-3 result instead.
+
+    The surrogate branch below is untouched and stays per-model: when no saved
+    artifact exists at all, the GP is fitted to THIS arm's rows and the provenance
+    string says so.
+    """
     import deadzone.analysis.interactions as itx
     provenance = None
 
     if os.path.exists(sobol_path):
+        with open(sobol_path, encoding="utf-8") as fh:
+            artifact_model = json.load(fh).get("model")
+        if artifact_model is not None and str(artifact_model) != str(model):
+            n_rows, n_clips = _arm_census(rows_real, model)
+            return _missing(
+                f"The sensitivity decomposition was computed for '{artifact_model}' "
+                f"and is not transferable to '{model}'. It is an EXACT functional "
+                f"ANOVA of the complete 4x4x3x3 factorial with 40 clips in every "
+                f"cell (144 cells, 5,760 transcriptions), which only the "
+                f"'{artifact_model}' arm ran; '{model}' ran {n_rows} rows on "
+                f"{n_clips} clip(s), so there is no complete factorial to "
+                f"decompose and no S1/ST/S2 for this arm. Showing "
+                f"'{artifact_model}'s indices here would be nova-3's numbers under "
+                f"another arm's label. Run '{model}' over the full 40-clip babble "
+                f"factorial and re-run `python3 -m deadzone.analysis.sensitivity` "
+                f"to populate this panel; until then read the decomposition on the "
+                f"'{artifact_model}' toggle, where it belongs.")
         sobol = itx.load_sobol_json(sobol_path)
         provenance = (f"Sobol indices loaded from {os.path.relpath(sobol_path, REPO)} "
-                      f"(computed by the experiment runner).")
+                      f"— an exact functional-ANOVA decomposition of the "
+                      f"'{artifact_model or model}' arm's complete factorial, "
+                      f"computed by the experiment runner. This panel is a "
+                      f"single-arm result: it does not vary with the model toggle, "
+                      f"and it is blank on the arms that did not run the factorial.")
     else:
         # No saved Sobol run: fit the GP surrogate to the measured grid and take
         # the indices off THAT. Cheap and honest, as long as the page says so —
         # which is what `provenance` is for. It is NOT a measured Sobol run.
         from deadzone.design import DEFAULT_FACTOR_SPACE as SPACE, sobol_indices
+        artifact_model = None
         gp, mat = itx.fit_surrogate_from_master(rows_real, model=model)
         wer_fn = itx.surrogate_wer_fn(gp, SPACE, grid=7)
         sobol = sobol_indices(SPACE, wer_fn, N=sobol_n, seed=0)
         provenance = (
             f"No results/sobol.json in this build, so the indices come from a GP "
             f"surrogate fitted to the {mat['n_conditions']} measured conditions "
-            f"(N={sobol_n}, {sobol['n_eval']} surrogate evaluations) — a surrogate "
-            f"reading of the measured surface, NOT a measured Sobol run. Re-run the "
-            f"real Sobol pass before quoting these numbers.")
+            f"of the '{model}' arm (N={sobol_n}, {sobol['n_eval']} surrogate "
+            f"evaluations) — a surrogate reading of the measured surface, NOT a "
+            f"measured Sobol run. Re-run the real Sobol pass before quoting these "
+            f"numbers.")
 
     report = itx.interaction_report(sobol, rows_real, model=model)
     payload = itx.plot_payload(report)
     payload["provenance"] = provenance
+    # The arm these indices describe, and whether it is pinned to one arm. The
+    # renderer stamps this beside the verdict so a reader who never scrolls to
+    # the provenance line still cannot mistake a single-arm result for a
+    # per-arm one. `arm` is the ARTIFACT's arm when there is an artifact, and
+    # the selected arm only on the per-model surrogate path.
+    payload["arm"] = artifact_model or model
+    payload["arm_locked"] = artifact_model is not None
     return _ok(payload)
 
 

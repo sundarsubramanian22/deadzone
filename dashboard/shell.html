@@ -72,7 +72,9 @@
       <p class="caption">S1 is what a factor does alone; ST is what it does in total; the ST&minus;S1
       gap is the interaction evidence, shown with a bootstrap CI. The verdict on the pre-registered
       rt60 &times; snr_db expectation is stated first and stated plainly — NOT CONFIRMED is a result
-      and is given exactly the same prominence as CONFIRMED.</p>
+      and is given exactly the same prominence as CONFIRMED. This is a <em>single-arm</em> panel:
+      the exact decomposition needs the complete factorial with 40 clips in every cell, which only
+      the spine arm ran, so on every other arm this panel is blank and says why.</p>
     </div>
     <div class="body" id="panel-sensitivity"></div>
   </section>
@@ -103,12 +105,15 @@
 
   <section class="panel">
     <div class="head">
-      <span class="num">two arms, one grid</span>
-      <h2>Do two models have the same dead zones?</h2>
-      <p class="caption">A commercial streaming model against an open baseline. Confidence is
-      comparable <em>within</em> a model and never across two — one returns an acoustic confidence,
-      the other the decoder's token probability — so each arm is ranked against its own
-      distribution. This panel sits outside the model toggle: it <em>is</em> the comparison.</p>
+      <span class="num">every arm, one grid</span>
+      <h2>Do the models have the same dead zones?</h2>
+      <p class="caption">Two commercial streaming models against an open baseline. Confidence is
+      comparable <em>within</em> a model and never across arms — one returns an acoustic confidence,
+      another the decoder's token probability — so each arm is ranked against its own distribution.
+      An arm whose orthography is not stable across identical calls is marked <em>‡</em> and is
+      excluded from the cross-arm WER comparison entirely, because a per-call formatting draw is
+      variance, not an offset that can be measured once and subtracted. This panel sits outside the
+      model toggle: it <em>is</em> the comparison.</p>
     </div>
     <div class="body" id="panel-model-arms"></div>
   </section>

@@ -733,12 +733,24 @@
   // ======================================================================
 
   function renderSensitivity(host, d) {
+    /* The exact functional-ANOVA decomposition exists for ONE arm only (the one
+       that ran the complete factorial). When that is so, say it above the
+       verdict rather than only in the provenance line at the bottom: this panel
+       does not respond to the model toggle, and a reader who does not scroll
+       must still not read it as this arm's result. */
+    if (d.arm_locked && d.arm) {
+      host.appendChild(el("div", { className: "caveat armlock", text:
+        "SINGLE-ARM RESULT — " + d.arm + " only. This panel does not change with the "
+        + "model toggle: the exact decomposition needs the complete factorial, which "
+        + "only the " + d.arm + " arm ran. On every other arm it is blank, with the reason." }));
+    }
+
     var v = d.verdict || {};
     var cls = v.status === "CONFIRMED" ? "confirmed"
       : (v.status === "NOT CONFIRMED" ? "notconfirmed" : "unresolved");
     host.appendChild(el("div", { className: "verdict " + cls }, [
       el("span", { className: "st", text: "pre-registered " + (v.pair ? v.pair.join(" × ") : "interaction")
-        + " — " + (v.status || "UNRESOLVED") }),
+        + " — " + (v.status || "UNRESOLVED") + (d.arm ? "  ·  " + d.arm + " arm" : "") }),
       el("p", { text: v.sentence || "no verdict sentence was produced" })
     ]));
 
