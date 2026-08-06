@@ -553,12 +553,19 @@ CHOICE_MENU = (
 # Four strings typed at four call sites is how the mismatch got in.
 CONFIDENCE_QUESTION = "How big was the difference?"
 
+# NOT [l]. Lowercase L and the digit 1 are near-identical in most terminal
+# fonts, and the question immediately before this one uses [1] and [2] as real
+# keys -- so a listener whose hands are still primed for digits types 1, gets
+# rejected, and has to look closely at a glyph to work out why. That happened on
+# the first real run of this beat. [e] for "edge" collides with nothing and
+# cannot be misread. `l` and `1` are both still ACCEPTED silently below, because
+# the fix should remove the confusion, not punish someone who hit the old key.
 CONFIDENCE_MENU = (
-    "    [c] a clear difference   [l] a slight edge        [t] honestly a toss-up"
+    "    [c] a clear difference   [e] a slight edge        [t] honestly a toss-up"
 )
 
 CONFIDENCE_RETRY = (
-    "    (c for a clear difference, l for a slight edge, t for a toss-up)"
+    "    (c for a clear difference, e for a slight edge, t for a toss-up)"
 )
 
 _CONF_LABEL = {"clear": "a clear difference", "slight": "a slight edge",
@@ -931,7 +938,8 @@ def collect_answer(order: list[tuple[str, dict]], ink: Ink, audio: bool,
         if raw in ("c", "clear"):
             conf = "clear"
             break
-        if raw in ("l", "slight", "s"):
+        # "l" and "1" are accepted but no longer advertised -- see CONFIDENCE_MENU.
+        if raw in ("e", "edge", "l", "1", "slight", "s"):
             conf = "slight"
             break
         if raw in ("t", "toss", "tossup", "toss-up"):

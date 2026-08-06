@@ -1203,8 +1203,53 @@ class TheFollowUpQuestionMatchesItsOptions(unittest.TestCase):
         self.assertIn(dl.CONFIDENCE_RETRY.strip(), out,
                       "unparseable input did not re-offer the options")
 
+    def test_no_advertised_key_can_be_misread_as_a_key_from_the_question_above(self):
+        """
+        Lowercase L is near-identical to the digit 1 in most terminal fonts, and
+        the question immediately before this one uses [1] and [2] as real keys.
+        A listener on the first live run of this beat typed 1, was rejected, and
+        had to inspect a glyph to find out why. No advertised key here may
+        collide with a key offered by the question above it.
+        """
+        advertised = set(re.findall(r"\[([^\]]+)\]", dl.CONFIDENCE_MENU))
+        self.assertTrue(advertised, "no keys found — this check is vacuous")
+        self.assertNotIn("l", advertised,
+                         "[l] is advertised again; it is unreadable next to [1] "
+                         "in the question above")
+        for k in advertised:
+            self.assertFalse(k.isdigit(),
+                             f"[{k}] is a digit, which the previous question "
+                             f"also uses for a different meaning")
+
+    def test_the_ambiguous_keys_are_still_accepted_silently(self):
+        """
+        The fix removes the confusion; it does not punish someone who hits the
+        old key or the digit they were primed for. Both must still parse to a
+        slight edge, and neither may be advertised.
+        """
+        for typed in ("l", "1"):
+            with self.subTest(typed=typed):
+                with tempfile.TemporaryDirectory() as d:
+                    r = run_listen("--sessions-dir", d,
+                                   stdin=READY + f"1\n{typed}\n" + NEXT + "s\n")
+                    self.assertEqual(r.returncode, 0, r.stderr[-3000:])
+                    self.assertNotIn(dl.CONFIDENCE_RETRY.strip(), r.stdout,
+                                     f"{typed!r} was rejected — it must still be "
+                                     f"accepted, just not advertised")
+                    rec = json.loads(sorted(Path(d).glob("*.json"))[-1].read_text())
+                self.assertEqual(rec["responses"][0]["confidence"], "slight")
+        # The control: a key that really is unknown MUST still be re-prompted,
+        # or "no retry line appeared" would pass for a parser that accepts
+        # anything at all.
+        with tempfile.TemporaryDirectory() as d:
+            r = run_listen("--sessions-dir", d,
+                           stdin=READY + "1\nzzz\nc\n" + NEXT + "s\n")
+        self.assertIn(dl.CONFIDENCE_RETRY.strip(), r.stdout,
+                      "unknown input was accepted, so the acceptance checks "
+                      "above prove nothing")
+
     def test_the_reveal_echoes_the_label_the_listener_picked(self):
-        for key, letter in (("clear", "c"), ("slight", "l"), ("tossup", "t")):
+        for key, letter in (("clear", "c"), ("slight", "e"), ("tossup", "t")):
             with self.subTest(option=key):
                 with tempfile.TemporaryDirectory() as d:
                     r = run_listen("--sessions-dir", d,
