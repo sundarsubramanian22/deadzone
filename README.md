@@ -6,9 +6,9 @@ Real speech → real rooms → real noise → real codecs, one knob at a time, e
 `40 utterances` × `176 acoustic conditions` × `3 recognizers` = **10,560 scored transcriptions**
 
 > ### Why I built it
-> Coffee chat with **Pranav Bachu** (Deepgram — leads Applied AI Verticals; ex-OfOne, the drive-thru voice-AI startup Deepgram acquired). What stuck with me:
+> A coffee chat with someone at Deepgram who works on deployed voice agents. What stuck with me:
 > - non-production voice-AI work, WER high → the loop is often *move sliders, re-measure, keep what went down* — without a mechanism
-> - open questions he pointed at — how do **human and model perception** differ on the same audio? in a drive-thru, what actually drives WER: the physical setup, speaker distance, the **mic** feeding the agent?
+> - the open questions it left me with — how do **human and model perception** differ on the same audio? in a drive-thru, what actually drives WER: the physical setup, the speaker's distance from the mic, the **type of mic** feeding the agent?
 >
 > That conversation, plus a couple of well-known papers it sent me to, made me want to build an instrument for it.
 > *(This is what motivated **me**. It is not a claim about what Deepgram has or hasn't studied.)*
