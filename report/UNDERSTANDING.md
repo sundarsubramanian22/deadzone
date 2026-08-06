@@ -416,9 +416,17 @@ threshold one notch and the headline count changes by 6×, or vanishes.
 
 Two honest readings, and you should have both ready:
 
-- **The defensive one:** nova-3 has **zero** conditions where it is confidently
-  wrong at WER ≥ 0.40. That is a real, threshold-free statement: *this model is
-  never confidently, badly wrong on this corpus.*
+- **The defensive one, with the qualifier it needs:** nova-3 has **zero** conditions
+  where it is confidently wrong at WER ≥ 0.40 — **at the published confidence cut
+  (top 40 %) and every stricter one.** It is *not* threshold-free, and an earlier
+  version of this line said it was. The WER ≥ 0.40 row of the sweep is
+  **`[26, 11, 0, 0, 0, 0, 0]`** across conf_pct 0.3 → 0.9: loosen "confident" to the
+  top 70 % and **26** conditions appear; top 60 %, **11**. So the claim is that the
+  **WER axis** is where this is robust, not the operating point as a whole. Say:
+  *"at the operating point I published and anything stricter, it's never confidently
+  wrong above 0.40 WER — loosen 'confident' to the top 70 % and 26 show up."*
+  Overclaiming here is worse than elsewhere, because this is the answer whose entire
+  credibility move is **conceding** that thresholds are arbitrary.
 - **The strong one:** stop quoting a count. The **continuous** claim needs no
   threshold — mean overconfidence **+0.147**, overconfident in **154 of 169**
   conditions, ρ = −0.980. That is the finding. The count is a presentation choice.
