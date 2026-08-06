@@ -1609,7 +1609,7 @@ independent of each other — do them in any order, or in parallel.
 | **R4** grid | ✅ done | 176 conditions × 40 clips × nova-3 = **7040 rows, 0 failures**, + the 1760-row whisper arm = **8800 rows, 3 failures (0.03 %)**, well under the 2 % gate; `results/master.parquet` now written too (pyarrow installed — it was silently falling back to CSV only) |
 | **R4.3/4.5** screen + sensitivity | ✅ **done, and better than planned** | exact functional-ANOVA decomposition of the real factorial — see B.3 |
 | **R4.7 / R5.5** active learning | ✅ done — **a null, and it is robust** | see B.4 |
-| **R5.1** D1 headline | ✅ real | ρ = −0.957, 92 % overconfident, 6/176 dead zones |
+| **R5.1** D1 headline | ✅ real — ⚠️ **SUPERSEDED by Appendix G** | then: ρ = −0.957, 6/176 dead zones. **Now: ρ = −0.980 paired / −0.952 all-clips (n = 169), 2/176 dead zones** — the estimand mismatch |
 | **R5.3** D2 fingerprints | ✅ real | deletions dominate; entity error 0.633 vs WER 0.511 |
 | **R5.4** D3a interactions | ✅ real — **pre-registration CONFIRMED**, report reconciled | see B.3 |
 | **R5.6** D4 sim2real | ✅ real | sim underestimates WER by 12.1 pts; Spearman 0.873; **dead-zone Jaccard 0.00** |
@@ -1788,6 +1788,12 @@ them, instead of six identical lines.
 ---
 
 ## B.4 Real findings
+
+> ⚠️ **The D1 block immediately below is SUPERSEDED by Appendix G.** The
+> confidence–WER estimand mismatch inflated the mean gap by +0.109 and produced
+> four of the six dead zones. Corrected: **2/176 dead zones**, ρ = **−0.980**
+> paired / **−0.952** all-clips (n = 169), and the #1 condition quoted here is
+> now classified `silence_driven`. D2, L2, D3b, D4 and L3 below are unaffected.
 
 **D1 — the headline is more nuanced than the premise assumed.** Global
 spearman(confidence, WER) = **−0.957**: nova-3 largely *does* know when it is
@@ -2169,7 +2175,12 @@ nova-3 is already word-form (the adapter disables `smart_format`/`punctuate`/
 normalizer recovering its digit orthography, not inventing accuracy. A large
 nova-3 shift would have meant the normalizer was changing more than spelling.
 
-**The finding:**
+**The finding** (⚠️ **the dead-zone-rate and spearman columns are SUPERSEDED by
+Appendix G.8** — `condition_table()` carried the same estimand mismatch as D1.
+Corrected: nova-3 **0.57 % (1/176)**, ρ **−0.970** (n = 164); whisper **39.20 %**
+unchanged, ρ **−0.590** (n = 171). The WER column stands as the all-clips
+quantity; G.8 adds the spoke-subset figures, which move the two arms in
+*opposite* directions):
 
 | model | conds | WER | dead-zone rate | spearman(conf, WER) |
 |---|---|---|---|---|
@@ -2332,6 +2343,14 @@ B.3/B.4 above are stale on these points.**
    silent ones — they emit no words and therefore have no confidence at all.
    Stating n = 169 *strengthens* the deletion-blindness argument rather than
    weakening the headline.
+   > ⚠️ **This resolution was WRONG, and Appendix G.7 replaces it.** The count
+   > was right and the *computation* was still mixing populations: all 176
+   > conditions were passed to `confidence_wer_shape` while n = 169 was
+   > reported, so the 7 mute conditions entered as fabricated points at the
+   > ideal corner. Corrected, both at n = 169: **−0.980 paired / −0.952
+   > all-clips**. −0.957 was the artifact, sitting between the two honest
+   > numbers. Recorded here because a partial explanation that reconciles the
+   > arithmetic is the most dangerous kind — it closes the question.
 3. **`digit_word` is the LEAST destroyed word class (0.361), below function
    words (0.462).** So "entities degrade faster than the transcript" is carried
    by **proper nouns (0.646) and spelled letters (0.613)**, not by numbers. The
@@ -2414,7 +2433,7 @@ condition-matching logic was deliberately left untouched.
 | 95 % CI | — | **[−0.15008, −0.09582]** |
 | Spearman ρ | 0.8787 | **0.87326** (p = 3.2e−56) |
 | Kendall τ | — | **0.69814** |
-| dead-zone Jaccard | 0.00 | **0.00** (real 2, sim 1, both 0) |
+| dead-zone Jaccard | 0.00 | **0.00** (real 2, sim 1, both 0) — ⚠️ **the SET is superseded by G.8: real 1, sim 0, Jaccard still 0.00.** Level and order are bit-identical and did not move |
 | n_pairs | 176 | **176** |
 
 Clip census: real arm 40 clips, sim arm 10, **common 10** — exactly the AL subset
@@ -2490,6 +2509,13 @@ tables → Appendix C / D.9, Sabine-vs-Schroeder detail → Appendix F.
 a restatement of the clean-floor number already in limitation 3, and transitional
 filler.
 
+⚠️ **Two of the must-survive numbers below are now WRONG in the write-up** —
+`0.843 @ WER 0.387` (that condition is `silence_driven`; the surviving #1 is
+`rt60-0.45_snr-0_engine_g726_roll-0`, **0.829 @ WER 0.306, 0/40 silent**) and
+`ρ = −0.957` (**−0.980 paired / −0.952 all-clips**). See Appendix G. The
+write-up, dashboard and `results/` artifacts must be brought into agreement
+before `grid-v1` is tagged (F.2).
+
 **Verified present after compression** (normalized grep, every must-survive
 item): 0.843 @ WER 0.387 · ρ = −0.957 over 169 conditions · "mostly self-aware"
 · survivor bias + 35.1 % / 69.3 % / silent-about-the-worst-7 · DRR −1.000 vs
@@ -2517,6 +2543,9 @@ simulation gap"* — a named artifact, never a result. Correct treatment.
 - **Still outstanding: the listening pass (A.R3.5).** Nobody has put ears on the
   degraded audio. `results/audio/listen/` + `WHAT_TO_LISTEN_FOR.md`, ~10 minutes.
   The unit tests prove the maths; only listening proves the *result*.
+  > ✅ **DONE, and it invalidated the D1 headline.** The exemplar clips sounded
+  > intelligible; the estimand mismatch (Appendix G) is what that observation
+  > exposed. The last unchecked item in the spec was the one that mattered.
 
 ---
 
@@ -2714,14 +2743,25 @@ an editing failure. If a future session wants it shorter, the honest move is a
 reader stops there, the full text survives intact) — *not* another compression
 pass. A fourth pass will only delete numbers.
 
-## F.2 `grid-v1` tag — HELD pending the listening pass
+## F.2 `grid-v1` tag — STILL HELD, now for a second reason
 
-The tree is clean at **`46614d4`** and `results/MANIFEST.json` records that SHA
+The tree was clean at **`46614d4`** and `results/MANIFEST.json` records that SHA
 with `dirty: false` (11,086 Deepgram calls, ~$3.26, all assets SHA-256'd). The
-tag is deliberately **not** placed yet: `grid-v1` should mark a *validated* grid,
+tag was deliberately **not** placed: `grid-v1` should mark a *validated* grid,
 and A.R3.5 — the listening pass — is the only check that the degraded audio is
-physically plausible. The unit tests prove the maths, not the result. Tag once
-the listening pass returns clean.
+physically plausible. The unit tests prove the maths, not the result.
+
+**Update: the listening pass has now run, and it did not return clean.** It
+found the estimand mismatch (Appendix G), and **the headline changed** — dead
+zones 6 → 2, the #1 condition reclassified, ρ restated. So the hold stands for a
+second and stronger reason: `grid-v1` must not be placed until the **write-up,
+the dashboard and the `results/` artifacts all agree** on the corrected numbers.
+A tag naming a state where the three disagree is worse than no tag — it makes an
+inconsistency look ratified.
+
+Order: repair the artifacts → rebuild the dashboard → reconcile
+`report/writeup.md` (C.9 lists the two stale numbers) → regenerate
+`results/MANIFEST.json` on the clean tree → **then** tag.
 
 ## F.3 State at close
 
@@ -2740,3 +2780,243 @@ the listening pass returns clean.
 
 **Open, and each needs a human:** the ElevenLabs `sk_` key (Appendix D — probe
 ready, zero spent), the listening pass, and then the tag.
+
+> **Update:** the listening pass is **done** — see Appendix G. It cost the
+> headline finding and bought a better one. Remaining: reconcile the write-up,
+> dashboard and artifacts with G's corrected numbers, then tag (F.2); and the
+> ElevenLabs key, unchanged.
+
+---
+
+# Appendix G: The estimand mismatch — found by ears, not by tests (2026-08-05)
+
+> **The listening pass (A.R3.5) — the last unchecked item in the entire spec —
+> invalidated the headline finding.** Everything below follows from that one
+> user action. Supersedes B.4's D1 paragraph, C.3's L1 table and C.7 item 2
+> wherever they disagree.
+
+## G.1 The defect: two averages over different populations, subtracted
+
+In `deadzone/analysis/confidence_gap.py:per_condition_table()`, per-condition
+`mean_conf` was averaged over only the clips that **produced words**, while `wer`
+was averaged over **all** clips — including clips that returned an **empty
+transcript**, which contribute WER 1.0 and *no confidence at all* (no words, no
+per-word confidences, nothing to average).
+
+`add_gap_metrics` then computed `gap = mean_conf − (1 − wer)` across that seam.
+`find_dead_zones` ranked on the gap. `model_compare.dead_zone_flags` used the
+all-clips WER for **membership** too, so the shaded dead-zone quadrant — the
+project's hero panel — inherited it.
+
+For the #1 condition this paired **confidence over 30 clips with WER over 40**.
+
+Neither average is wrong on its own. `mean_conf` over speaking clips is the only
+`mean_conf` that exists; `wer` over all clips is the correct corpus WER. The
+defect lives entirely in the **subtraction**, and it has the house signature:
+clean arithmetic, correct row count, no NaN, no warning, a plausible number.
+
+## G.2 How it was found — and this is the point
+
+The user ran the listening pass (A.R3.5) and reported that the dead-zone exemplar
+clips **sounded intelligible**. Checking per-clip data showed the exemplar clip
+`u02` was transcribed **perfectly in four of the six dead zones**. That is what
+prompted the estimand check.
+
+**No test caught this. The audio did.** A.R3.5 has said from the beginning that
+the unit tests prove the maths and only listening proves the *result*. That is
+now demonstrated rather than asserted, and it is the single strongest sentence
+available for the write-up's methods section: the last item on the checklist,
+the one with no code behind it, is the one that found the headline error.
+
+## G.3 Scale
+
+- **116 / 176** conditions had **≥ 1** silent clip.
+- **2,210 / 7,040** nova-3 rows (**31.4 %**) are silent, spanning **123**
+  conditions — 116 partial plus the 7 that are silent on every clip.
+- Mean gap inflation **+0.109**; **max +0.524**.
+
+An inflation of that size is not a rounding artifact. It is comparable to the
+entire published mean gap (0.256).
+
+## G.4 The fix: publish BOTH pairings, never silently one
+
+The correction is *not* "use the right one." It is to make the mismatched
+quantity impossible to produce by accident and impossible to quote without a
+name:
+
+- `wer_spoke` / `wer_all_clips` — both stored, both published.
+- `gap_spoke` / `gap_all_clips` / `gap_inflation` — the difference between the
+  two pairings is itself a first-class field, so the size of the effect travels
+  with the number.
+- `n_silent` / `n_spoke` / `silent_frac` per condition, so a reader can always
+  see which population a row describes.
+- `gap` remains as an **alias of `gap_spoke`**; the mismatched quantity exists
+  **only** under an explicit name (`gap_all_clips`). The default is now the
+  same-population comparison, and asking for the other one is a deliberate act.
+- `dead_zone_flags` and `confidence_wer_shape` take **`wer_key=`** — the estimand
+  is named **at the call site**, so the choice is visible in the calling code
+  rather than buried in a table schema.
+
+This is the same design move as C.5's argument for storing derived fields:
+**redundancy is what makes a silent error loud.** `gap_inflation` is
+recomputable; storing it is what makes the mismatch legible.
+
+## G.5 The new taxonomy — three categories, and dead zones are a *view* over it
+
+New `condition_flags()` / `classify_conditions()`. `find_dead_zones()` is now a
+thin view over `classify_conditions()`, so **you cannot obtain dead zones without
+also being handed the other two categories** — a structural fix in the spirit of
+E.3 (refuse to produce the misleading artifact rather than guard every reader).
+
+| category | meaning |
+|---|---|
+| `dead_zone` | confidently **WRONG** — the model emits words and they are bad |
+| `silence_driven` | the apparent gap came from the estimand mismatch |
+| `mute_zone` | **empty transcript on EVERY clip** (nova-3: 7, whisper: 5) |
+
+**A mute zone is deliberately NOT a dead zone.** Confidently wrong and entirely
+absent are different mechanisms with different fixes — and, decisively, **a
+confidence-based monitor cannot see a mute zone at all**: there is no confidence
+to be low. Folding the two together would have hidden the one failure class the
+project's proposed early-warning signal is structurally blind to. This is the
+same hole L2's deletion-blindness analysis quantified (B.4), now surfaced at the
+level of whole conditions instead of individual words.
+
+## G.6 Results — D1
+
+- **Dead zones: 6 → 2 of 176** (3.41 % → **1.14 %**).
+- **New #1 `rt60-0.45_snr-0_engine_g726_roll-0`:** confidence **0.829** at WER
+  **0.306**, **0/40 silent** — it needs no asterisk. The headline survives; it
+  is smaller and it is clean.
+- **Old #1 `rt60-0.7_snr-20_babble_opus-lowrate_roll-1` → `silence_driven`.**
+  Gap **+0.230 → +0.025**. On its 30 speaking clips the model was **81.8 %
+  accurate at 0.843 confidence** — i.e. **well calibrated**. The published
+  headline dead zone was a condition where the model was behaving correctly.
+
+## G.7 A SECOND instance in the same file
+
+`overall_correlation` passed **all 176** conditions to `confidence_wer_shape`
+while **reporting n = 169**. The 7 mute conditions have no confidence, land at
+percentile 0, and carry WER 1.0 — **seven fabricated points sitting exactly at
+the ideal corner of a negative correlation**, inflating the very statistic used
+to argue the model knows when it is failing.
+
+Corrected, both at n = 169: **ρ = −0.980 paired** / **−0.952 all-clips**.
+
+**The published −0.957 was the artifact of those 7 points** — it sat between the
+two honest numbers, which is precisely why nothing looked wrong. Note that C.7
+item 2 already investigated this number, concluded "n = 169, not 176," and
+recorded that as the resolution; the count was right and the *computation* was
+still mixing populations. **A partial explanation that reconciles the arithmetic
+is the most dangerous kind of resolution**, because it closes the question.
+
+## G.8 Propagation — both found by the fix, both repaired
+
+**L1 — `deadzone/analysis/model_arms.py:condition_table()` had the identical
+mismatch.** Corrected:
+
+| model | dead-zone rate | spearman(conf, WER) | silent rows | mute conds |
+|---|---|---|---|---|
+| nova-3 | 1.14 % → **0.57 % (1/176)** | −0.929 → **−0.970** (n = 164) | 431/1757 | 12 |
+| whisper-base | **39.20 %** (unchanged) | **−0.590** (n = 171) | 336/1757 | 5 |
+
+**The correction moves the two arms in OPPOSITE directions — and that is a
+finding, not a bookkeeping note.** Restricting to the spoke subset **lowers**
+nova-3's WER (0.433 → 0.307) but **raises** whisper's (0.996 → **1.128**).
+Whisper's silent clips score exactly 1.0, so removing them removes its *best*
+rows: its speaking clips hallucinate **past** 1.0. **One model goes quiet under
+stress; the other invents.** This is C.3's sub/del/ins mechanism table
+(insertions 9.4×) restated as a single number, arrived at independently.
+
+> **A wrong guess, corrected by measurement, kept on the record.** The first
+> explanation offered for the opposite-direction move was accuracy-clipping.
+> It is wrong: `dead_zone_flags` thresholds WER **directly** and does not clip.
+> The real cause is unbounded insertions. Recorded because the plausible
+> mechanism and the true mechanism predicted the same sign, and only the
+> measurement separated them.
+
+**D4 — `deadzone/analysis/sim2real.py`: LEVEL and ORDER are bit-identical and
+did not move.** Correctly so: they contain no confidence term. Mean gap
+**−0.12122**, CI **[−0.15008, −0.09582]**, Spearman **0.8733**, Kendall
+**0.6981** — all unchanged from C.8.1. Only the **dead-zone set** moved: real
+**2 → 1**, sim **1 → 0**, **Jaccard still 0.00**, and the sim arm now invents
+**0** false dead zones (was 1).
+
+*A defect fix that changes some numbers and provably not others is the good
+case.* The unchanged half is evidence the fix was scoped correctly.
+
+D4's sets remain scoped to the **10-clip common subset** (C.8.1) and do **not**
+coincide with D1's 40-clip table. Now stated in the payload and in the report
+text, not just in this log.
+
+**Cross-check that costs nothing and is worth a lot:** D4's surviving real dead
+zone is **the same condition** as L1's surviving nova-3 dead zone, computed
+through an independent path. Two layers, two code paths, one answer.
+
+## G.9 `n_hyp_words` comes from the ALIGNMENT, not from the confidence list
+
+`n_hyp_words` is derived as `n_ref − n_del + n_ins` from the edit alignment,
+**not** as `len(word_confidences)`. The two disagree on **225 / 8,797** rows,
+because vendor confidences are per **raw** token while edits are over
+**normalized** tokens. Using the confidence-list length as the word count would
+have silently reintroduced a population mismatch inside the fix for a population
+mismatch.
+
+## G.10 A new measured finding: two conditions the model cannot tell apart
+
+Independent of the defect, and quotable on its own.
+
+| | condition | room / mechanism | WER |
+|---|---|---|---|
+| **A** | `rt60-1_snr-20_babble_none_roll-0` | Shower, **DRR −10.02 dB**, SNR 20 dB | **0.1123** |
+| **B** | `rt60-0.2_snr-0_babble_none_roll-0` | Restaurant, **DRR +16.90 dB**, SNR 0 dB | **0.1301** |
+
+Paired over the **same 40 clips**: difference **−0.0178**, 95 % CI
+**[−0.0654, +0.0310]** — spans zero. Exactly equal per-clip on `u40`, `u26`,
+`u21`, `u10`. Two single-degradation conditions at opposite extremes of two
+different axes are **statistically indistinguishable to the model**.
+
+A human is not close to indifferent between them: **B** is dramatically harder
+(informational masking — competing speech captures attention), **A** is easy
+(the precedence effect fuses the reflections). Practical claim, and it is the
+sharpest one-sentence argument in the project for why the instrument exists:
+
+> **You cannot QA a voice agent by listening to it.**
+
+New demo set at `results/audio/demo/` — blind filenames, a **sealed
+pre-registered prediction**, and the key held separately.
+
+**Discipline, stated so nobody over-claims it later: the human half is n = 1 and
+unblinded.** It is an **intuition pump, never data**. The measured half — the
+paired 40-clip model-side comparison with its CI — is the result. Anyone
+presenting this must keep the two halves separate out loud.
+
+## G.11 The generalized lesson
+
+This is the same family Appendix E documents — *a guard whose failure mode is
+silence* — with a new member:
+
+> **Two averages over different populations, subtracted.**
+
+Neither average is wrong. There is no degenerate input, no NaN, no `or 1`, no
+`.get(key, "")`. The row counts are right. The failure is entirely in the
+**join between two correct quantities**, which is a strictly harder thing to see
+than a bad value.
+
+**The rule to add to the checklist:**
+
+1. When two quantities are **subtracted or compared**, assert they were computed
+   over the **same rows** — and make the assertion executable, not a docstring
+   (C.8's lesson, one level deeper: D4's premise was violated across *clips*,
+   D1's across *rows within a clip set*).
+2. **Name the estimand at the call site** (`wer_key=`), so a reader can see which
+   population a number describes without reading the producer.
+3. When both pairings are meaningful, **publish both** plus their difference.
+   Choosing one silently is how the mismatch survived review.
+
+And the meta-lesson, which is the one the write-up should carry: **the project's
+signature failure mode has now been found three times inside the project's own
+analysis code** — `load_factorial`'s duplicate-overwrite (C.4), `sim2real`'s
+unenforced clip premise (C.8), and this. Every time, the instrument built to
+detect silent failure was itself failing silently. The only thing that caught
+*this* one was a human listening to the audio.
