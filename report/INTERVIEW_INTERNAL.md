@@ -63,7 +63,7 @@ corrections to it.
 
 | claim | status |
 |---|---|
-| Scribe's orthography is non-deterministic: "4 identical calls, 5 of 6 clips differed, up to 0.727 WER" | **Measured once, never persisted.** `scripts/probe_scribe_orthography.py` makes **one** call per clip and writes nothing; there is no `--repeat` flag and no `results/scribe_repeat.json`. The figures trace to a prose reason string in `deadzone/model_compare.py`. The *consequence* — the exclusion — is enforced in code and pinned. The *evidence* cannot be opened. |
+| Scribe's orthography is non-deterministic: "4 identical calls, 5 of 6 clips differed, up to 0.727 WER (word error rate)" | **Measured once, never persisted.** `scripts/probe_scribe_orthography.py` makes **one** call per clip and writes nothing; there is no `--repeat` flag and no `results/scribe_repeat.json`. The figures trace to a prose reason string in `deadzone/model_compare.py`. The *consequence* — the exclusion — is enforced in code and pinned. The *evidence* cannot be opened. |
 | The implied-fix column in §8 | `IMPLIED_FIXES` is a hardcoded lookup keyed on `(family, dominant_edit)`. The edit composition is **measured** over 7,040 transcriptions; the fix is a **mechanistic inference**. No denoising, boosting or gating experiment was run. There is no A/B. |
 | "insertions under babble are competing-speech capture" | The 92 % foreign-token evidence is real, but it is **not babble-specific**: engine 0.936 is *higher*, road 0.889. Per reference word babble has the **lowest** insertion rate of the three (0.018 vs 0.027 / 0.028) — its larger raw count is 9× the rows. Scope the claim to insertions under **any competing source**. |
 
@@ -82,8 +82,8 @@ corrections to it.
 - **Decision:** Fix one composition order — room → noise → mic → codec — in code, not as a knob.
   **Why:** That is the physical path an utterance actually takes: mouth → room → air → mic → wire. Any other ordering is a chain that cannot exist in the world, so measuring it would be measuring an artifact of my own pipeline.
   **If pushed:** Order effects are therefore unstudied. I fixed the order rather than crossing it; that is a stated limitation, not a claim that order does not matter.
-- **Decision:** Build and test three "trap" functions (SNR mixing, room application, error classification) before running any of the grid.
-  **Why:** Each of the three produces plausible audio and plausible numbers when subtly wrong, with no exception raised. Compute SNR over the whole file instead of over speech and it is deflated by an amount that varies per clip — a confound, not an offset. Leave the reverb tail in the level normalization and downstream SNR de-calibrates by an amount that *grows with RT60*, so the bug looks exactly like a reverb finding.
+- **Decision:** Build and test three "trap" functions (SNR — signal-to-noise ratio — mixing, room application, error classification) before running any of the grid.
+  **Why:** Each of the three produces plausible audio and plausible numbers when subtly wrong, with no exception raised. Compute SNR over the whole file instead of over speech and it is deflated by an amount that varies per clip — a confound, not an offset. Leave the reverb tail in the level normalization and downstream SNR de-calibrates by an amount that *grows with RT60 (reverberation time — how long a room takes to decay 60 dB)*, so the bug looks exactly like a reverb finding.
   **If pushed:** These are the only stages where a silent bug poisons every downstream number, so they got the test budget first; the analysis layers got the same discipline only later, and that is where the remaining silent defects turned up.
 - **Glossary.** **WER (word error rate)** — (substitutions + deletions + insertions) ÷ reference words. 0 is perfect; can exceed 1.0 if the model emits more words than were said.
 - **RIR (room impulse response)** — a recording of one room's echo signature from one speaker position to one mic position; convolve clean speech with it and the speech is "in" that room. One RIR = one room + one distance.
@@ -94,7 +94,7 @@ corrections to it.
 
 - **Decision:** 40 utterances, one speaker, one accent, one sitting.
   **Why:** WER precision is governed by total reference *words*, not clip count — 40 utterances ≈ 363 reference words per condition, about 2 points of standard error, tight enough to separate adjacent grid cells. 100 clips would only reach ~1.4 points while multiplying every API call by 2.5×. Holding speaker, room, distance and session identical stops room tone and mic distance becoming hidden extra factors on top of the ones I am turning. (Populations: nova-3 ran all 40; whisper-base and elevenlabs-scribe ran a 10-clip subset, so every cross-arm number is a 10-clip number.)
-  **If pushed:** Nothing here generalizes across talkers or accents. This is an instrument for isolating acoustic factors, not a claim about ASR in general.
+  **If pushed:** Nothing here generalizes across talkers or accents. This is an instrument for isolating acoustic factors, not a claim about ASR (automatic speech recognition) in general.
 - **Decision:** Cap the SNR axis at 20 dB rather than 25.
   **Why:** Measured, not chosen. The corpus's own inherent SNR is ~25–28 dB, so a 25 dB request under-delivers by about 2.5 dB while 20 dB lands within 1 dB. A level I cannot actually deliver would put a per-clip error straight into the axis I am attributing effects to.
   **If pushed:** So the grid has no "nearly clean" rung. The clean reference arm — the raw recordings, no room and no noise, which is the only true null since the composer always applies both — covers that end instead.
@@ -107,7 +107,7 @@ corrections to it.
 - **Glossary.** **RT60** — how long a room's reverberation takes to decay 60 dB. Bathroom ≈ 1 s, treated studio ≈ 0.2 s. The four levels snap to the nearest of 16 real measured rooms, so the axis is 4 discrete rooms, not a continuous sweep.
 - **SNR (dB)** — how much louder the speech is than the noise: 0 dB = equal power, +20 dB = speech 100× the noise.
 - **babble** — many people talking at once (cafeteria, station). The hardest noise class because it is *competing speech*: the model can transcribe the background instead of the target.
-- **g726 / opus-lowrate** — g726 is ITU-T narrowband telephony ADPCM at 16 kbit/s (the "phone line" level); opus-lowrate is modern VoIP Opus starved to 8 kbit/s (the "bad VoIP" level). Both applied as real ffmpeg encode-decode round-trips, not modelled.
+- **g726 / opus-lowrate** — g726 is ITU-T narrowband telephony ADPCM (adaptive differential pulse-code modulation) at 16 kbit/s (the "phone line" level); opus-lowrate is modern VoIP Opus starved to 8 kbit/s (the "bad VoIP" level). Both applied as real ffmpeg encode-decode round-trips, not modelled.
 ## §4 · ▶ Demo 1 — the disagreement
 
 > ### 🗣 SAY THIS ON SCREEN
@@ -131,7 +131,7 @@ corrections to it.
   **If pushed:** Yes, the on-stage tie is constructed — I selected for it. The unselected version is the corpus check: on **18 of 40** clips these conditions tie with no cherry-picking, and the paired difference is −0.018.
 - **Decision:** Bootstrap the A-vs-B difference over **clips**, and report that it spans zero.
   **Why:** The same 40 sentences go through both conditions, so clip difficulty is a blocking factor — take per-clip differences first, then resample clips. Resampling words or cells throws the pairing away and returns a falsely narrow interval, which would have let me claim a separation I don't have.
-  **If pushed:** 10,000 resamples of the 40-clip difference vector, seed 0. CI [−0.065, +0.031] is **failure to separate, not proof of equality** — say it before he does.
+  **If pushed:** 10,000 resamples of the 40-clip difference vector, seed 0. The CI (confidence interval) [−0.065, +0.031] is **failure to separate, not proof of equality** — say it before he does.
 
 **Glossary** · **paired bootstrap** → resample the per-clip *differences* (not the raw scores) thousands of times and read the spread; keeps each clip's two measurements tied together. · **"spans zero"** → the interval contains 0, so the data is consistent with either direction — you failed to detect a difference, you did not demonstrate sameness.
 
@@ -184,7 +184,7 @@ corrections to it.
   **If pushed:** the punchline is a ladder, not a script. The full "the most confident wrong word was invented and outranked every correct word" sentence prints **only** when the payload that just arrived supports it; otherwise it prints the strongest claim the data does support and says which one it fell back to.
 
 ## §7 · Three models
-**Populations — say it before quoting anything:** nova-3 ran **40 clips** (7,040 rows); whisper-base and elevenlabs-scribe ran the same **10-clip subset** (1,760 rows each). Chart and cross-arm figures are the **matched 1,757 cells per arm**; **ECE and AUROC are each arm's own full run**, not the intersection (neither subtracts one arm from another, so a full-run figure is the right one — it is simply not the matched population). nova-3's dead-zone rate is **1.14 % (2/176) on 40 clips** and **0.57 % (1/176) on 10** — both correct, and quoting either without its clip count is this project's signature bug.
+**Populations — say it before quoting anything:** nova-3 ran **40 clips** (7,040 rows); whisper-base and elevenlabs-scribe ran the same **10-clip subset** (1,760 rows each). Chart and cross-arm figures are the **matched 1,757 cells per arm**; **ECE (expected calibration error) and AUROC (area under the ROC curve — how well confidence ranks good transcripts above bad) are each arm's own full run**, not the intersection (neither subtracts one arm from another, so a full-run figure is the right one — it is simply not the matched population). nova-3's dead-zone rate is **1.14 % (2/176) on 40 clips** and **0.57 % (1/176) on 10** — both correct, and quoting either without its clip count is this project's signature bug.
 
 - **Decision:** three arms — a commercial spine (nova-3), an open baseline (whisper-base), a commercial peer (Scribe) — with the two non-spine arms on the 10-clip AL subset rather than all 40.
   **Why:** the spine had to be a commercial model that exposes per-word confidence, because that *is* the headline signal; the open arm proves the finding isn't hostage to one vendor's API; and Scribe is the only other arm returning per-word confidence, which turns the question from *commercial vs open* into **is nova-3's self-knowledge a property of commercial models, or of nova-3?** The 10 clips were already the fixed subset for the AL oracle and both sim2real arms, so reusing them keeps every arm joinable — and Scribe deliberately ran the *same* ten, so adding a third arm did not shrink the intersection. <!-- SUNDAR: fill --> *(whether the 40→10 cut was driven by API spend or by wall-clock — Whisper is local and pinned to `--workers 1` — is written down nowhere; give the real reason, and the reason for `whisper-base` rather than a larger Whisper.)*
@@ -233,8 +233,8 @@ The one deliberate line: `deadzone/` is free to re-run in a loop, `scripts/` spe
 ## Appendix (a)(b)(c) — things I tried that did not work
 - **Decision:** Publish the active-learning null as a finding, and refuse to move the target until it won.
   **Why:** The target isn't hand-picked — the code sets it to the median final fidelity the *random* arm reaches on its own full budget, so neither arm can be handed a bar the other can't clear. At that bar, 2 of 8 active seeds reached it against random's 4 of 8, and the median evals-to-target is `inf` for **both** arms, so **no savings ratio exists and none is claimed**. Tuning the threshold until active won was the one genuinely dishonest move available.
-  **If pushed:** The acquisition function demonstrably worked — 58.3% of its picks landed near the decision contour against random's 30.0% (that pairing is the published RT60 arm; the 21.1% figure is the DRR arm's random baseline, don't cross them) — it did its job and the job didn't pay. The synthetic control still passes, so this isn't a broken implementation; the null belongs to the surface. **Every seed ran against a GP surrogate oracle — no seed was confirmed end-to-end against the live API.**
-- **Decision:** Test the obvious objection to the null — "you gave the GP the wrong reverb axis" — *with a permutation control*, not on its own.
+  **If pushed:** The acquisition function demonstrably worked — 58.3% of its picks landed near the decision contour against random's 30.0% (that pairing is the published RT60 arm; the 21.1% figure is the DRR (direct-to-reverberant ratio) arm's random baseline, don't cross them) — it did its job and the job didn't pay. The synthetic control still passes, so this isn't a broken implementation; the null belongs to the surface. **Every seed ran against a GP surrogate oracle — no seed was confirmed end-to-end against the live API.**
+- **Decision:** Test the obvious objection to the null — "you gave the GP (Gaussian process — the statistical model doing the predicting) the wrong reverb axis" — *with a permutation control*, not on its own.
   **Why:** Re-running in DRR coordinates and finding no gain only shows that one fix failed. Running all 24 permutations of the same four room values shows *why* it failed: the physically correct assignment ranks 18th of 24 (p = 0.75), so a random relabelling does as well as the right one and the coordinate was never what was holding it back.
   **If pushed:** The ceiling is honest — the grid requests 4 reverb levels, so the axis is 4 discrete rooms and any re-parameterisation is a relabelling of 4 points. This says nothing about a reverb axis with enough rooms to have a shape; the fix is more rooms, not a better coordinate. And no absolute-fidelity claim for DRR survives the split check — the statement is "no improvement", never "better".
 - **Decision:** Publish the failed listening pre-registration *and* the flaw in its own rubric.
@@ -253,6 +253,19 @@ The one deliberate line: `deadzone/` is free to re-run in a loop, `scripts/` spe
 - **permutation test** → shuffle the labels every possible way and see where the real arrangement ranks among them; with 4 rooms there are only 24 arrangements, so it's exhaustive and assumption-free.
 - **pre-registration** → writing down the prediction *and* the decision rule that would falsify it, committed, before looking at the data.
 - **Jaccard** → set overlap, shared ÷ union: 1.0 identical, 0.00 disjoint.
+- **ASR (automatic speech recognition) / STT (speech to text)** → the same thing: audio in, text out. "STT" is the product word, "ASR" the research one.
+- **WER (word error rate)** → (substitutions + deletions + insertions) ÷ reference words. 0 = perfect. Can exceed 1.0, because insertions are unbounded.
+- **RIR (room impulse response)** → a recording of one room's echo signature; convolve clean speech with it and the speech sounds like it was said in that room.
+- **RT60 (reverberation time)** → seconds for a room's echo to decay 60 dB. Bathroom ≈ 1 s, treated studio ≈ 0.2 s.
+- **SNR (signal-to-noise ratio, dB)** → how far speech sits above the background. 20 dB = quiet room; 0 dB = noise as loud as the speech.
+- **ECE (expected calibration error)** → how far a confidence score is from being a real probability. 0 = a reported 0.8 is right 80 % of the time.
+- **AUROC (area under the receiver-operating-characteristic curve)** → how well a score *ranks* bad cases above good ones. 0.5 = coin flip, 1.0 = perfect separation. Needs only an ordering, which is why it survives where ECE cannot be computed.
+- **CI (confidence interval)** → the range the estimate would plausibly fall in on a re-run. One that spans zero is a failure to separate, **not** proof of equality.
+- **ADPCM (adaptive differential pulse-code modulation)** → the compression family behind G.726, the narrowband telephony codec used here.
+- **VAD (voice activity detection)** → deciding which samples contain speech; it is what makes "SNR over active speech only" possible.
+- **RMS (root mean square)** → the standard loudness measure of a waveform; the trap in `apply_rir` is that a reverb tail inflates it.
+- **HF (high frequency)** → the top of the spectrum, which is what a cheap microphone loses — the `mic_rolloff` knob.
+- **API (application programming interface)** → here, a vendor's hosted transcription endpoint; "API calls" is the unit both cost and wall-clock are counted in.
 - **sim2real** → how far a simulated testbed's numbers sit from the same measurement made with real ingredients.
 - **DRR / C50** → two measures of how much sound arrives straight from the mouth versus bounced off walls (C50 = energy in the first 50 ms vs everything after); both describe a room in a way RT60's decay time does not.
 ## Operational — read before you present
