@@ -1,7 +1,7 @@
 # Deadzone: Silent Failures in Speech Recognition
 
 **A controlled-degradation rig that finds where an ASR model is *confidently wrong*.**
-Real speech → real rooms → real noise → real codecs, one knob at a time, everything else held still.
+Real speech → real rooms → real noise → real codecs, one knob turned at a time, everything else held constant.
 
 `176 acoustic conditions` × `60 clip-runs` — 40 clips on nova-3, 10 each on scribe_v2 and whisper-base — = **10,560 scored transcriptions**
 
@@ -62,12 +62,12 @@ flowchart LR
 ```
 
 - **Applied in physical order** — mouth → room → air → mic → wire. Reorder the stages and you're measuring a chain that can't exist in the real world.
-- **Every ingredient is a real recording** — measured impulse responses, real DEMAND noise, real ffmpeg codec passes. I only control which ones combine, and how much.
-- **Why not just use field recordings?** There, room + mic + noise + codec all move at once — so when WER moves you can't say what moved it. Here I turn one knob, freeze the rest → the change is attributable.
+- **Every ingredient is a real recording** — measured impulse responses, real DEMAND noise, real ffmpeg codec passes. We only control which ones combine, and how much.
+- **Why not just use field recordings?** There, room + mic + noise + codec all move at once — so when WER moves you can't say what moved it. Here we turn one knob, freeze the rest → the change is attributable.
 
 ### The three correctness-critical "trap" functions
 
-Each produces **clean-looking garbage (audibly)** if subtly wrong — plausible audio, plausible numbers, no exception.
+Each produces **clean-looking uninterpretable audio** which if subtly wrong — plausible audio, plausible numbers, no exception.
 
 | function | the silent bug it prevents |
 |---|---|
@@ -141,7 +141,7 @@ flowchart LR
 
 A vs B → **−0.018** paired difference, 95% CI **[−0.065, +0.031]** (spans zero) · **18 of 40** clips score exactly equal
 
-**→ The measurement is the model side: on 18 of 40 clips these two conditions score *identically*, and the paired difference spans zero.** The listening beat is the **hook**, not evidence — one unblinded listener, who called two pairs confidently and the third only marginally ("both pretty bad"), and who went the *opposite* way to my sealed prediction in two of three (appendix (b)). What that buys is the question, not the answer: a human ranking and this model's ranking are not the same axis, and I could not check which was right by ear — so I built something that could.
+**→ The measurement is the model side: on 18 of 40 clips these two conditions score *identically*, and the paired difference spans zero.** A human ranking and this model's ranking are not the same axis, and I could not check which was right by ear — so I built something that could, modeling WER and confidence, but NOT by ear.
 
 ---
 
@@ -159,7 +159,7 @@ A vs B → **−0.018** paired difference, 95% CI **[−0.065, +0.031]** (spans 
   <img src="docs/assets/overconfidence.svg" alt="Distribution of the per-condition confidence gap; no threshold involved" width="820">
 </p>
 
-*Operating-point and aggregation choices (precision/recall, why mean over min/p10, and the mismatched all-clips pairing ρ = −0.952 — the same 169 conditions scored against WER over **every** clip instead of only the ones that spoke) are validated — covered live.*
+*Operating-point and aggregation choices (precision/recall, why mean over min/p10, and the mismatched all-clips pairing ρ = −0.952 — the same 169 conditions scored against WER over **every** clip instead of only the ones that transcribed) are validated — covered live.*
 
 ### The count, and why it is not the headline
 
@@ -220,8 +220,8 @@ flowchart LR
 | **whisper-base** | 0.888 | **BLOCKED** § | 19.1% | 5 |
 
 ^ **upper bound** — correctness labels come from the same alignment as WER, so orthography disagreements label correct words incorrect.
-§ **BLOCKED** — whisper's hypothesis-word count and confidence-list length disagree after alignment; binding them would score the *wrong* words, so ECE is refused, not faked. AUROC survives because it needs only a ranking of confidences against a bad/good label, not word-level correctness binding.
-AUROC = same aggregate (arithmetic mean) for every arm, `bad := row WER ≥ 0.3`, computed **strictly inside** each arm.
+§ **BLOCKED** — whisper's hypothesis-word count and confidence-list length disagree after alignment; binding them would score the *wrong* words, so ECE is not included. AUROC survives because it needs only a ranking of confidences against a bad/good label, not word-level correctness binding.
+AUROC = same aggregate (arithmetic mean) for every arm, `bad = row WER ≥ 0.3`, computed **strictly inside** each arm.
 ‡ **full run per arm** (nova-3 40 clips, others 10) — see the population box above.
 
 > ⚠️ **This is NOT a "commercial beats open" result — read the columns against each other.**
@@ -232,7 +232,7 @@ AUROC = same aggregate (arithmetic mean) for every arm, `bad := row WER ≥ 0.3`
 ### nova-3 — knows it's failing, then goes quiet
 - best-calibrated arm, and the only one clean enough to fit: **ECE 0.0507 → 0.0077** (feature-conditioned, held-out conditions)
 - failure mode = **deletion / silence**: 24.5% of rows empty, 12 mute conditions
-- **the sting:** a deleted word emits no token → no confidence → its dominant failure is invisible to the exact signal this project proposes
+- **the finding:** a deleted word emits no token → no confidence → its dominant failure is invisible to the exact signal this project proposes
 
 ### elevenlabs-scribe — talks through anything
 - **5.5× less likely to go silent** than nova-3 (4.4% vs 24.5%)
@@ -250,7 +250,7 @@ AUROC = same aggregate (arithmetic mean) for every arm, `bad := row WER ≥ 0.3`
   <img src="docs/assets/whisper-hallucination.svg" alt="Eleven reference words expanded into a 47-word degenerate repetition loop" width="820">
 </p>
 
-> **⚠️ A counting bug I caught in my own figure.** This was reported across the repo as **3 → 49**. Wrong: `hallucination_report` normalizes spoken numbers to digits, then tokenizes `[a-z']+` (letters only) — building 8 digit tokens and discarding them, which collapses the 11-word reference to 3. Correct: **11 → 47, WER 4.18**. The loop is real; the *magnitude* was part model, part tokenizer.
+> **⚠️ A counting bug I caught in my own figure.** This was reported across the repo as **3 → 49**. Wrong: `hallucination_report` normalizes spoken numbers to digits, then tokenizes `[a-z']+` (letters only) — building 8 digit tokens and discarding them, which collapses the 11-word reference to 3. Correct: **11 → 47, WER 4.18**.
 
 **Why WER hides this:** it caps damage at one error per word — but a 47-word invention handed to a downstream agent is unbounded harm. Across the arm, **9.9%** of rows exceed 2× the reference length (nova-3: 0.1%).
 
@@ -259,8 +259,8 @@ AUROC = same aggregate (arithmetic mean) for every arm, `bad := row WER ≥ 0.3`
 > Everything above is behaviour I measured; below is a tagged guess at *why*. Sources + falsification tests: [`report/model_architecture_notes.md`](report/model_architecture_notes.md).
 >
 > - **Whisper's confidence scores what it *generated*, not what it heard** — it's a decoder-context score, so inside a repetition loop the context alone keeps it high while the audio contributes almost nothing. OpenAI ships a gzip-ratio check precisely because log-prob doesn't catch these loops. *(documented; mechanism in the notes)*
-> - **Deepgram's field is only "overall transcript reliability"** — no derivation, no calibration claim, no architecture. **The best-performing arm is the one I can say the least about.**
-> - **The confound against my own headline:** nova-3 fails by *deleting*, and deletions carry no confidence — so its failures are structurally excluded from the stat that ranks it best. Whisper fails by *inserting*, so its failures must carry a score. Part of the ranking may be *which failure mode the metric can see*.
+> - **Deepgram's field is only "overall transcript reliability"** — no derivation, no calibration claim, no architecture. **The best-performing arm is the one we can say the least about.**
+> - **The confound against our own headline:** nova-3 fails by *deleting*, and deletions carry no confidence — so its failures are structurally excluded from the stat that ranks it best. Whisper fails by *inserting*, so its failures must carry a score. Part of the ranking may be *which failure mode the metric can see*.
 > - **Size, not just vendor:** `whisper-base` is **74M**; both commercial arms are undisclosed and larger. "Commercial vs open" isn't separated from "large vs small."
 
 ---
@@ -293,7 +293,7 @@ AUROC = same aggregate (arithmetic mean) for every arm, `bad := row WER ≥ 0.3`
 
 Three arms return confidence on **three unrelated scales** (whole-grid median differs ~3× across them), so a shared absolute threshold is meaningless — every cross-arm claim goes through `within_model_conf_percentile`.
 
-**`elevenlabs-scribe` is excluded from cross-model WER** (`model_compare` raises — no flag includes it), and the reason is principled, not convenient: Whisper's orthography offset is a **constant** (+0.090 — characterize once, subtract), but Scribe's is a **per-call draw** — 4 identical calls on byte-identical audio gave different transcripts on **5 of 6** probe clips, up to **0.727 WER on identical input**. Variance, not bias: a constant can be subtracted, a coin flip cannot. The inconvenient part: Scribe scores *better* than nova-3 on raw WER — the reason those numbers are incomparable was found on the arm that would have won.
+**`elevenlabs-scribe` is excluded from cross-model WER** (`model_compare` raises — no flag includes it), and the reason is principled, not convenient: Whisper's orthography offset is a **constant** (+0.090 — characterize once, subtract), but Scribe's is a **per-call draw** — 4 identical calls on byte-identical audio gave different transcripts on **5 of 6** probe clips, up to **0.727 WER on identical input**. Variance, not bias: a constant can be subtracted, a coin flip cannot. The inconvenient part: Scribe scores *better* than nova-3 on raw WER — the reason those numbers are incomparable was found on the arm that would have succeeded.
 
 **Normalizer audit** (`shift = strict − normalized`, 1,757 shared rows):
 
@@ -303,7 +303,6 @@ Three arms return confidence on **three unrelated scales** (whole-grid median di
 | whisper-base | **+0.090** | a constant the normalizer recovers — spelling, not accuracy |
 | elevenlabs-scribe | **+0.064** | *mean* of a per-call draw — the mean isn't the problem, the draw is |
 
-> ⚠️ **Weaker than everything else here:** the repeat-call probe writes **no artifact** — the one figure on this page not pinned by `test_report_numbers.py`, run once per cell, so every Scribe number carries that variance unquantified.
 
 ---
 
