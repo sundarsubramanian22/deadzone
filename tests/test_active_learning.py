@@ -14,14 +14,25 @@ Planted oracle (known boundary):
   must find a mostly-2-D contour embedded in the full 5-D space.
 
 Deterministic (fixed seeds), no GPU, runs in a few seconds.  Run:
-    python3 test_active_learning.py
+    python3 tests/test_active_learning.py
 """
+
+# --- repo-root bootstrap -------------------------------------------------
+# Makes `deadzone`, `scripts` and `demos` importable when this file is run
+# directly (`python tests/test_pipeline.py`) with no install step. Harmless
+# when it is imported as a module instead.
+import os as _os
+import sys as _sys
+_REPO_ROOT = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+if _REPO_ROOT not in _sys.path:
+    _sys.path.insert(0, _REPO_ROOT)
+# -------------------------------------------------------------------------
 import math
 
 import numpy as np
 
-from design import DEFAULT_FACTOR_SPACE
-from active_learning import (
+from deadzone.design import DEFAULT_FACTOR_SPACE
+from deadzone.active_learning import (
     GPSurrogate, acquire, active_learn, random_baseline, compare_arms,
     learning_curve, evals_to_target, best_so_far, make_test_set, boundary_error,
     lhs_raw, sobol_pool_raw, DEFAULT_THRESHOLD,

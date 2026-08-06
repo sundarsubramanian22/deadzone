@@ -3,7 +3,7 @@ smoke_codec.py — REAL codec round-trip through ffmpeg (the one path the offlin
 test suite mocks out). Run it after installing ffmpeg to prove apply_codec()
 actually imprints artifacts, not just that it fails loudly when ffmpeg is absent.
 
-    python3 smoke_codec.py
+    python3 scripts/smoke_codec.py
 
 Pass condition per codec: the round-trip returns finite audio, restored to the
 input length, that DIFFERS from the input (the codec left its mark). AMR-NB
@@ -11,9 +11,20 @@ requires an ffmpeg built with the opencore/AudioToolbox AMR encoder; if this
 build lacks it, apply_codec raises CodecUnavailableError and we report that
 honestly (a real limitation, not a silent skip).
 """
+
+# --- repo-root bootstrap -------------------------------------------------
+# Makes `deadzone`, `scripts` and `demos` importable when this file is run
+# directly (`python tests/test_pipeline.py`) with no install step. Harmless
+# when it is imported as a module instead.
+import os as _os
+import sys as _sys
+_REPO_ROOT = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+if _REPO_ROOT not in _sys.path:
+    _sys.path.insert(0, _REPO_ROOT)
+# -------------------------------------------------------------------------
 import numpy as np
 
-from conditions import apply_codec, CodecUnavailableError, _CODEC_SPECS
+from deadzone.conditions import apply_codec, CodecUnavailableError, _CODEC_SPECS
 
 FS = 16000
 

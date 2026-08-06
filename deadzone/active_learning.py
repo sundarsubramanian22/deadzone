@@ -34,7 +34,7 @@ from scipy.stats import qmc
 from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.gaussian_process.kernels import ConstantKernel, Matern, WhiteKernel
 
-from design import FactorSpace, DEFAULT_FACTOR_SPACE
+from deadzone.design import FactorSpace, DEFAULT_FACTOR_SPACE
 
 Oracle = Callable[[dict], float]
 
@@ -397,11 +397,11 @@ def make_pipeline_oracle(clean_audio, ref_text: str, assets, fs: int = 16000,
 
     import soundfile as sf
 
-    from conditions import Condition, apply_condition
-    from audio_pipeline import classify_errors
+    from deadzone.conditions import Condition, apply_condition
+    from deadzone.audio_pipeline import classify_errors
 
     if transcribe_fn is None:
-        from audio_pipeline import transcribe_deepgram
+        from deadzone.audio_pipeline import transcribe_deepgram
         transcribe_fn = lambda path: transcribe_deepgram(path, model=model)
 
     def oracle(sample: dict) -> float:

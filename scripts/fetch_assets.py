@@ -1,10 +1,10 @@
 """
 R2 — fetch and CURATE the real acoustic ingredients (SPEC §8).
 
-    python3 fetch_assets.py                 # everything
-    python3 fetch_assets.py --rirs-only
-    python3 fetch_assets.py --noise-only --minimal
-    python3 fetch_assets.py --verify        # re-check what's on disk, download nothing
+    python3 scripts/fetch_assets.py                 # everything
+    python3 scripts/fetch_assets.py --rirs-only
+    python3 scripts/fetch_assets.py --noise-only --minimal
+    python3 scripts/fetch_assets.py --verify        # re-check what's on disk, download nothing
 
 Idempotent: anything already present with a matching SHA-256 is skipped.
 
@@ -31,6 +31,17 @@ Sources
           level means "this kind of place", not "this one recording".
 """
 from __future__ import annotations
+
+# --- repo-root bootstrap -------------------------------------------------
+# Makes `deadzone`, `scripts` and `demos` importable when this file is run
+# directly (`python tests/test_pipeline.py`) with no install step. Harmless
+# when it is imported as a module instead.
+import os as _os
+import sys as _sys
+_REPO_ROOT = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+if _REPO_ROOT not in _sys.path:
+    _sys.path.insert(0, _REPO_ROOT)
+# -------------------------------------------------------------------------
 
 import argparse
 import hashlib
@@ -171,7 +182,7 @@ def _safe_stem(s: str, maxlen: int = 48) -> str:
 
 def fetch_rirs(stage: Path, n_rirs: int = N_RIRS) -> list[dict]:
     import soundfile as sf
-    from conditions import _rt60_schroeder
+    from deadzone.conditions import _rt60_schroeder
 
     print("\nRIRs — MIT Acoustical Reverberation Survey")
     zp = download(MIT_URL, stage / "mit_ir_survey.zip", "MIT IR survey")
@@ -279,8 +290,8 @@ def fetch_noise(stage: Path, minimal: bool = False) -> list[dict]:
 def verify() -> bool:
     from collections import Counter
 
-    from conditions import DiskAssetLibrary
-    from design import DEFAULT_FACTOR_SPACE
+    from deadzone.conditions import DiskAssetLibrary
+    from deadzone.design import DEFAULT_FACTOR_SPACE
 
     print("\nVerifying the library as the composer will see it")
     try:

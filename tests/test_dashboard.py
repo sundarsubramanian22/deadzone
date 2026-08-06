@@ -16,9 +16,20 @@ demo-critical properties, in the order they would ruin a demo:
      so this is a rendering assertion and not a string search.
   5. THE FILE IS STANDALONE HTML.
 
-    python3 test_dashboard.py
+    python3 tests/test_dashboard.py
 """
 from __future__ import annotations
+
+# --- repo-root bootstrap -------------------------------------------------
+# Makes `deadzone`, `scripts` and `demos` importable when this file is run
+# directly (`python tests/test_pipeline.py`) with no install step. Harmless
+# when it is imported as a module instead.
+import os as _os
+import sys as _sys
+_REPO_ROOT = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+if _REPO_ROOT not in _sys.path:
+    _sys.path.insert(0, _REPO_ROOT)
+# -------------------------------------------------------------------------
 
 import json
 import os
@@ -29,8 +40,7 @@ import sys
 import tempfile
 import unittest
 
-REPO = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, REPO)
+REPO = _REPO_ROOT
 
 from dashboard import build as B                       # noqa: E402
 from dashboard import make_synthetic as MS             # noqa: E402
@@ -38,8 +48,15 @@ from dashboard import make_synthetic as MS             # noqa: E402
 SYNTH_CSV = os.path.join(REPO, "results/synthetic_master.csv")
 BUILT = os.path.join(REPO, "dashboard/deadzone.html")
 
+# Panels 1-6 are per-model and re-render when the model toggle changes.
 PANEL_IDS = ["panel-hero", "panel-heatmap", "panel-fingerprints",
              "panel-sensitivity", "panel-al", "panel-sim2real"]
+
+# Panels 7-8 are cross-cutting and deliberately do NOT change with the toggle:
+# panel 7 IS the comparison between arms, and panel 8 reads sweep audio rather
+# than the per-model table. They are listed separately so the toggle test does
+# not demand that they re-render, which would be the wrong requirement.
+CROSS_PANEL_IDS = ["panel-model-arms", "panel-decoupling"]
 
 _NODE = shutil.which("node")
 
@@ -164,9 +181,17 @@ out.al_after_step = al.textContent.slice(0, 200);
 if (buttons.length > 1) {
   buttons[buttons.length - 1].click();               // switch model, re-render all
   out.after_toggle = {};
+  out.after_toggle_rendered = {};
+  out.after_toggle_text = {};
   PANEL_IDS_JSON.forEach(function (id) {
-    out.after_toggle[id] = DOC.getElementById(id).countClass("empty");
+    var el = DOC.getElementById(id);
+    out.after_toggle[id] = el.countClass("empty");
+    // a panel that legitimately has no data for this model must still RENDER --
+    // an explanation is a pass, a blank hole is not.
+    out.after_toggle_rendered[id] = (el.children || []).length;
+    out.after_toggle_text[id] = el.textContent.slice(0, 400);
   });
+  out.after_toggle_model = buttons[buttons.length - 1].textContent;
 }
 console.log("__RESULT__" + JSON.stringify(out));
 """
@@ -311,7 +336,7 @@ class BuildProduct(unittest.TestCase):
         notes = []
 
         def missing_module():
-            import analysis.not_a_real_module_yet  # noqa: F401
+            import deadzone.analysis.not_a_real_module_yet  # noqa: F401
         got = B._panel("future layer", missing_module, notes)
         self.assertEqual(got["status"], "missing")
         self.assertIn("not importable", got["reason"])
@@ -422,13 +447,46 @@ class Rendering(unittest.TestCase):
         self.assertIn("oracle calls", rep["al_after_step"])
         self.assertIn("step 2/", rep["al_after_step"])
 
+    # Panels that may legitimately be an empty state for SOME models, with the
+    # reason. These are not exemptions from rendering -- see the assertions
+    # below, which still require the panel to draw an explanation. They are
+    # exemptions only from "must contain data for every model".
+    #
+    #   panel-sim2real: the simulated-RIR arm was only ever run for nova-3
+    #     (results_sim/ holds 1760 nova-3 rows and nothing else). D4 compares
+    #     measured vs synthetic RIRs for ONE model; re-running it per model
+    #     would double the API spend for a question that is about RIR
+    #     provenance, not about model family. A model with no sim arm therefore
+    #     has genuinely nothing to plot, and build_sim2real returns an explained
+    #     empty state rather than the raw KeyError it used to raise.
+    MODEL_CONDITIONAL_EMPTY = {"panel-sim2real"}
+
     def test_model_toggle_re_renders_every_panel(self):
+        """Switching model must re-render every panel.
+
+        A panel with no data for the newly-selected model is allowed to be an
+        empty state, but it must SAY SO: an unexplained blank panel and a
+        crashed panel look identical to someone demoing this, and the whole
+        point of the empty state is that it names the reason.
+        """
         if not os.path.exists(BUILT):
             self.skipTest("dashboard/deadzone.html not built yet")
         with open(BUILT, encoding="utf-8") as fh:
             rep = render_with_node(fh.read())
         self.assertGreaterEqual(len(rep["models"]), 2, "need >=2 models to test the toggle")
+        rendered = rep.get("after_toggle_rendered") or {}
+        texts = rep.get("after_toggle_text") or {}
         for pid, empties in (rep.get("after_toggle") or {}).items():
+            # Non-negotiable for every panel: it drew something.
+            self.assertGreater(rendered.get(pid, 0), 0,
+                               f"{pid} rendered NOTHING after switching model")
+            if pid in self.MODEL_CONDITIONAL_EMPTY:
+                if empties:
+                    self.assertTrue(
+                        (texts.get(pid) or "").strip(),
+                        f"{pid} is an empty state after switching model but "
+                        f"explains nothing -- an unexplained blank panel is a bug")
+                continue
             self.assertEqual(empties, 0, f"{pid} went empty after switching model")
 
 

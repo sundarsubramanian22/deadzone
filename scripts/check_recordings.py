@@ -3,8 +3,8 @@ R1.7 gate — verify the recorded corpus against `recording_manifest.csv`.
 
 Run this before trusting a single downstream number:
 
-    python3 check_recordings.py                # whole corpus
-    python3 check_recordings.py --only u01,u02 # the R1.8 two-clip checkpoint
+    python3 scripts/check_recordings.py                # whole corpus
+    python3 scripts/check_recordings.py --only u01,u02 # the R1.8 two-clip checkpoint
 
 WHY THIS EXISTS. The recordings are the one asset in this repo that no unit test
 can validate. `test_pipeline.py` proves `classify_errors` aligns two strings
@@ -29,6 +29,17 @@ one of them is something you should be able to explain.
 """
 from __future__ import annotations
 
+# --- repo-root bootstrap -------------------------------------------------
+# Makes `deadzone`, `scripts` and `demos` importable when this file is run
+# directly (`python tests/test_pipeline.py`) with no install step. Harmless
+# when it is imported as a module instead.
+import os as _os
+import sys as _sys
+_REPO_ROOT = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+if _REPO_ROOT not in _sys.path:
+    _sys.path.insert(0, _REPO_ROOT)
+# -------------------------------------------------------------------------
+
 import argparse
 import csv
 import sys
@@ -37,7 +48,7 @@ from pathlib import Path
 
 import numpy as np
 
-from audio_pipeline import active_speech_mask, normalize_text, rms
+from deadzone.audio_pipeline import active_speech_mask, normalize_text, rms
 
 # ============================================================================
 # THRESHOLDS — every one of these traces to a SPEC appendix requirement

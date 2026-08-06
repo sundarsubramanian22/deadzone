@@ -33,17 +33,17 @@ from typing import Sequence
 
 import numpy as np
 
-# Allow `python analysis/confidence_gap.py` as well as `import analysis.confidence_gap`
-_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# Allow `python deadzone/analysis/confidence_gap.py` as well as `import deadzone.analysis.confidence_gap`
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
-from analysis import (                       # noqa: E402  (after the path shim)
-    as_float, coerce_row, failure_summary, load_master_table, split_by_model,
-    split_failures,
+from deadzone.analysis import (                       # noqa: E402  (after the path shim)
+    as_float, check_unique_cells, coerce_row, failure_summary,
+    load_master_table, split_by_model, split_failures,
 )
-from design import DEFAULT_FACTOR_SPACE, FactorSpace  # noqa: E402
-from model_compare import (                  # noqa: E402
+from deadzone.design import DEFAULT_FACTOR_SPACE, FactorSpace  # noqa: E402
+from deadzone.model_compare import (                  # noqa: E402
     confidence_wer_shape, dead_zone_flags, within_model_conf_percentile,
     _bins_for, _region_rows,
 )
@@ -94,6 +94,17 @@ def per_condition_table(rows: Sequence[dict], model: str | None = None) -> list[
             f"(see model_compare.within_model_conf_percentile).")
 
     ok, failed = split_failures(rows)
+    # ONE ROW PER (clip, condition) — asserted, not assumed. A repeated cell is
+    # averaged into its condition twice, so a single duplicated hard clip lifts
+    # that condition's WER (and can lift it over `wer_hi` into the dead-zone
+    # quadrant) while `n_clips` reads one higher and everything else looks
+    # normal. This is D1's headline table; there is nothing downstream that
+    # could catch it.
+    check_unique_cells(
+        ok, ("clip_id", "condition_name"), where="per_condition_table",
+        cause=("Usual cause: rows for one model concatenated from two runs, or "
+               "a master table rebuilt over a cache that logged a re-run cell "
+               "under a second run_id."))
     groups: dict[str, list[dict]] = {}
     for r in ok:
         groups.setdefault(str(r["condition_name"]), []).append(r)

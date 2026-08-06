@@ -127,7 +127,7 @@ def _panel(name: str, fn, notes: list) -> dict:
 
 def load_rows(master_path: str) -> list[dict]:
     """Everything on the page comes from here. One table, one call."""
-    from analysis import load_master_table
+    from deadzone.analysis import load_master_table
     return load_master_table(master_path)
 
 
@@ -187,7 +187,7 @@ def _example_for_condition(rows, cond_name, model):
 
 
 def build_silent_failure(rows_real, model):
-    import analysis.confidence_gap as cg
+    import deadzone.analysis.confidence_gap as cg
     report = cg.confidence_gap_report(rows_real, model=model)
     if not report.get("per_condition"):
         return _missing(
@@ -213,7 +213,7 @@ def _family_rows(rows, family: str):
     (continuous -> degraded tercile, categorical -> that level) so the entity rate
     we attach to a family describes the SAME rows its signature was computed on.
     """
-    from design import DEFAULT_FACTOR_SPACE as SPACE
+    from deadzone.design import DEFAULT_FACTOR_SPACE as SPACE
     if "=" in family:
         fname, level = family.split("=", 1)
         return [r for r in rows if str(r.get(fname)) == level]
@@ -234,7 +234,7 @@ def _family_rows(rows, family: str):
 
 
 def build_fingerprints(rows_real, model):
-    import analysis.fingerprints as fp
+    import deadzone.analysis.fingerprints as fp
     report = fp.fingerprint_report(
         rows_real, model=model,
         manifest_path=os.path.join(REPO, "recording_manifest.csv"),
@@ -298,7 +298,7 @@ def build_fingerprints(rows_real, model):
 # ===========================================================================
 
 def build_sensitivity(rows_real, model, sobol_n: int, sobol_path: str):
-    import analysis.interactions as itx
+    import deadzone.analysis.interactions as itx
     provenance = None
 
     if os.path.exists(sobol_path):
@@ -309,7 +309,7 @@ def build_sensitivity(rows_real, model, sobol_n: int, sobol_path: str):
         # No saved Sobol run: fit the GP surrogate to the measured grid and take
         # the indices off THAT. Cheap and honest, as long as the page says so —
         # which is what `provenance` is for. It is NOT a measured Sobol run.
-        from design import DEFAULT_FACTOR_SPACE as SPACE, sobol_indices
+        from deadzone.design import DEFAULT_FACTOR_SPACE as SPACE, sobol_indices
         gp, mat = itx.fit_surrogate_from_master(rows_real, model=model)
         wer_fn = itx.surrogate_wer_fn(gp, SPACE, grid=7)
         sobol = sobol_indices(SPACE, wer_fn, N=sobol_n, seed=0)
@@ -342,8 +342,8 @@ def _posterior_frames(oracle, space, seed=0, n_seed=10, budget=16, max_frames=14
     plot cannot show.
     """
     import numpy as np
-    from active_learning import GPSurrogate, active_learn
-    from analysis.interactions import encode_sample
+    from deadzone.active_learning import GPSurrogate, active_learn
+    from deadzone.analysis.interactions import encode_sample
 
     traj = active_learn(oracle, space, strategy="boundary", n_seed=n_seed,
                         budget=budget, pool_size=300, seed=seed)
@@ -383,9 +383,9 @@ def build_active_learning(rows_real, model, seeds=(0, 1, 2), enabled=True):
         return _missing("The active-learning loop was skipped for this build "
                         "(`--no-al`). Re-run `python3 dashboard/build.py` without "
                         "it to populate this panel; it takes ~15 s.")
-    import analysis.al_savings as als
-    from design import DEFAULT_FACTOR_SPACE as SPACE
-    from active_learning import DEFAULT_THRESHOLD
+    import deadzone.analysis.al_savings as als
+    from deadzone.design import DEFAULT_FACTOR_SPACE as SPACE
+    from deadzone.active_learning import DEFAULT_THRESHOLD
 
     split = als.test_set_from_master(rows_real, SPACE, model=model)
     oracle, meta = als.surrogate_oracle_from_master(split=split, model=model)
@@ -423,7 +423,14 @@ def build_sim2real(rows_real, rows_sim, model):
             "comparison to make. The sim arm is identified by its rir_key "
             "(data/rirs_sim/...); run the grid against the synthetic RIRs "
             "(make_sim_rirs.py) and rebuild.")
-    import analysis.sim2real as s2r
+    if not any(r.get("model") == model for r in rows_sim):
+        have = sorted({str(r.get("model")) for r in rows_sim})
+        return _missing(
+            f"The simulated-RIR arm was only run for {', '.join(have)}, not for "
+            f"'{model}'. The sim2real comparison is per-model by construction — the "
+            f"gap is a property of one model's response to one room — so there is "
+            f"nothing to show here until '{model}' is run against data/rirs_sim.")
+    import deadzone.analysis.sim2real as s2r
     res = s2r.sim2real_report(rows_real, rows_sim, model=model)
     payload = s2r.plot_payload(res)
     head = res.get("headline") or {}
@@ -437,15 +444,170 @@ def build_sim2real(rows_real, rows_sim, model):
 
 
 # ===========================================================================
+# PANEL 7 — L1 multi-model comparison   (cross-cutting: not per-model)
+# ===========================================================================
+
+def build_model_arms(path: str) -> dict:
+    """
+    Read the L1 comparison written by `analysis/model_arms.py`.
+
+    Read rather than recomputed, unlike panels 1-6. Re-scoring every row through
+    the cross-model normalizer costs seconds and pulls in openai-whisper purely
+    for its text normalizer — a heavy import to put on the critical path of a
+    dashboard build that must not fail. The analysis owns the numbers; the
+    dashboard displays them.
+
+    NOTE FOR THE READER OF THE PAGE, enforced by the payload below: the two arms'
+    confidences are NOT on a common scale (Deepgram returns acoustic confidence,
+    Whisper the decoder's token probability), so this panel never draws them on a
+    shared axis. It shows each model's dead-zone rate, its own confidence-vs-WER
+    shape, and where the two disagree.
+    """
+    if not os.path.isfile(path):
+        return _missing(
+            "results/model_arms.json is absent, so the multi-model comparison has "
+            "not been run. Produce it with `python3 -m deadzone.analysis.model_arms` once "
+            "both arms are in the master table.")
+    with open(path, encoding="utf-8") as fh:
+        res = json.load(fh)
+
+    per = res.get("per_model") or {}
+    if len(per) < 2:
+        return _missing(
+            f"Only {len(per)} model arm is present, so there is nothing to compare. "
+            f"Run the grid for a second model (`--models whisper-base`) and re-run "
+            f"the analysis.")
+
+    ov = res.get("dead_zone_overlap") or {}
+    hall = res.get("whisper_hallucination") or {}
+    return _ok({
+        "models": [
+            {"model": m,
+             "n_conditions": d.get("n_conditions"),
+             "wer_strict": d.get("wer_mean_strict"),
+             "wer_crossmodel": d.get("wer_mean_crossmodel"),
+             "dead_zone_rate": d.get("dead_zone_rate"),
+             "n_dead_zones": d.get("n_dead_zones"),
+             "shape": d.get("shape"),
+             "edits": d.get("edit_signature_crossmodel")}
+            for m, d in per.items()
+        ],
+        "normalization_shift": res.get("normalization_shift"),
+        "overlap": {"jaccard": ov.get("jaccard"),
+                    "shared": ov.get("shared", []),
+                    "only": {k: v for k, v in ov.items() if k.endswith("_only")}},
+        "divergence_regions": (res.get("divergence_regions") or [])[:8],
+        "hallucination": {
+            "median_len_ratio": hall.get("median_len_ratio"),
+            "p95_len_ratio": hall.get("p95_len_ratio"),
+            "frac_rows_over_2x": hall.get("frac_rows_over_2x"),
+            "examples": (hall.get("examples") or [])[:3],
+        },
+        "caption": ("Confidence is comparable WITHIN a model, never across two. "
+                    "Each arm is ranked against its own confidence distribution; "
+                    "absolute WER is shown both under the strict scoring and under "
+                    "a symmetric cross-model normalization, because the two models "
+                    "disagree about orthography as well as about acoustics."),
+    })
+
+
+# ===========================================================================
+# PANEL 8 — L3 paralinguistic vs lexical decoupling   (cross-cutting)
+# ===========================================================================
+
+def build_decoupling(path: str) -> dict:
+    """
+    Read the L3 decoupling result. This is the one layer whose input is AUDIO
+    rather than the results table, so it cannot be recomputed from `rows` here
+    at all — the sweep wavs and their transcriptions are its source.
+    """
+    if not os.path.isfile(path):
+        return _missing(
+            "results/l3_decoupling.json is absent. This layer reads the sweep "
+            "audio (results/audio/sweep/, from scripts/make_audio_sets.py), not the "
+            "master table, so it must be run separately: "
+            "`python3 -m deadzone.analysis.decoupling`.")
+    with open(path, encoding="utf-8") as fh:
+        res = json.load(fh)
+
+    factors = res.get("factors") or res.get("per_factor") or {}
+    if not factors:
+        return _missing(
+            "The decoupling result contained no per-factor curves. Expected one "
+            "entry per swept factor (rt60, snr_db).")
+
+    out = []
+    for name, f in factors.items():
+        head = f.get("headline") or {}
+        deg = f.get("lexical_degeneracy") or {}
+        # A half-degradation level is only meaningful if the curve it was read
+        # off actually travelled. The analysis flags the degenerate case; the
+        # page must not quietly render a number the analysis refused to quote.
+        quotable = not bool(deg.get("degenerate"))
+        out.append({
+            "factor": name,
+            "levels": f.get("levels"),
+            "severity_order": f.get("severity_order"),
+            "wer_mean": f.get("wer_curve_mean"),
+            "wer_std": f.get("wer_curve_std"),
+            "wer_per_clip": f.get("wer_per_clip"),
+            "primary_feature": f.get("primary_feature"),
+            "feature_curve": (head.get("feature_curve")
+                              or head.get("feature_drift_mean")),
+            "per_feature": f.get("per_feature"),
+            "verdict": f.get("verdict"),
+            "statement": f.get("statement"),
+            "leads": f.get("factor_leads"),
+            "spearman": head.get("spearman"),
+            "max_abs_gap": head.get("max_abs_gap"),
+            "feature_half_level": head.get("feature_half_level"),
+            "lexical_half_level": head.get("lexical_half_level"),
+            "half_levels_quotable": quotable,
+            "degeneracy": deg,
+            "n_features_trend_reliable": f.get("n_features_trend_reliable"),
+            "n_features": f.get("n_features"),
+            "n_clips": f.get("n_clips"),
+            "notes": f.get("notes"),
+        })
+
+    return _ok({
+        "factors": out,
+        "feature_keys": res.get("feature_keys"),
+        "caption": ("Do paralinguistic features and lexical accuracy degrade at the "
+                    "same rate, or decouple? If lexical accuracy leads, an agent "
+                    "watching prosody would not notice its ASR had already failed. "
+                    "Coupling is an equally valid result and is reported as one — "
+                    "and where a curve never leaves its floor, no threshold is "
+                    "quoted at all, because a min-max-normalized crossing point on "
+                    "a flat curve is arithmetic without meaning."),
+    })
+
+
+# ===========================================================================
 # ASSEMBLY
 # ===========================================================================
 
-def collect(master_path: str, with_al: bool = True, sobol_n: int = 1024) -> dict:
+def collect(master_path: str, with_al: bool = True, sobol_n: int = 1024,
+            sim_master: str | None = None) -> dict:
     notes: list[str] = []
     rows = load_rows(master_path)
+
+    # The sim arm is a separate table by necessity, not by preference: the run
+    # cache is keyed on (clip_id, condition_name, model) and does not encode
+    # which RIR library produced the row, so running the simulated arm against
+    # the real results dir would be 100% cache hits and would report a sim2real
+    # gap of exactly zero -- a wrong answer with no error message. Here the two
+    # are concatenated and re-split by rir_key, which is the field that actually
+    # records provenance.
+    if sim_master and os.path.exists(sim_master):
+        sim_rows = load_rows(sim_master)
+        rows = rows + sim_rows
+        notes.append(f"{len(sim_rows)} simulated-RIR rows joined from "
+                     f"{os.path.relpath(sim_master, REPO)} for the sim-vs-real panel.")
+
     real, sim = split_real_sim(rows)
 
-    from analysis import split_by_model
+    from deadzone.analysis import split_by_model
     models = sorted(split_by_model(real).keys())
     if not models:
         notes.append("The master table contained no rows with a model column.")
@@ -465,6 +627,18 @@ def collect(master_path: str, with_al: bool = True, sobol_n: int = 1024) -> dict
             "sim2real": _panel("sim2real",
                                lambda m=m: build_sim2real(real, sim, m), notes),
         }
+
+    # Panels 7 and 8 are cross-cutting: L1 compares the model arms against each
+    # other and L3 reads audio rather than the table, so neither belongs under a
+    # per-model key. They are built once and rendered outside the model toggle.
+    cross = {
+        "model_arms": _panel("multi-model comparison",
+                             lambda: build_model_arms(
+                                 os.path.join(REPO, "results/model_arms.json")), notes),
+        "decoupling": _panel("paralinguistic decoupling",
+                             lambda: build_decoupling(
+                                 os.path.join(REPO, "results/l3_decoupling.json")), notes),
+    }
 
     is_synth = "synthetic" in os.path.basename(master_path)
     if is_synth:
@@ -489,6 +663,7 @@ def collect(master_path: str, with_al: bool = True, sobol_n: int = 1024) -> dict
             "notes": notes,
         },
         "models": per_model,
+        "cross": cross,
         "default_model": models[0] if models else None,
     }
 
@@ -531,6 +706,14 @@ def main(argv=None) -> int:
     ap.add_argument("--master", default=None,
                     help="master results table (default: results/master.csv if it "
                          "exists, else results/synthetic_master.csv)")
+    ap.add_argument("--sim-master", default=None,
+                    help="second table holding the simulated-RIR arm, appended to "
+                         "--master before the split (default: results_sim/master_sim.csv "
+                         "if present). The sim arm lives in its own results dir because "
+                         "the run cache is keyed on (clip, condition, model) and does NOT "
+                         "encode which RIR library produced the row -- one shared cache "
+                         "would be 100%% false hits and would report a sim2real gap of "
+                         "exactly zero.")
     ap.add_argument("--out", default=DEFAULT_OUT)
     ap.add_argument("--no-al", action="store_true", help="skip the active-learning loop (~15 s)")
     ap.add_argument("--sobol-n", type=int, default=1024)
@@ -544,7 +727,13 @@ def main(argv=None) -> int:
         write_csv(build_rows(), DEFAULT_SYNTH)
         master = DEFAULT_SYNTH
 
-    payload = collect(master, with_al=not args.no_al, sobol_n=args.sobol_n)
+    sim_master = args.sim_master
+    if sim_master is None:
+        cand = os.path.join(REPO, "results_sim/master_sim.csv")
+        sim_master = cand if os.path.exists(cand) else None
+
+    payload = collect(master, with_al=not args.no_al, sobol_n=args.sobol_n,
+                      sim_master=sim_master)
     out = emit_html(payload, args.out)
 
     size = os.path.getsize(out)
@@ -555,6 +744,10 @@ def main(argv=None) -> int:
         state = ", ".join(f"{k}={'ok' if v['status'] == 'ok' else 'EMPTY'}"
                           for k, v in panels.items())
         print(f"  [{m}] {state}")
+    cross_state = ", ".join(f"{k}={'ok' if v['status'] == 'ok' else 'EMPTY'}"
+                            for k, v in payload.get("cross", {}).items())
+    if cross_state:
+        print(f"  [cross-model] {cross_state}")
     for n in payload["meta"]["notes"]:
         print(f"  note: {n.splitlines()[0]}")
     return 0

@@ -10,14 +10,25 @@ Task metrics — the point is that entity-error rate and WER DISAGREE:
 Turn-taking — planted false endpoint / missed turn / barge-in each get flagged,
 and correctly-handled turns do NOT.
 
-Deterministic, numpy-free logic. Run:  python3 test_agent_eval.py
+Deterministic, numpy-free logic. Run:  python3 tests/test_agent_eval.py
 """
-from agent_eval import (
+
+# --- repo-root bootstrap -------------------------------------------------
+# Makes `deadzone`, `scripts` and `demos` importable when this file is run
+# directly (`python tests/test_pipeline.py`) with no install step. Harmless
+# when it is imported as a module instead.
+import os as _os
+import sys as _sys
+_REPO_ROOT = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+if _REPO_ROOT not in _sys.path:
+    _sys.path.insert(0, _REPO_ROOT)
+# -------------------------------------------------------------------------
+from deadzone.agent_eval import (
     TaskSpec, evaluate_task, entity_error_rate,
     analyze_turns, summarize_turn_findings,
     USER_START, USER_END, AGENT_ENDPOINT, AGENT_START, AGENT_END,
 )
-from audio_pipeline import classify_errors
+from deadzone.audio_pipeline import classify_errors
 
 REF = "call maria at four zero five"
 SPEC = TaskSpec(slots={"name": "maria", "code": "four zero five"},

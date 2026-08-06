@@ -16,12 +16,23 @@ Asserted:
   * those two factors carry the largest ST - S1 interaction gap,
   * the counterintuitive detector flags the planted non-monotonic dip on snr_db.
 
-Deterministic: fixed seeds throughout.  Run:  python3 test_design.py
+Deterministic: fixed seeds throughout.  Run:  python3 tests/test_design.py
 """
+
+# --- repo-root bootstrap -------------------------------------------------
+# Makes `deadzone`, `scripts` and `demos` importable when this file is run
+# directly (`python tests/test_pipeline.py`) with no install step. Harmless
+# when it is imported as a module instead.
+import os as _os
+import sys as _sys
+_REPO_ROOT = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+if _REPO_ROOT not in _sys.path:
+    _sys.path.insert(0, _REPO_ROOT)
+# -------------------------------------------------------------------------
 import math
 import numpy as np
 
-from design import (
+from deadzone.design import (
     DEFAULT_FACTOR_SPACE, screen_factors, sobol_indices,
     format_sobol_tables, find_counterintuitive_cells,
 )

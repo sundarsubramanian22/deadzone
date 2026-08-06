@@ -21,14 +21,27 @@ a WER of 1.0 sits above every threshold. Failures are therefore split out
 EXPLICITLY (`split_failures`) and counted in every report, never dropped silently
 and never averaged in.
 
+THE SECOND TRAP, AND WHY THE GUARDS BELOW ARE HERE. Every layer in this package
+keys rows into a dict or an array by some cell identity — (clip, condition),
+(clip, condition, model), (clip, level) — and then aggregates. A DUPLICATE key
+is invisible to all of them: a dict assignment silently overwrites the earlier
+measurement, a group-by silently double-weights it, and the resulting table is
+still the right *shape*, so nothing downstream can tell. That is the same defect
+that `sensitivity.load_factorial` guards against by asserting a row-count
+identity, and it is generic enough that it belongs here rather than being
+re-derived per layer. `check_unique_cells` and `check_finite` are the two shared
+forms; both RAISE, because in each case the number they protect would be wrong
+rather than merely missing.
+
 Deps: stdlib only (+ pandas, lazily, and only for .parquet).
 """
 from __future__ import annotations
 
 import csv
 import json
+import math
 import os
-from typing import Any, Sequence
+from typing import Any, Iterable, Sequence
 
 # The columns every analysis layer here actually depends on. Checked on load so a
 # schema drift fails loudly at the door instead of silently producing NaN tables.
@@ -229,6 +242,92 @@ def parse_edits(row: dict) -> list[tuple[str, str | None, str | None]]:
 # ---------------------------------------------------------------------------
 # Slicing
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Shared integrity guards (see the module docstring)
+# ---------------------------------------------------------------------------
+
+class DuplicateCellError(ValueError):
+    """Two rows claim the same measurement cell.
+
+    Loud on purpose. Every aggregation in this package either writes rows into a
+    dict keyed by the cell (last write silently wins) or groups them and takes a
+    mean (the repeated cell is silently double-weighted). Neither leaves a hole,
+    a NaN, or a shape change behind, so the only thing that can catch it is a
+    count identity asserted at the door.
+    """
+
+
+class NonFiniteError(ValueError):
+    """A NaN / inf reached a quantity that feeds a mean, variance or correlation.
+
+    A non-finite value does not stop an aggregation — it propagates to the
+    headline number and prints as `nan`, which reads as "no result" rather than
+    "this input was never a measurement". Where a NaN would make the reported
+    number WRONG (as opposed to legitimately absent, e.g. a missing confidence),
+    it is refused here instead.
+    """
+
+
+def check_unique_cells(rows: Sequence[dict],
+                       keys: Sequence[str] = ("clip_id", "condition_name", "model"),
+                       *, where: str, cause: str = "") -> int:
+    """Assert one row per cell. Returns the number of rows checked.
+
+    `keys` is the cell identity for this call site — the tuple the caller is
+    about to key a dict or an array by. Rows missing one of the keys use `None`
+    for it, so a schema slip shows up as a collision rather than being skipped.
+    """
+    seen: dict[tuple, int] = {}
+    dupes: dict[tuple, int] = {}
+    for r in rows:
+        k = tuple(r.get(c) for c in keys)
+        if k in seen:
+            dupes[k] = dupes.get(k, 1) + 1
+        seen[k] = seen.get(k, 0) + 1
+    if dupes:
+        worst = sorted(dupes.items(), key=lambda kv: -kv[1])[:3]
+        example = "; ".join(
+            "(" + ", ".join(f"{c}={v!r}" for c, v in zip(keys, k)) + f") x{n}"
+            for k, n in worst)
+        raise DuplicateCellError(
+            f"DUPLICATE {tuple(keys)} rows in {where}: {len(rows)} rows for "
+            f"{len(seen)} distinct cells ({len(rows) - len(seen)} extra). "
+            f"Worst offenders: {example}. A repeated cell is silently "
+            f"double-weighted by the group means below (or silently overwritten "
+            f"where rows are keyed into a dict), and the result still looks "
+            f"complete — nothing downstream can see it. "
+            + (cause or "Usual cause: a partial re-run appending a fresh "
+                        "transcript for an already-measured cell, or two "
+                        "result tables concatenated without deduplication.")
+            + " Deduplicate the table (or rebuild it from the cache) first.")
+    return len(rows)
+
+
+def check_finite(values: Iterable[Any], *, where: str, what: str,
+                 cause: str = "") -> int:
+    """Assert every value is a finite number. Returns the count checked."""
+    bad: list[tuple[int, Any]] = []
+    n = 0
+    for i, v in enumerate(values):
+        n += 1
+        try:
+            ok = math.isfinite(float(v))
+        except (TypeError, ValueError):
+            ok = False
+        if not ok:
+            bad.append((i, v))
+    if bad:
+        raise NonFiniteError(
+            f"NON-FINITE {what} in {where}: {len(bad)} of {n} values are not "
+            f"finite numbers (e.g. index {bad[0][0]} = {bad[0][1]!r}). These "
+            f"feed a mean/variance/correlation, so the headline number would "
+            f"come out `nan` and read as 'no result' rather than 'this input "
+            f"was never a measurement'. "
+            + (cause or "Usual cause: a failed row that was not split out, or a "
+                        "group that had no usable measurement to average."))
+    return n
+
 
 def split_by_model(rows: Sequence[dict]) -> dict[str, list[dict]]:
     """

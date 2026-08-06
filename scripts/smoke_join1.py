@@ -3,8 +3,8 @@
 appendix A.R3).
 
     export DEEPGRAM_API_KEY=...
-    ./.venv/bin/python smoke_join1.py                 # default clips u02,u17,u36
-    ./.venv/bin/python smoke_join1.py --clips u02
+    ./.venv/bin/python scripts/smoke_join1.py                 # default clips u02,u17,u36
+    ./.venv/bin/python scripts/smoke_join1.py --clips u02
 
 NOTHING DOWNSTREAM IS TRUSTED UNTIL THIS PASSES. It is the only check that the
 whole chain -- real recording -> real RIR -> real noise -> real codec -> real ASR
@@ -38,6 +38,17 @@ before a single grid cell has run.
 """
 from __future__ import annotations
 
+# --- repo-root bootstrap -------------------------------------------------
+# Makes `deadzone`, `scripts` and `demos` importable when this file is run
+# directly (`python tests/test_pipeline.py`) with no install step. Harmless
+# when it is imported as a module instead.
+import os as _os
+import sys as _sys
+_REPO_ROOT = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+if _REPO_ROOT not in _sys.path:
+    _sys.path.insert(0, _REPO_ROOT)
+# -------------------------------------------------------------------------
+
 import argparse
 import csv
 import os
@@ -46,10 +57,10 @@ from pathlib import Path
 
 import numpy as np
 
-from audio_pipeline import (apply_rir, classify_errors, measured_snr_db,
+from deadzone.audio_pipeline import (apply_rir, classify_errors, measured_snr_db,
                             transcribe_deepgram)
-from conditions import Condition, DiskAssetLibrary, apply_condition
-from run_experiment import (MASTER_COLUMNS, load_clip, load_manifest, run_one,
+from deadzone.conditions import Condition, DiskAssetLibrary, apply_condition
+from scripts.run_experiment import (MASTER_COLUMNS, load_clip, load_manifest, run_one,
                             write_degraded_wav)
 
 FS = 16000

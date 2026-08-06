@@ -89,6 +89,30 @@
     <div class="body" id="panel-sim2real"></div>
   </section>
 
+  <section class="panel">
+    <div class="head">
+      <span class="num">PANEL 7 — SECOND ARM</span>
+      <h2>Do two models have the same dead zones?</h2>
+      <p class="caption">A commercial streaming model against an open baseline. Confidence is
+      comparable <em>within</em> a model and never across two — Deepgram returns an acoustic
+      confidence, Whisper the decoder's token probability — so each arm is ranked against its own
+      distribution. This panel is outside the model toggle: it is the comparison itself.</p>
+    </div>
+    <div class="body" id="panel-model-arms"></div>
+  </section>
+
+  <section class="panel">
+    <div class="head">
+      <span class="num">PANEL 8 — DOES THE AGENT NOTICE?</span>
+      <h2>Paralinguistic features vs lexical accuracy: same rate, or decoupled?</h2>
+      <p class="caption">The only layer that reads audio rather than the results table. If the two
+      streams decouple, a system watching prosody is blind to an ASR that has already failed — or
+      alarms on audio the ASR is still handling. Where a curve never leaves its floor, no threshold
+      is quoted: a crossing point read off a flat normalized curve is arithmetic without meaning.</p>
+    </div>
+    <div class="body" id="panel-decoupling"></div>
+  </section>
+
   <footer class="foot">
     <p><strong>How to read this honestly.</strong> This is a controlled instrument, not a field
     benchmark: every input is real (measured RIRs, recorded noise, recorded speech) but the

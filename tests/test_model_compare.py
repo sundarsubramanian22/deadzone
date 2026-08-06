@@ -19,16 +19,27 @@ not (despite weak's lower absolute confidence); strong's confidence tracks its
 errors (negative shape) and weak's does not.
 
 Deterministic (pure functions of the grid, no rng).  Run:
-    python3 test_model_compare.py
+    python3 tests/test_model_compare.py
 """
+
+# --- repo-root bootstrap -------------------------------------------------
+# Makes `deadzone`, `scripts` and `demos` importable when this file is run
+# directly (`python tests/test_pipeline.py`) with no install step. Harmless
+# when it is imported as a module instead.
+import os as _os
+import sys as _sys
+_REPO_ROOT = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+if _REPO_ROOT not in _sys.path:
+    _sys.path.insert(0, _REPO_ROOT)
+# -------------------------------------------------------------------------
 import numpy as np
 
-from design import DEFAULT_FACTOR_SPACE
-from model_compare import (
+from deadzone.design import DEFAULT_FACTOR_SPACE
+from deadzone.model_compare import (
     MODEL_REGISTRY, get_model, compare_models, dead_zone_flags,
     within_model_conf_percentile, confidence_wer_shape,
 )
-from audio_pipeline import _parse_vosk_result
+from deadzone.audio_pipeline import _parse_vosk_result
 
 SPACE = DEFAULT_FACTOR_SPACE
 RT60 = np.linspace(0.2, 1.0, 9)

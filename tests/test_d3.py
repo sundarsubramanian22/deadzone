@@ -30,8 +30,19 @@ What is planted, and what each plant proves:
      must build its held-out test set from the table with ZERO oracle calls
      (asserted with a call counter, not by inspection).
 
-Deterministic: fixed seeds throughout.  Run:  python3 test_d3.py
+Deterministic: fixed seeds throughout.  Run:  python3 tests/test_d3.py
 """
+
+# --- repo-root bootstrap -------------------------------------------------
+# Makes `deadzone`, `scripts` and `demos` importable when this file is run
+# directly (`python tests/test_pipeline.py`) with no install step. Harmless
+# when it is imported as a module instead.
+import os as _os
+import sys as _sys
+_REPO_ROOT = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+if _REPO_ROOT not in _sys.path:
+    _sys.path.insert(0, _REPO_ROOT)
+# -------------------------------------------------------------------------
 import csv
 import json
 import math
@@ -40,10 +51,10 @@ import tempfile
 
 import numpy as np
 
-from design import DEFAULT_FACTOR_SPACE, sobol_indices
-from active_learning import DEFAULT_THRESHOLD
+from deadzone.design import DEFAULT_FACTOR_SPACE, sobol_indices
+from deadzone.active_learning import DEFAULT_THRESHOLD
 
-from analysis.interactions import (
+from deadzone.analysis.interactions import (
     CONFIRMED, PROPOSED, REFUTED, PreRegistration, S2_CAVEAT,
     condition_matrix, confirm_cells, encode_sample, format_interaction_report,
     format_verdict, interaction_evidence, interaction_gap_table,
@@ -52,7 +63,7 @@ from analysis.interactions import (
     preregistration_verdict, propose_counterintuitive_cells, sobol_to_json,
     s2_direction_only,
 )
-from analysis.al_savings import (
+from deadzone.analysis.al_savings import (
     INSUFFICIENT, MIN_SEEDS, SUFFICIENT, InsufficientSeedsError,
     al_savings_report, format_al_savings, master_split_for_al, multi_seed_curves,
     plot_payload as al_plot_payload, run_seed, savings_headline, seed_band,
@@ -584,7 +595,7 @@ def test_multi_seed_band_and_headline(split):
 
 def test_schema_matches_the_runner():
     try:
-        from run_experiment import MASTER_COLUMNS
+        from scripts.run_experiment import MASTER_COLUMNS
     except Exception as e:                       # noqa: BLE001 — optional dep path
         print(f"SKIP 9: run_experiment not importable ({type(e).__name__}: {e})")
         return

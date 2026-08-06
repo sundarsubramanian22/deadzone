@@ -2,14 +2,25 @@
 One real end-to-end Deepgram call, to eyeball the adapter's return shape.
 
     export DEEPGRAM_API_KEY=...
-    ./.venv/bin/python smoke_deepgram.py [path/to.wav]
+    ./.venv/bin/python scripts/smoke_deepgram.py [path/to.wav]
 
 Defaults to the say-generated sample. Prints the full contract dict so you can
 confirm word_confidences come back NON-EMPTY (the headline signal) with raw
 output (smart_format/punctuate/numerals off).
 """
+
+# --- repo-root bootstrap -------------------------------------------------
+# Makes `deadzone`, `scripts` and `demos` importable when this file is run
+# directly (`python tests/test_pipeline.py`) with no install step. Harmless
+# when it is imported as a module instead.
+import os as _os
+import sys as _sys
+_REPO_ROOT = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+if _REPO_ROOT not in _sys.path:
+    _sys.path.insert(0, _REPO_ROOT)
+# -------------------------------------------------------------------------
 import sys
-from audio_pipeline import transcribe_deepgram, is_failed
+from deadzone.audio_pipeline import transcribe_deepgram, is_failed
 
 path = sys.argv[1] if len(sys.argv) > 1 else "data/recordings/sample.wav"
 out = transcribe_deepgram(path)          # key from DEEPGRAM_API_KEY env

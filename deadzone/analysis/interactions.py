@@ -50,7 +50,7 @@ the not-confirmed rendering states what was learned ("to the resolution of this
 grid the two degradations are additive"), it does not hedge or apologise, and
 there is no code path that omits the verdict.
 
-    python3 -m analysis.interactions results/sobol.json --master results/master.csv
+    python3 -m deadzone.analysis.interactions results/sobol.json --master results/master.csv
 
 Deps: numpy, scikit-learn (via active_learning.GPSurrogate).
 """
@@ -68,16 +68,16 @@ from typing import Callable, Mapping, Sequence
 
 import numpy as np
 
-# Allow `python analysis/interactions.py` as well as `import analysis.interactions`
-_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# Allow `python deadzone/analysis/interactions.py` as well as `import deadzone.analysis.interactions`
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
-from design import (                          # noqa: E402  (after the path shim)
+from deadzone.design import (                          # noqa: E402  (after the path shim)
     DEFAULT_FACTOR_SPACE, FactorSpace,
     find_counterintuitive_cells, format_sobol_tables,
 )
-from active_learning import GPSurrogate       # noqa: E402  — REUSED, not reimplemented
+from deadzone.active_learning import GPSurrogate       # noqa: E402  — REUSED, not reimplemented
 
 
 # ============================================================================

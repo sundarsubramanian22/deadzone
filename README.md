@@ -1,96 +1,133 @@
-# Deadzone — Streaming-ASR Acoustic-Robustness Evaluation
+# Deadzone — a silent-failure map for streaming ASR
 
-**Deadzone is a controlled evaluation framework that maps where streaming ASR
-models fail *silently* under acoustic degradation — the "dead zones" where the
-model is confidently wrong.** It is domain-neutral: any streaming ASR model, any
-acoustic environment.
+Deadzone is a controlled testbed that asks a different question of a speech
+recognizer than the usual one. Not *how much does it break* under acoustic
+degradation, but **does it know it is breaking?** For a streaming voice agent a
+confidently wrong transcript is far more dangerous than a visibly uncertain one:
+confidence is what decides whether the system commits or asks you to repeat.
 
-Aggregate WER reports a single number and hides *where* and *how* a model breaks.
-Deadzone is a controlled instrument for **causal attribution of acoustic
-failure**: it uses *real* ingredients (measured room impulse responses, recorded
-noise, real codecs) but controls only the *assembly*, so it can hold every factor
-fixed and turn one acoustic knob at a time. That **counterfactual isolation** is
-the thing field recordings can't give you — in the wild, mic, placement, noise,
-and codec all move at once. Fidelity to any one deployment is explicitly *not* the
-goal; isolation is.
+**This is a well-trodden genre and this repo does not claim otherwise.** Controlled
+acoustic-degradation testbeds for ASR already exist and are good — WildASR /
+"Back to Basics: Revisiting ASR in the Age of Voice Agents" (fixed linguistic
+content, image-source room simulation, RT60 sweeps), the **Speech Robustness
+Bench** (noise, reverb, time transforms, adversarial perturbation), and **"When
+Denoising Hinders"** (perceptually cleaner audio is not necessarily more
+ASR-robust). Far-field RIR augmentation goes back to Ko et al. 2017 and the
+REVERB / CHiME challenges; the simulator here is `pyroomacoustics` (Scheibler
+2018). The method is theirs.
 
-## The four findings
+What is different is the lens, not the machinery:
 
-1. **Silent-failure map (headline).** Plot the model's word-level confidence
-   against actual WER for every condition. The deliverable is the **danger zone**:
-   the acoustic conditions where the model stays *confident while wrong* — the case
-   a downstream system can't defend against, because it never asks for a repeat.
+1. **The confidence–accuracy gap as the headline deliverable**, rather than WER.
+2. **Typed failure fingerprints** — errors are classified from the aligned edits
+   (sub / del / ins) so each condition gets a *signature* that implies a fix,
+   instead of collapsing to a scalar.
+3. **An active-learning surrogate** that maps the failure boundary in far fewer
+   oracle calls than a grid (boundary-seeking straddle acquisition over a GP).
+4. **A commercial streaming model that exposes per-word confidence** (Deepgram
+   Nova-3) as the primary arm, where the literature mostly uses
+   Whisper / Conformer / wav2vec. Without per-word confidence there is no
+   silent-failure question to ask.
 
-2. **Failure fingerprints (mechanism).** Don't count errors — *classify* them from
-   aligned edits (substitutions / deletions / insertions). Each condition gets an
-   error *signature* (reverb → deletions, babble → substitutions, codec → killed
-   proper-nouns/entities), and each signature implies a concrete fix.
+## The headline result
 
-3. **Interaction hunt.** A Plackett–Burman screen finds which factors move WER at
-   all, then Saltelli/Sobol sensitivity analysis (with bootstrap CIs) surfaces the
-   **counterintuitive cells** — non-monotonic "sweet spots" and factor pairs that
-   compound (e.g. reverb × SNR) — the surprises worth writing up.
+Across **176 controlled acoustic conditions** × 40 recorded utterances:
 
-4. **Active-learning surrogate.** A lightweight Gaussian-process surrogate predicts
-   WER from condition parameters and *actively chooses* which condition to evaluate
-   next (boundary-seeking **straddle** acquisition), mapping the failure boundary in
-   **far fewer oracle calls than random or grid sampling** — validated against a
-   random baseline on a planted synthetic boundary.
+> Nova-3's mean word confidence tracks its own error rate almost perfectly —
+> **Spearman ρ = −0.957** — and it is nonetheless **overconfident in 92% of
+> conditions**. **6 of 176 (3.41%)** are genuine dead zones. The worst reports
+> mean word confidence **0.843** while running **WER 0.387**
+> (`rt60 0.7 s · SNR 20 dB · babble · opus-lowrate · mic rolloff 1.0`).
+
+The point is not that the model is blind. It is that the model is *mostly*
+self-aware, which is exactly what makes the residual dangerous: any system tuned
+on its average self-awareness will trust it precisely where it should not. Note
+the SNR in that condition — 20 dB is a **quiet** room. This is reverberation and
+channel, not loudness.
+
+## Run the demo in three commands
+
+Everything below runs **offline**, with wifi off and **no API key**. All numbers
+come from the already-measured grid; the audio is regenerated by the same tested
+DSP that produced it.
+
+```bash
+make demo-break     # 60 s  one clip, clean -> a measured dead zone, out loud
+make demo-al        # 20 s  the surrogate walking onto the failure boundary
+make dashboard      #  —    the self-contained dashboard, opened from file://
+```
+
+`make demo` runs all three in the rehearsed order, preceded by the core test
+suite. `make help` lists every target; `make demo-check` is the preflight to run
+*before* you turn wifi off. First run only: `make demo-prep` bakes the cached
+artifacts (it is invoked automatically if they are missing).
+
+The 3-minute spoken path through the dashboard is in
+[`dashboard/DEMO.md`](dashboard/DEMO.md).
 
 ## Honest boundaries
 
-Deadzone isolates *acoustic* factors. It deliberately brackets out **behavioral**
-ones — accent, disfluency, speaking rate, and especially the **Lombard effect**
-(people change how they *produce* speech in noise; no room simulator captures a
-behavior). It also runs synthetic RIRs alongside measured ones and reports the
-**sim-vs-real gap** as its own result. Naming where the instrument stops being
-trustworthy is a first-class deliverable, not a footnote.
+Deadzone isolates **acoustic** factors and deliberately brackets out
+**behavioral** ones — accent, disfluency, speaking rate, and above all the
+**Lombard effect**: in noise people change how they *produce* speech, and no room
+simulator reproduces a behavior. It is one speaker and 40 utterances, so nothing
+here generalizes across speakers. Synthetic RIRs are run alongside the measured
+ones and the sim-vs-real gap is reported as its own result. Deletions carry no
+confidence value at all, which is a substantive hole in the headline signal
+rather than a footnote. The full limitations section is in the write-up.
 
-## Method
+## Method, in one paragraph
 
 Real ingredients, controlled assembly. Every degraded clip is composed in one
-fixed, physically-motivated order — **room reverb → additive noise at a calibrated
-SNR → mic frequency response → transmission codec** — reusing three
-correctness-critical "trap" functions (active-speech-gated SNR, onset-aligned
-level-preserved RIR convolution, and typed-edit WER scoring) that produce
-clean-looking garbage if implemented subtly wrong. Every stage ships with an
-offline synthetic test; the statistics and active-learning layers are validated
-against *planted* structure before ever touching real audio.
+fixed, physically-motivated order — **measured room impulse response → recorded
+noise at a calibrated SNR → mic frequency response → transmission codec** —
+through three correctness-critical "trap" functions that produce clean-looking
+garbage if subtly wrong: SNR computed on **active-speech energy only**, RIR
+convolution that trims the direct-path delay **and** renormalizes over the input's
+active region, and WER scoring that returns the **typed edits** alongside the
+scalar. Each ships with an offline test; the statistics and active-learning
+layers were validated against *planted* synthetic structure before touching real
+audio.
 
-## Tech stack
+## Repo map
 
-- **DSP / audio:** `numpy`, `scipy`, `soundfile`, `librosa`, `pyroomacoustics`;
-  real codec round-trips (AMR-NB / low-rate Opus) via `ffmpeg`.
-- **Experiment design & sensitivity:** `SALib` (Plackett–Burman, Saltelli/Sobol
-  S1/ST/S2, bootstrap CIs).
-- **Active learning:** `scikit-learn` Gaussian-process regression (ARD Matérn
-  kernel) with straddle acquisition; `scipy.stats.qmc` for LHS/Sobol sampling.
-- **ASR adapters:** Deepgram (streaming commercial model exposing per-word
-  confidence — the headline signal) and OpenAI Whisper (open, API-independent
-  baseline), behind one shared contract so their WERs are directly comparable.
-
-## Repo
-
-| File | What |
+| Path | What |
 |---|---|
-| `audio_pipeline.py` | Trap functions (SNR / RIR / typed-edit WER) + transcription adapters |
-| `conditions.py` | Named, reproducible degradation composer + disk-backed asset library |
-| `design.py` | Plackett–Burman screen → Sobol sensitivity → counterintuitive-cell detector |
-| `active_learning.py` | GP surrogate + straddle acquisition + active-vs-random comparison |
-| `recording_manifest.csv` | ~40 domain-neutral utterances (entity/number stress cases) to record |
-| `test_*.py` | Fully offline test suites — every stage validated on synthetic data |
-| `SPEC.md` / `CLAUDE.md` | Full project brief and working conventions |
+| `deadzone/` | The importable library. Nothing in here spends money or writes an artifact. |
+| `deadzone/audio_pipeline.py` | The three trap functions + the ASR adapters behind one contract |
+| `deadzone/conditions.py` | Named, reproducible degradation composer + disk-backed asset library |
+| `deadzone/design.py` | Plackett–Burman screen → Saltelli/Sobol sensitivity → counterintuitive cells |
+| `deadzone/active_learning.py` | GP surrogate, straddle acquisition, active-vs-random comparison |
+| `deadzone/analysis/` | The finding layers: confidence gap, fingerprints, sensitivity, sim2real, AL savings. Run as `python3 -m deadzone.analysis.<layer>`. |
+| `scripts/` | Entry points that spend money or produce artifacts — `run_experiment.py` (the grid runner → `results/master.csv`), the asset fetchers, the smoke tests |
+| `dashboard/` | The self-contained 8-panel HTML dashboard + the demo script |
+| `demos/` | `demo_break.py`, `demo_al.py` — the demo kit (offline, key-free) |
+| `tests/` | Fully offline suites; every stage validated on synthetic signals |
 
-## Running the tests
+Everything is run **from the repo root** — relative `data/`, `results/` and
+`results_sim/` paths are resolved against it, and the Makefile, the demos, the
+dashboard and the test suites all assume that CWD.
+
+## Where to read further
+
+- **[`SPEC.md`](SPEC.md)** — the full self-contained project brief: framing, prior
+  work, experimental design, the task DAG, and the execution checklist.
+- **[`report/writeup.md`](report/writeup.md)** — the write-up, with the results and
+  the limitations section.
+- **`results/MANIFEST.json`** — the experiment freeze: git SHA, exact model
+  literals, ffmpeg version and codec decision, asset SHA-256s, realized call
+  counts and cost. Commercial model literals are updated server-side, so a re-run
+  months from now is **not the same experiment**; this file is what says what was
+  actually measured.
+
+## Setup
 
 ```bash
-python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-for t in test_pipeline test_adapters test_design test_conditions test_active_learning; do
-  python3 $t.py
-done
+python3 -m venv .venv && ./.venv/bin/python -m pip install -r requirements.txt
+make test          # every offline suite
 ```
 
-All suites run offline (no API key, no GPU, no network) on synthetic signals.
-Live smoke tests for the Deepgram adapter (`smoke_deepgram.py`) and the ffmpeg
-codec path (`smoke_codec.py`) are separate and require a key / `ffmpeg`.
+`requirements.lock.txt` pins the exact demo-machine environment. Live smoke tests
+(`scripts/smoke_deepgram.py`, `scripts/smoke_codec.py`) need a key / `ffmpeg` and are separate
+from everything above. The Deepgram key is read from `DEEPGRAM_API_KEY` and is
+never committed.

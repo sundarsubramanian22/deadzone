@@ -1,9 +1,9 @@
 """
 Generate the two audio sets that DO need to exist on disk.
 
-    ./.venv/bin/python make_audio_sets.py            # both
-    ./.venv/bin/python make_audio_sets.py --listen   # listening set only
-    ./.venv/bin/python make_audio_sets.py --sweep    # L3 sweep only
+    ./.venv/bin/python scripts/make_audio_sets.py            # both
+    ./.venv/bin/python scripts/make_audio_sets.py --listen   # listening set only
+    ./.venv/bin/python scripts/make_audio_sets.py --sweep    # L3 sweep only
 
 WHY THE GRID DOESN'T SAVE AUDIO. `run_one` composes a degraded clip into a temp
 file, transcribes it, and deletes it. Persisting all 7040 cells would be ~1.4 GB
@@ -32,6 +32,17 @@ No API calls. Pure DSP, a few seconds.
 """
 from __future__ import annotations
 
+# --- repo-root bootstrap -------------------------------------------------
+# Makes `deadzone`, `scripts` and `demos` importable when this file is run
+# directly (`python tests/test_pipeline.py`) with no install step. Harmless
+# when it is imported as a module instead.
+import os as _os
+import sys as _sys
+_REPO_ROOT = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+if _REPO_ROOT not in _sys.path:
+    _sys.path.insert(0, _REPO_ROOT)
+# -------------------------------------------------------------------------
+
 import argparse
 import csv
 import json
@@ -40,8 +51,8 @@ from pathlib import Path
 import numpy as np
 import soundfile as sf
 
-from conditions import Condition, DiskAssetLibrary, apply_condition
-from run_experiment import load_clip, load_manifest, write_degraded_wav
+from deadzone.conditions import Condition, DiskAssetLibrary, apply_condition
+from scripts.run_experiment import load_clip, load_manifest, write_degraded_wav
 
 FS = 16000
 LISTEN_DIR = Path("results/audio/listen")

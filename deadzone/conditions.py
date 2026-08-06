@@ -33,8 +33,8 @@ from pathlib import Path
 import numpy as np
 from scipy.signal import butter, sosfiltfilt
 
-from design import DEFAULT_FACTOR_SPACE
-from audio_pipeline import apply_rir, mix_at_snr, active_speech_mask, rms
+from deadzone.design import DEFAULT_FACTOR_SPACE
+from deadzone.audio_pipeline import apply_rir, mix_at_snr, active_speech_mask, rms
 
 
 # ---------------------------------------------------------------------------

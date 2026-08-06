@@ -34,8 +34,19 @@ out BETTER than its siblings is never prescribed a fix; and the entity-error lay
 (task_specs.json via agent_eval) degrades faster than WER under a codec.
 
 Deterministic (pure functions of the grid, no rng).  Run:
-    python3 test_analysis.py
+    python3 tests/test_analysis.py
 """
+
+# --- repo-root bootstrap -------------------------------------------------
+# Makes `deadzone`, `scripts` and `demos` importable when this file is run
+# directly (`python tests/test_pipeline.py`) with no install step. Harmless
+# when it is imported as a module instead.
+import os as _os
+import sys as _sys
+_REPO_ROOT = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+if _REPO_ROOT not in _sys.path:
+    _sys.path.insert(0, _REPO_ROOT)
+# -------------------------------------------------------------------------
 import csv
 import json
 import os
@@ -43,14 +54,14 @@ import tempfile
 
 import numpy as np
 
-import model_compare
-from analysis import (
+from deadzone import model_compare
+from deadzone.analysis import (
     failure_summary, load_master_table, parse_edits, split_failures,
 )
-from analysis import confidence_gap as cg
-from analysis import fingerprints as fp
-from audio_pipeline import classify_errors
-from design import DEFAULT_FACTOR_SPACE
+from deadzone.analysis import confidence_gap as cg
+from deadzone.analysis import fingerprints as fp
+from deadzone.audio_pipeline import classify_errors
+from deadzone.design import DEFAULT_FACTOR_SPACE
 
 SPACE = DEFAULT_FACTOR_SPACE
 CLIPS = ("u01", "u02", "u03", "u04")

@@ -31,7 +31,7 @@ from typing import Callable, Sequence
 import numpy as np
 from scipy.stats import rankdata, spearmanr
 
-from design import DEFAULT_FACTOR_SPACE, FactorSpace
+from deadzone.design import DEFAULT_FACTOR_SPACE, FactorSpace
 
 
 # ---------------------------------------------------------------------------
@@ -42,7 +42,7 @@ from design import DEFAULT_FACTOR_SPACE, FactorSpace
 # this dict costs nothing until a model is actually called.
 
 def _registry() -> dict[str, Callable[[str], dict]]:
-    from audio_pipeline import (
+    from deadzone.audio_pipeline import (
         transcribe_deepgram, transcribe_whisper, transcribe_vosk,
     )
     return {
@@ -102,6 +102,23 @@ def dead_zone_flags(rows: Sequence[dict], wer_hi: float = 0.3,
     silent one, and is deliberately excluded.
     """
     wer = _col(rows, "wer")
+    # A NaN confidence is legitimate (the model returned no per-word scores) and
+    # is handled deliberately: it sinks to percentile 0. A NaN *WER* is not. It
+    # makes `wer >= wer_hi` False, so the row is silently classified NOT a dead
+    # zone AND still counted in the denominator of every `mean(flags)` — i.e. an
+    # unmeasured condition quietly dilutes the dead-zone rate, which is D1's
+    # headline number. Failed rows are supposed to be split out before this
+    # (analysis/__init__.split_failures); if one got through, say so.
+    if not np.all(np.isfinite(wer)):
+        n = int(np.count_nonzero(~np.isfinite(wer)))
+        bad = [i for i, v in enumerate(wer) if not np.isfinite(v)][:5]
+        raise ValueError(
+            f"dead_zone_flags: {n} of {len(wer)} rows have a non-finite WER "
+            f"(row indices {bad}). NaN >= threshold is False, so those rows "
+            f"would be counted as 'not a dead zone' and would dilute the "
+            f"dead-zone rate without appearing anywhere as missing. Split "
+            f"failed rows out first (analysis.split_failures) — a failure "
+            f"sentinel is not a measurement.")
     pct = within_model_conf_percentile(rows)
     return (wer >= wer_hi) & (pct >= conf_pct_hi)
 
@@ -161,6 +178,10 @@ def find_divergence_regions(tables: dict[str, Sequence[dict]],
     is numerically lower than the better model's.
     """
     names = list(tables.keys())
+    if len(names) < 2:
+        raise ValueError(
+            f"find_divergence_regions needs >= 2 model tables to compare, got "
+            f"{names}. With one arm every region reports a gap of nothing.")
     # Dead-zone flags are computed over each model's WHOLE distribution (that is
     # where the within-model confidence percentile is meaningful), then aggregated
     # per region. Never recompute the percentile inside a bin — if confidence is
@@ -173,9 +194,11 @@ def find_divergence_regions(tables: dict[str, Sequence[dict]],
         for b in range(n_slots):
             wer_by: dict[str, float] = {}
             dz_by: dict[str, float] = {}
+            n_by: dict[str, int] = {}
             span = None
             for m in names:
                 idx, span = _region_rows(tables[m], factor, kind, spec, b)
+                n_by[m] = int(len(idx))
                 if len(idx) == 0:
                     wer_by[m] = float("nan")
                     dz_by[m] = float("nan")
@@ -186,6 +209,21 @@ def find_divergence_regions(tables: dict[str, Sequence[dict]],
             valid = [m for m in names if np.isfinite(wer_by[m])]
             if len(valid) < 2:
                 continue
+            # THE RAGGED-COVERAGE TRAP. `wer_gap` subtracts one model's mean over
+            # ITS rows in this region from another's mean over ITS rows. If the
+            # two arms did not run the same cells here, the difference is a model
+            # effect PLUS a coverage effect and there is no way to separate them
+            # afterwards — the table is still perfectly well-formed and the
+            # ranking still looks meaningful. (A region no arm reached is skipped
+            # above; that is legitimately empty, not ragged.)
+            sizes = {m: n_by[m] for m in valid}
+            if len(set(sizes.values())) != 1:
+                raise ValueError(
+                    f"ragged coverage in region {factor}={span}: rows per model "
+                    f"{sizes}. The WER gap reported for this region would mix a "
+                    f"model effect with a coverage effect. Intersect the arms to "
+                    f"the cells every model actually ran before comparing "
+                    f"(analysis.model_arms.matched_arms does exactly this).")
             worse = max(valid, key=lambda m: wer_by[m])
             better = min(valid, key=lambda m: wer_by[m])
             gap = wer_by[worse] - wer_by[better]

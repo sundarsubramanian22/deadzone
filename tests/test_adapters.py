@@ -5,7 +5,7 @@ These hit models/APIs in production, so here EVERYTHING is mocked: a canned
 Deepgram wire JSON and a canned openai-whisper result stand in for the network.
 No key, no torch, no sockets — run the moment you clone:
 
-    python3 test_adapters.py
+    python3 tests/test_adapters.py
 
 What we prove:
   * both adapters emit the IDENTICAL contract dict schema (so WERs compare),
@@ -18,11 +18,22 @@ What we prove:
   * Whisper confidence is derived honestly (per-word probs when present; a
     documented segment proxy when not — never faked).
 """
+
+# --- repo-root bootstrap -------------------------------------------------
+# Makes `deadzone`, `scripts` and `demos` importable when this file is run
+# directly (`python tests/test_pipeline.py`) with no install step. Harmless
+# when it is imported as a module instead.
+import os as _os
+import sys as _sys
+_REPO_ROOT = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+if _REPO_ROOT not in _sys.path:
+    _sys.path.insert(0, _REPO_ROOT)
+# -------------------------------------------------------------------------
 import os
 import math
 import numpy as np
 
-from audio_pipeline import (
+from deadzone.audio_pipeline import (
     transcribe_deepgram, transcribe_whisper, is_failed,
     _deepgram_kwargs, _parse_deepgram_response, _parse_whisper_result,
     normalize_text, classify_errors,

@@ -16,16 +16,27 @@ So the load-bearing assertion is: on the EXACT ground truth, every spec must
 score 1.0 slot accuracy / 0.0 entity-error rate. If an entity cannot be
 recovered from a perfect transcript, the spec is wrong, not the model.
 
-Run:  python3 test_task_specs.py
+Run:  python3 tests/test_task_specs.py
 """
+
+# --- repo-root bootstrap -------------------------------------------------
+# Makes `deadzone`, `scripts` and `demos` importable when this file is run
+# directly (`python tests/test_pipeline.py`) with no install step. Harmless
+# when it is imported as a module instead.
+import os as _os
+import sys as _sys
+_REPO_ROOT = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+if _REPO_ROOT not in _sys.path:
+    _sys.path.insert(0, _REPO_ROOT)
+# -------------------------------------------------------------------------
 import csv
 import json
 from pathlib import Path
 
-from agent_eval import TaskSpec, evaluate_task, entity_error_rate, _contains_subsequence
-from audio_pipeline import classify_errors, normalize_text
+from deadzone.agent_eval import TaskSpec, evaluate_task, entity_error_rate, _contains_subsequence
+from deadzone.audio_pipeline import classify_errors, normalize_text
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(_REPO_ROOT)
 MANIFEST = ROOT / "recording_manifest.csv"
 SPECS = ROOT / "task_specs.json"
 

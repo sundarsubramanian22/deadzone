@@ -11,7 +11,7 @@ and a cheap early-warning signal. Any streaming ASR, any acoustic domain. Full
 brief: @SPEC.md
 
 ## Build / test / run commands
-- Run unit tests: `python3 test_pipeline.py`  (offline, synthetic — must stay green)
+- Run unit tests: `python3 tests/test_pipeline.py`  (offline, synthetic — must stay green)
 - Python 3.11+, deps: `numpy scipy soundfile librosa pyroomacoustics deepgram-sdk`
   (add `silero-vad`, `pesq`, `pystoi` as those phases land)
 - Deepgram key via env var `DEEPGRAM_API_KEY` — never hardcode.

@@ -42,8 +42,19 @@ L3 (paralinguistic decoupling)
     the coupled case is reported as coupled, and using a sweep clip as the
     "clean" baseline raises instead of quietly shrinking the drift curve.
 
-Deterministic (fixed seeds). Run:  python3 test_layers.py
+Deterministic (fixed seeds). Run:  python3 tests/test_layers.py
 """
+
+# --- repo-root bootstrap -------------------------------------------------
+# Makes `deadzone`, `scripts` and `demos` importable when this file is run
+# directly (`python tests/test_pipeline.py`) with no install step. Harmless
+# when it is imported as a module instead.
+import os as _os
+import sys as _sys
+_REPO_ROOT = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+if _REPO_ROOT not in _sys.path:
+    _sys.path.insert(0, _REPO_ROOT)
+# -------------------------------------------------------------------------
 import json
 import os
 import sys
@@ -52,15 +63,14 @@ import tempfile
 import numpy as np
 import soundfile as sf
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from analysis.layers import (
+from deadzone.analysis.layers import (
     SPLIT_MODES, AlignmentError, SweepPoint, aggregate_by_condition,
     find_hallucinations, grouped_split, load_master_csv, run_l1_model_comparison,
     run_l2_calibration, run_l3_decoupling, summarize_l3, sweep_from_dir,
     usable_rows, word_records,
 )
-from design import DEFAULT_FACTOR_SPACE
+from deadzone.design import DEFAULT_FACTOR_SPACE
 
 SPACE = DEFAULT_FACTOR_SPACE
 FS = 16000

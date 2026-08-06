@@ -48,12 +48,12 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if REPO not in sys.path:
     sys.path.insert(0, REPO)
 
-from audio_pipeline import classify_errors          # noqa: E402  (repo-root import)
+from deadzone.audio_pipeline import classify_errors          # noqa: E402  (repo-root import)
 
 # The schema is imported, never re-declared — two copies of a "frozen" schema is
 # exactly how one of them goes stale (run_experiment.py, same discipline).
 try:
-    from run_experiment import MASTER_COLUMNS, AL_CLIPS, main_grid
+    from scripts.run_experiment import MASTER_COLUMNS, AL_CLIPS, main_grid
     _HAVE_RUNNER = True
 except Exception:                                    # pragma: no cover - defensive
     _HAVE_RUNNER = False
@@ -278,7 +278,7 @@ _CHANNEL_ROLLOFF = (0.0, 0.5, 1.0)
 def _name(rt60, snr, noise, codec, roll) -> str:
     if _HAVE_RUNNER:
         try:
-            from conditions import Condition
+            from deadzone.conditions import Condition
             return Condition(rt60, snr, noise, codec, roll).name
         except Exception:                            # pragma: no cover
             pass

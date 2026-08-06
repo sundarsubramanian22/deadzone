@@ -841,6 +841,198 @@
     return "unresolved";
   }
 
+  // ======================================================================
+  // PANEL 7 — L1 multi-model comparison
+  // ======================================================================
+
+  function renderModelArms(host, d) {
+    var arms = d.models || [];
+    if (arms.length < 2) throw new Error("fewer than two model arms are present");
+    var ov = d.overlap || {};
+    var hall = d.hallucination || {};
+
+    host.appendChild(el("div", { className: "quad-strip" }, [
+      quadBox("conditions compared", (arms[0] || {}).n_conditions),
+      statBox("dead-zone Jaccard", f2(ov.jaccard), "same cells flagged?"),
+      statBox("shared dead zones", String((ov.shared || []).length), "in both arms"),
+      statBox("hallucination rate", pct(hall.frac_rows_over_2x), "hyp > 2x ref length")
+    ]));
+
+    // Absolute WER is shown twice on purpose. The strict column is the spine
+    // measurement; the cross-model column is what remains once the two arms are
+    // made to agree about orthography. Showing only the second would hide how
+    // large the formatting artefact was.
+    var head = ["model", "WER (strict)", "WER (cross-model)", "dead-zone rate",
+                "sub", "del", "ins"];
+    var rows = arms.map(function (a) {
+      var e = a.edits || {};
+      return [a.model, f3(a.wer_strict), f3(a.wer_crossmodel), pct(a.dead_zone_rate),
+              f3(e.sub), f3(e.del), f3(e.ins)];
+    });
+    host.appendChild(simpleTable(head, rows));
+
+    var shiftNote = [];
+    var sh = d.normalization_shift || {};
+    Object.keys(sh).forEach(function (m) {
+      shiftNote.push(m + " " + sign3(-sh[m].mean_shift));
+    });
+
+    var right = [];
+    right.push(el("div", { className: "verdict unresolved" }, [
+      el("span", { className: "st", text: "CONFIDENCE IS NOT CROSS-COMPARABLE" }),
+      el("p", { text: d.caption || "" })
+    ]));
+    if (shiftNote.length) {
+      right.push(el("p", { className: "prov", text: "Cross-model normalization moved each arm by: "
+        + shiftNote.join(" · ") + ". The word-form arm should barely move; a large shift there "
+        + "would mean the normalizer is changing more than orthography." }));
+    }
+
+    var regions = d.divergence_regions || [];
+    if (regions.length) {
+      var ul = el("ul", { className: "notes" });
+      regions.slice(0, 6).forEach(function (r) {
+        var bits = Object.keys(r).filter(function (k) { return k !== "detail"; })
+          .map(function (k) { return k + "=" + (num(r[k]) ? f2(r[k]) : r[k]); });
+        ul.appendChild(el("li", { text: bits.join("  ") }));
+      });
+      right.push(el("h4", { text: "Where the two arms disagree most" }));
+      right.push(ul);
+    }
+    host.appendChild(el("div", { className: "two-col" }, [el("div", {}, right), el("div", {}, [])]));
+
+    // A fluent invented sentence is a DIFFERENT failure from acoustic confusion,
+    // and an insertion count alone cannot tell them apart. One real transcript
+    // makes the distinction in a way no summary statistic does.
+    var ex = (hall.examples || [])[0];
+    if (ex) {
+      host.appendChild(el("h4", { text: "Whisper hallucinates fluent text under heavy degradation" }));
+      host.appendChild(el("div", { className: "transcript" }, [
+        el("p", { className: "prov", text: ex.clip_id + " @ " + ex.condition_name
+          + " — " + ex.n_ref + " reference words became " + ex.n_hyp }),
+        el("p", {}, [el("span", { className: "lab", text: "REF" }),
+                     el("span", { text: ex.reference })]),
+        el("p", {}, [el("span", { className: "lab bad", text: "HYP" }),
+                     el("span", { className: "bad", text: ex.transcript })])
+      ]));
+    }
+  }
+
+  // ======================================================================
+  // PANEL 8 — L3 paralinguistic decoupling
+  // ======================================================================
+
+  function renderDecoupling(host, d) {
+    var factors = d.factors || [];
+    if (!factors.length) throw new Error("no swept factors in the decoupling result");
+
+    factors.forEach(function (f) {
+      host.appendChild(el("h4", { text: "sweep: " + f.factor
+        + "  (" + (f.n_clips || "?") + " clips · " + (f.severity_order || "") + ")" }));
+
+      var deg = f.degeneracy || {};
+      var cls = f.half_levels_quotable ? "confirmed" : "unresolved";
+      host.appendChild(el("div", { className: "verdict " + cls }, [
+        el("span", { className: "st", text: f.verdict || "see numbers" }),
+        el("p", { text: f.statement || "" })
+      ]));
+
+      // The half-degradation levels are deliberately NOT shown as numbers when
+      // the analysis refused to quote them. A crossing point read off a curve
+      // that never travelled is arithmetic, not a measurement, and putting it in
+      // a stat box would launder it into a finding.
+      var boxes = [
+        statBox("features that trend reliably",
+                (f.n_features_trend_reliable != null ? f.n_features_trend_reliable : "?")
+                  + " / " + (f.n_features != null ? f.n_features : "?"),
+                "spearman vs severity"),
+        statBox("which stream leads", f.leads || "n/a", ""),
+        statBox("spearman(drift, WER)", f2(f.spearman), "")
+      ];
+      if (f.half_levels_quotable) {
+        boxes.push(statBox("half-degradation", f2(f.feature_half_level) + " / "
+          + f2(f.lexical_half_level), "feature / lexical"));
+      } else {
+        boxes.push(statBox("half-degradation", "not quotable",
+          "WER range " + f3(deg.range) + " < " + f3(deg.min_range_required)));
+      }
+      host.appendChild(el("div", { className: "quad-strip" }, boxes));
+
+      var chart = decouplingChart(f);
+      if (chart) host.appendChild(el("div", { className: "scroll-x" }, [chart]));
+
+      if (deg.degenerate && deg.why) {
+        host.appendChild(el("p", { className: "prov", text: "Why no threshold: " + deg.why }));
+      }
+    });
+
+    host.appendChild(el("p", { className: "prov", text: d.caption || "" }));
+  }
+
+  function decouplingChart(f) {
+    var lv = f.levels || [], wer = f.wer_mean || [];
+    if (lv.length < 2 || wer.length !== lv.length) return null;
+    var W = 620, H = 260, M = { t: 14, r: 18, b: 42, l: 52 };
+    var lo = Math.min.apply(null, lv), hi = Math.max.apply(null, lv);
+    var x = scale(lo, hi, M.l, W - M.r), y = scale(0, 1, H - M.b, M.t);
+    var svg = sv("svg", { className: "chart", viewBox: "0 0 " + W + " " + H,
+      preserveAspectRatio: "xMidYMid meet", role: "img",
+      "aria-label": "lexical and paralinguistic curves over the " + f.factor + " sweep" });
+
+    ticks(0, 1, 5).forEach(function (v) {
+      svg.appendChild(sv("line", { className: "gridline", x1: M.l, x2: W - M.r, y1: y(v), y2: y(v) }));
+      svg.appendChild(sv("text", { className: "tick", x: M.l - 7, y: y(v) + 4,
+        "text-anchor": "end", text: v.toFixed(2) }));
+    });
+    ticks(lo, hi, 5).forEach(function (v) {
+      svg.appendChild(sv("text", { className: "tick", x: x(v), y: H - M.b + 17,
+        "text-anchor": "middle", text: v.toFixed(2) }));
+    });
+
+    // The WER curve is drawn against a FIXED 0..1 axis, not auto-scaled. That is
+    // the whole point of the degeneracy guard made visual: a flat curve must
+    // look flat, and auto-scaling would stretch a 0.05 wander to fill the panel
+    // and make it look like a collapse.
+    svg.appendChild(polyline(lv, wer, x, y, "var(--danger)"));
+    var fc = f.feature_curve;
+    if (fc && fc.length === lv.length) {
+      var mx = Math.max.apply(null, fc) || 1;
+      svg.appendChild(polyline(lv, fc.map(function (v) { return v / mx; }), x, y, "var(--accent)"));
+    }
+
+    svg.appendChild(sv("line", { className: "axis-line", x1: M.l, x2: W - M.r, y1: H - M.b, y2: H - M.b }));
+    svg.appendChild(sv("line", { className: "axis-line", x1: M.l, x2: M.l, y1: M.t, y2: H - M.b }));
+    svg.appendChild(sv("text", { className: "axis-title", x: (M.l + W - M.r) / 2, y: H - 6,
+      "text-anchor": "middle", text: f.factor }));
+    svg.appendChild(sv("text", { x: W - M.r - 4, y: M.t + 12, "text-anchor": "end", "font-size": 11,
+      fill: "var(--danger)", text: "WER (absolute 0-1 scale)" }));
+    svg.appendChild(sv("text", { x: W - M.r - 4, y: M.t + 26, "text-anchor": "end", "font-size": 11,
+      fill: "var(--accent)", text: (f.primary_feature || "feature") + " drift (scaled to its own max)" }));
+    return svg;
+  }
+
+  function polyline(xs, ys, x, y, colour) {
+    var pts = [];
+    for (var i = 0; i < xs.length; i++) {
+      if (!num(ys[i])) continue;
+      pts.push(x(xs[i]).toFixed(1) + "," + y(Math.max(0, Math.min(1, ys[i]))).toFixed(1));
+    }
+    return sv("polyline", { points: pts.join(" "), fill: "none", stroke: colour,
+      "stroke-width": 2.5, "stroke-linejoin": "round" });
+  }
+
+  function simpleTable(head, rows) {
+    var thead = el("tr", {}, head.map(function (h) { return el("th", { text: h }); }));
+    var body = rows.map(function (r) {
+      return el("tr", {}, r.map(function (c, i) {
+        return el("td", { className: i ? "num" : "", text: String(c) });
+      }));
+    });
+    return el("div", { className: "scroll-x" }, [
+      el("table", { className: "grid" }, [el("thead", {}, [thead]), el("tbody", {}, body)])
+    ]);
+  }
+
   function statBox(label, value, sub) {
     return el("div", { className: "quad" }, [
       el("div", { className: "n", style: "font-size:19px", text: value }),
@@ -893,6 +1085,15 @@
     panel("panel-sensitivity", m.sensitivity || missing, renderSensitivity, "The sensitivity panel is not available");
     panel("panel-al", m.active_learning || missing, renderAL, "The active-learning panel is not available");
     panel("panel-sim2real", m.sim2real || missing, renderSim2Real, "The sim-vs-real panel is not available");
+
+    // Panels 7 and 8 sit OUTSIDE the model toggle: panel 7 is the comparison
+    // between arms, and panel 8 reads audio rather than the per-model table.
+    var cross = DATA.cross || {};
+    var noCross = { status: "missing", reason: "This build produced no cross-model section." };
+    panel("panel-model-arms", cross.model_arms || noCross, renderModelArms,
+          "The multi-model comparison is not available");
+    panel("panel-decoupling", cross.decoupling || noCross, renderDecoupling,
+          "The paralinguistic decoupling panel is not available");
 
     var notes = document.getElementById("build-notes");
     if (notes) {

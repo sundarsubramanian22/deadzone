@@ -49,17 +49,17 @@ from typing import Sequence
 
 import numpy as np
 
-# Allow `python analysis/fingerprints.py` as well as `import analysis.fingerprints`
-_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# Allow `python deadzone/analysis/fingerprints.py` as well as `import deadzone.analysis.fingerprints`
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
-from analysis import (                       # noqa: E402  (after the path shim)
-    as_float, coerce_row, failure_summary, load_master_table, parse_edits,
-    split_by_model, split_failures,
+from deadzone.analysis import (                       # noqa: E402  (after the path shim)
+    as_float, check_unique_cells, coerce_row, failure_summary,
+    load_master_table, parse_edits, split_by_model, split_failures,
 )
-from audio_pipeline import normalize_text    # noqa: E402
-from design import DEFAULT_FACTOR_SPACE, Factor, FactorSpace  # noqa: E402
+from deadzone.audio_pipeline import normalize_text    # noqa: E402
+from deadzone.design import DEFAULT_FACTOR_SPACE, Factor, FactorSpace  # noqa: E402
 
 EDIT_TYPES = ("sub", "del", "ins")
 DESTROY_OPS = ("sub", "del")                 # a wrong name and a lost name are the
@@ -220,6 +220,17 @@ def edit_composition(rows: Sequence[dict]) -> list[dict]:
     spoken words got destroyed". The three rates sum to the micro WER by
     construction; that invariant is what makes the stacked bar readable.
     """
+    # A duplicated (clip, condition) row is counted twice in BOTH the numerator
+    # and the denominator here, so `wer_micro` barely moves — but that clip's
+    # edit-type mix gets double weight, which is precisely what a fingerprint
+    # IS. A condition's signature could flip from deletions to substitutions on
+    # one repeated row with no other visible symptom.
+    check_unique_cells(
+        rows, ("clip_id", "condition_name"), where="edit_composition",
+        cause=("Usual cause: rows for one model concatenated from two runs, or "
+               "a master table rebuilt over a cache that logged a re-run cell "
+               "under a second run_id."))
+
     groups: dict[str, list[dict]] = defaultdict(list)
     for r in rows:
         groups[str(r.get("condition_name"))].append(r)
@@ -597,7 +608,7 @@ def load_task_specs(path: str = "task_specs.json") -> tuple[dict, str | None]:
     if not path or not os.path.exists(path):
         return {}, (f"{path!r} not found — entity fingerprint skipped "
                     f"(author it per SPEC A.R5.2, then re-run)")
-    from agent_eval import TaskSpec         # local import: keeps this optional
+    from deadzone.agent_eval import TaskSpec         # local import: keeps this optional
     try:
         with open(path, encoding="utf-8") as fh:
             raw = json.load(fh)
@@ -629,7 +640,7 @@ def entity_error_by_condition(rows: Sequence[dict],
         return {"available": False, "reason": reason, "by_condition": [],
                 "overall": {}, "n_rows_scored": 0, "n_rows_unscorable": 0}
 
-    from agent_eval import evaluate_task
+    from deadzone.agent_eval import evaluate_task
     per_cond: dict[str, dict] = defaultdict(
         lambda: {"eer": [], "wer": [], "critical": [], "n_rows": 0})
     n_no_spec = 0

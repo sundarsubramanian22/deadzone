@@ -2,7 +2,7 @@
 Offline tests for the degradation composer (Task B3). Synthetic audio, synthetic
 RIRs/noise held in memory — no real assets, no ffmpeg, no API. Run:
 
-    python3 test_conditions.py
+    python3 tests/test_conditions.py
 
 Asserts:
   * Condition fields ARE the design.py factor names (no redefinition/drift),
@@ -15,14 +15,25 @@ Asserts:
   * a missing asset RAISES (no silent substitution),
   * an unavailable codec fails LOUDLY rather than skipping.
 """
+
+# --- repo-root bootstrap -------------------------------------------------
+# Makes `deadzone`, `scripts` and `demos` importable when this file is run
+# directly (`python tests/test_pipeline.py`) with no install step. Harmless
+# when it is imported as a module instead.
+import os as _os
+import sys as _sys
+_REPO_ROOT = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+if _REPO_ROOT not in _sys.path:
+    _sys.path.insert(0, _REPO_ROOT)
+# -------------------------------------------------------------------------
 from unittest import mock
 
 import numpy as np
 
-from design import DEFAULT_FACTOR_SPACE
-from audio_pipeline import apply_rir, mix_at_snr
-import conditions as C
-from conditions import (
+from deadzone.design import DEFAULT_FACTOR_SPACE
+from deadzone.audio_pipeline import apply_rir, mix_at_snr
+from deadzone import conditions as C
+from deadzone.conditions import (
     Condition, AssetLibrary, DiskAssetLibrary, RirAsset, NoiseAsset,
     apply_condition, apply_mic_rolloff, apply_codec,
     MissingAssetError, CodecUnavailableError, _stable_seed, _rt60_schroeder,
@@ -180,7 +191,7 @@ def test_missing_asset_raises():
 def test_codec_fails_loudly_without_ffmpeg():
     x = np.random.default_rng(0).standard_normal(FS)
     # force the "no ffmpeg" branch regardless of the host environment
-    with mock.patch("conditions.shutil.which", return_value=None):
+    with mock.patch("deadzone.conditions.shutil.which", return_value=None):
         try:
             apply_codec(x, FS, "g726")
             assert False, "expected CodecUnavailableError when ffmpeg is missing"

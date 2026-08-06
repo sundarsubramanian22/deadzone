@@ -3,8 +3,19 @@ Tests that the three trap functions actually do the thing. All synthetic — no
 external data, no API — so you can run this the moment you clone the repo and
 know the DSP core is trustworthy before wiring in real audio.
 """
+
+# --- repo-root bootstrap -------------------------------------------------
+# Makes `deadzone`, `scripts` and `demos` importable when this file is run
+# directly (`python tests/test_pipeline.py`) with no install step. Harmless
+# when it is imported as a module instead.
+import os as _os
+import sys as _sys
+_REPO_ROOT = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+if _REPO_ROOT not in _sys.path:
+    _sys.path.insert(0, _REPO_ROOT)
+# -------------------------------------------------------------------------
 import numpy as np
-from audio_pipeline import (
+from deadzone.audio_pipeline import (
     mix_at_snr, measured_snr_db, active_speech_mask,
     apply_rir, rms, classify_errors, normalize_text,
     align_confidences, ConfidenceAlignmentError,

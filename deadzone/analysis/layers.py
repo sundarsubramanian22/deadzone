@@ -85,23 +85,23 @@ from typing import Mapping, Sequence
 
 import numpy as np
 
-# Allow `python analysis/layers.py` as well as `import analysis.layers`.
-_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# Allow `python deadzone/analysis/layers.py` as well as `import deadzone.analysis.layers`.
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
-from audio_pipeline import (                  # noqa: E402
+from deadzone.audio_pipeline import (                  # noqa: E402
     ConfidenceAlignmentError, align_confidences,
 )
-from calibration import (                     # noqa: E402
+from deadzone.calibration import (                     # noqa: E402
     FeatureCalibrator, TemperatureScaler, calibration_report,
     expected_calibration_error,
 )
-from design import DEFAULT_FACTOR_SPACE, FactorSpace          # noqa: E402
-from model_compare import (                   # noqa: E402
+from deadzone.design import DEFAULT_FACTOR_SPACE, FactorSpace          # noqa: E402
+from deadzone.model_compare import (                   # noqa: E402
     compare_models, dead_zone_flags, within_model_conf_percentile,
 )
-from paralinguistic import (                  # noqa: E402
+from deadzone.paralinguistic import (                  # noqa: E402
     FEATURE_KEYS, compare_degradation_rates, extract_features_from_path,
     feature_drift,
 )

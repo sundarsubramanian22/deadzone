@@ -33,7 +33,7 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import make_pipeline
 
-from design import DEFAULT_FACTOR_SPACE, FactorSpace
+from deadzone.design import DEFAULT_FACTOR_SPACE, FactorSpace
 
 _EPS = 1e-6
 
@@ -48,6 +48,62 @@ def _sigmoid(z: np.ndarray) -> np.ndarray:
 
 
 # ---------------------------------------------------------------------------
+# Input integrity — the one place a mis-assembled label vector can be caught
+# ---------------------------------------------------------------------------
+#
+# Everything in this module takes (confidence, correctness) as two PARALLEL
+# arrays that the caller built by walking an alignment (deadzone/analysis/layers.py's
+# `word_records`). Two ways that pairing goes wrong, and neither is visible
+# afterwards:
+#
+#   * LENGTH MISMATCH. numpy will happily broadcast a length-1 array against a
+#     length-N one, and `zip`-style truncation upstream binds confidences to the
+#     wrong words. Either way a temperature is fitted, an ECE is produced, and
+#     the result is a number about a pairing that does not exist.
+#   * A NON-FINITE CONFIDENCE. `np.clip(nan, eps, 1-eps)` is still nan, so the
+#     NLL is nan for every T, and `minimize_scalar` returns whatever its bounded
+#     search happens to land on WITHOUT raising. The reported T is then a
+#     property of the optimizer, not of the data.
+#
+# Both are refused here rather than downstream, because downstream is where they
+# stop being detectable.
+
+def _check_pair(conf, correct, *, where: str) -> tuple[np.ndarray, np.ndarray]:
+    """Validate a (confidence, correctness) pair and return them as arrays."""
+    c = np.asarray(conf, dtype=float).ravel()
+    y = np.asarray(correct, dtype=float).ravel()
+    if c.size != y.size:
+        raise ValueError(
+            f"{where}: {c.size} confidences but {y.size} correctness labels. "
+            f"These are parallel arrays built by walking one alignment — a "
+            f"length mismatch means confidences are bound to the wrong words "
+            f"(or numpy will broadcast one of them), and the ECE that comes out "
+            f"describes a pairing that never existed. Rebuild the word records "
+            f"rather than trimming to the shorter list.")
+    if c.size == 0:
+        raise ValueError(
+            f"{where}: no words to calibrate. An empty input yields ECE nan / a "
+            f"default temperature, which reads as 'nothing to fix' rather than "
+            f"'nothing was measured'.")
+    if not np.all(np.isfinite(c)):
+        n = int(np.count_nonzero(~np.isfinite(c)))
+        raise ValueError(
+            f"{where}: {n} of {c.size} confidences are not finite. NaN survives "
+            f"the logit clip, so the fit's objective is nan at every "
+            f"temperature and minimize_scalar returns a value WITHOUT raising — "
+            f"the reported T would be a property of the optimizer, not of the "
+            f"data. A word with no confidence has no place in a calibration "
+            f"set; drop it upstream and say how many were dropped.")
+    if not np.all(np.isfinite(y)):
+        n = int(np.count_nonzero(~np.isfinite(y)))
+        raise ValueError(
+            f"{where}: {n} of {y.size} correctness labels are not finite. A "
+            f"label is 1 (match) or 0 (sub/ins); a NaN there poisons the NLL "
+            f"and every bin's empirical accuracy silently.")
+    return c, y
+
+
+# ---------------------------------------------------------------------------
 # Metrics: ECE + reliability diagram
 # ---------------------------------------------------------------------------
 
@@ -58,8 +114,7 @@ def reliability_curve(conf: Sequence[float], correct: Sequence[float],
     bins; per non-empty bin report mean confidence, empirical accuracy, and count.
     A perfectly calibrated model sits on the diagonal (conf == accuracy).
     """
-    conf = np.asarray(conf, dtype=float)
-    correct = np.asarray(correct, dtype=float)
+    conf, correct = _check_pair(conf, correct, where="reliability_curve")
     edges = np.linspace(0.0, 1.0, n_bins + 1)
     out = []
     for b in range(n_bins):
@@ -104,8 +159,8 @@ class TemperatureScaler:
         self.T = 1.0
 
     def fit(self, conf, correct) -> "TemperatureScaler":
+        conf, y = _check_pair(conf, correct, where="TemperatureScaler.fit")
         z = _logit(conf)
-        y = np.asarray(correct, dtype=float)
 
         def nll(T):
             p = np.clip(_sigmoid(z / T), _EPS, 1 - _EPS)
@@ -146,18 +201,43 @@ class FeatureCalibrator:
             LogisticRegression(C=10.0, max_iter=2000),
         )
 
-    def _features(self, rows: Sequence[dict], conf) -> np.ndarray:
+    def _features(self, rows: Sequence[dict], conf, *, where: str) -> np.ndarray:
+        c = np.asarray(conf, dtype=float).ravel()
+        # The feature rows and the confidences are a THIRD parallel array: each
+        # row is the acoustic condition of the word whose confidence sits at the
+        # same index. column_stack would raise on a hard mismatch but says
+        # nothing about the cause, and a mismatch introduced upstream (a row
+        # list filtered without filtering the confidences) means every word is
+        # conditioned on the wrong acoustics while the fit still succeeds.
+        if len(rows) != c.size:
+            raise ValueError(
+                f"{where}: {len(rows)} feature rows but {c.size} confidences. "
+                f"They are parallel arrays indexed by hypothesis word — a "
+                f"mismatch conditions each word on another word's acoustic "
+                f"condition, which still fits and still scores.")
+        if c.size == 0:
+            raise ValueError(f"{where}: no words to fit.")
         cont = np.array([[float(r[n]) for n in self.cont] for r in rows], dtype=float)
+        if not np.all(np.isfinite(cont)):
+            n = int(np.count_nonzero(~np.isfinite(cont)))
+            raise ValueError(
+                f"{where}: {n} non-finite values among the {tuple(self.cont)} "
+                f"factor columns. The calibrator is supposed to LEARN the "
+                f"condition-dependence of overconfidence; a NaN coordinate "
+                f"either blows up inside sklearn with no context or, once "
+                f"imputed anywhere upstream, teaches it the wrong condition.")
         cont = (cont - self._lo) / self._span                # bounds-normalized
-        return np.column_stack([_logit(conf), cont])
+        return np.column_stack([_logit(c), cont])
 
     def fit(self, rows: Sequence[dict], conf, correct) -> "FeatureCalibrator":
-        X = self._features(rows, conf)
-        self.model.fit(X, np.asarray(correct, dtype=int))
+        c, y = _check_pair(conf, correct, where="FeatureCalibrator.fit")
+        X = self._features(rows, c, where="FeatureCalibrator.fit")
+        self.model.fit(X, y.astype(int))
         return self
 
     def transform(self, rows: Sequence[dict], conf) -> np.ndarray:
-        return self.model.predict_proba(self._features(rows, conf))[:, 1]
+        X = self._features(rows, conf, where="FeatureCalibrator.transform")
+        return self.model.predict_proba(X)[:, 1]
 
 
 # ---------------------------------------------------------------------------
@@ -166,6 +246,17 @@ class FeatureCalibrator:
 
 def calibration_report(conf_before, conf_after, correct, n_bins: int = 15) -> dict:
     """ECE + reliability data before and after a calibrator — the plot payload."""
+    # THREE parallel arrays now. Before/after must describe the SAME words or the
+    # "ECE improvement" is a comparison of two different datasets — the single
+    # number this layer exists to report.
+    n_b = np.asarray(conf_before, dtype=float).size
+    n_a = np.asarray(conf_after, dtype=float).size
+    if n_b != n_a:
+        raise ValueError(
+            f"calibration_report: {n_b} confidences before vs {n_a} after. The "
+            f"before/after ECE pair is only a calibration result if both "
+            f"describe the same words; different lengths make the reported "
+            f"improvement a comparison of two different datasets.")
     return {
         "ece_before": expected_calibration_error(conf_before, correct, n_bins),
         "ece_after": expected_calibration_error(conf_after, correct, n_bins),

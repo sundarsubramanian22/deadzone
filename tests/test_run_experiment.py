@@ -17,8 +17,19 @@ each test pins one property that a real run cannot afford to discover late:
   5. rir_rt60_measured records the DELIVERED reverb (closest measured asset), not
      the requested rt60 — the whole reason the column exists.
 
-Run:  python3 test_run_experiment.py
+Run:  python3 tests/test_run_experiment.py
 """
+
+# --- repo-root bootstrap -------------------------------------------------
+# Makes `deadzone`, `scripts` and `demos` importable when this file is run
+# directly (`python tests/test_pipeline.py`) with no install step. Harmless
+# when it is imported as a module instead.
+import os as _os
+import sys as _sys
+_REPO_ROOT = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+if _REPO_ROOT not in _sys.path:
+    _sys.path.insert(0, _REPO_ROOT)
+# -------------------------------------------------------------------------
 import contextlib
 import io
 import json
@@ -30,10 +41,10 @@ from unittest import mock
 import numpy as np
 import soundfile as sf
 
-from audio_pipeline import _empty_confidence_result
-from conditions import AssetLibrary, Condition, NoiseAsset, RirAsset
-from design import DEFAULT_FACTOR_SPACE, screen_factors
-from run_experiment import (
+from deadzone.audio_pipeline import _empty_confidence_result
+from deadzone.conditions import AssetLibrary, Condition, NoiseAsset, RirAsset
+from deadzone.design import DEFAULT_FACTOR_SPACE, screen_factors
+from scripts.run_experiment import (
     AL_CLIPS, MASTER_COLUMNS, SMOKE_CLIP, SOBOL_CLIPS, ResultCache, RunStats,
     _ordered, build_plan, format_plan, load_manifest, main, main_grid,
     make_grid_wer_fn, run_grid, run_one, write_degraded_wav, write_master,
@@ -298,7 +309,7 @@ def test_make_grid_wer_fn_drives_screen_factors():
 
     # THE ACTUAL CONTRACT TEST: hand it to the real design.screen_factors.
     before = asr.calls
-    with mock.patch("conditions.apply_codec", _passthrough_codec), quiet():
+    with mock.patch("deadzone.conditions.apply_codec", _passthrough_codec), quiet():
         res = screen_factors(DEFAULT_FACTOR_SPACE, wer_fn)
     assert res["n_runs"] == 8                                   # PB design for 5 factors
     assert asr.calls - before == res["n_runs"] * len(CLIPS)

@@ -9,7 +9,7 @@ the two runs IS the sim2real finding (`analysis/sim2real.py`), which is only
 interpretable if the two libraries are matched on the thing that matters: how much
 reverb actually reaches the microphone.
 
-  python3 make_sim_rirs.py                 # generate + pair + write rir_pairs.json
+  python3 scripts/make_sim_rirs.py                 # generate + pair + write rir_pairs.json
 
 THE TRAP THIS FILE EXISTS TO AVOID
 ----------------------------------
@@ -52,6 +52,17 @@ stays importable, and its pairing logic testable, without pra installed).
 """
 from __future__ import annotations
 
+# --- repo-root bootstrap -------------------------------------------------
+# Makes `deadzone`, `scripts` and `demos` importable when this file is run
+# directly (`python tests/test_pipeline.py`) with no install step. Harmless
+# when it is imported as a module instead.
+import os as _os
+import sys as _sys
+_REPO_ROOT = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+if _REPO_ROOT not in _sys.path:
+    _sys.path.insert(0, _REPO_ROOT)
+# -------------------------------------------------------------------------
+
 import argparse
 import json
 import math
@@ -63,7 +74,7 @@ from typing import Iterable, Sequence
 
 import numpy as np
 
-from conditions import DiskAssetLibrary, _rt60_schroeder
+from deadzone.conditions import DiskAssetLibrary, _rt60_schroeder
 
 
 # ============================================================================

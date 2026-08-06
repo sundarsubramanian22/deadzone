@@ -40,14 +40,25 @@ Four things here exist because getting them wrong is expensive and silent:
      silently poisons a mean). Downstream MUST filter on `failed`.
 
 Run:
-    python3 run_experiment.py --dry-run                  # plan + cost, zero calls
-    python3 run_experiment.py --clips smoke --limit 20   # small real run
-    python3 run_experiment.py --clips all --workers 12   # the main grid
-    python3 run_experiment.py --rebuild                  # master table from cache
+    python3 scripts/run_experiment.py --dry-run                  # plan + cost, zero calls
+    python3 scripts/run_experiment.py --clips smoke --limit 20   # small real run
+    python3 scripts/run_experiment.py --clips all --workers 12   # the main grid
+    python3 scripts/run_experiment.py --rebuild                  # master table from cache
 
 Deps: numpy, soundfile (+ pandas/pyarrow for the parquet mirror, optional).
 """
 from __future__ import annotations
+
+# --- repo-root bootstrap -------------------------------------------------
+# Makes `deadzone`, `scripts` and `demos` importable when this file is run
+# directly (`python tests/test_pipeline.py`) with no install step. Harmless
+# when it is imported as a module instead.
+import os as _os
+import sys as _sys
+_REPO_ROOT = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+if _REPO_ROOT not in _sys.path:
+    _sys.path.insert(0, _REPO_ROOT)
+# -------------------------------------------------------------------------
 
 import argparse
 import csv
@@ -68,9 +79,9 @@ from typing import Callable, Sequence
 import numpy as np
 import soundfile as sf
 
-from audio_pipeline import classify_errors, is_failed
-from conditions import AssetLibrary, Condition, DiskAssetLibrary, apply_condition
-from design import DEFAULT_FACTOR_SPACE
+from deadzone.audio_pipeline import classify_errors, is_failed
+from deadzone.conditions import AssetLibrary, Condition, DiskAssetLibrary, apply_condition
+from deadzone.design import DEFAULT_FACTOR_SPACE
 
 
 # ============================================================================
@@ -295,13 +306,30 @@ def load_manifest(path: str | Path = "recording_manifest.csv") -> dict[str, str]
     table inherits a constant offset that looks exactly like an acoustic effect.
     """
     rows: dict[str, str] = {}
+    seen: dict[str, int] = {}
     with open(path, newline="", encoding="utf-8") as f:
         for r in csv.DictReader(f):
             cid = (r.get("id") or "").strip()
             if cid:
+                seen[cid] = seen.get(cid, 0) + 1
                 rows[cid] = (r.get("ground_truth") or "").strip()
     if not rows:
         raise ValueError(f"manifest {path} has no rows")
+    # A repeated id silently overwrites the earlier ground truth, and the LATER
+    # row wins — so every WER for that clip is scored against a reference the
+    # speaker may never have read. This is SPEC §12's named unfixable risk: no
+    # test anywhere can tell you the reference is wrong, and the resulting
+    # constant WER offset is indistinguishable from an acoustic effect. The
+    # duplicate leaves no other trace (the dict is still the right size for the
+    # ids it holds), so assert the count identity.
+    dupes = sorted(c for c, n in seen.items() if n > 1)
+    if dupes:
+        raise ValueError(
+            f"manifest {path} has duplicate id(s) {dupes}: {sum(seen.values())} "
+            f"rows for {len(seen)} distinct ids. The last row silently wins, so "
+            f"those clips would be scored against whichever ground truth "
+            f"happened to be listed second — a wrong reference is the one bug "
+            f"no test in this repo can catch (SPEC §12).")
     return rows
 
 
@@ -380,12 +408,14 @@ class ResultCache:
         self._lock = threading.Lock()
         self._rows: dict[CacheKey, dict] = {}
         self._fh = None
+        self.n_superseded = 0
         self._load()
 
     def _load(self) -> None:
         if not self.path.exists():
             return
         bad = 0
+        n_lines = 0
         with open(self.path, encoding="utf-8") as f:
             for i, line in enumerate(f, 1):
                 line = line.strip()
@@ -394,6 +424,7 @@ class ResultCache:
                 try:
                     row = json.loads(line)
                     self._rows[cache_key(row)] = row      # last write wins
+                    n_lines += 1
                 except (json.JSONDecodeError, KeyError):
                     bad += 1
                     print(f"[cache] WARN: skipping malformed line {i} of "
@@ -401,6 +432,19 @@ class ResultCache:
         if bad:
             print(f"[cache] {bad} malformed line(s) skipped; "
                   f"{len(self._rows)} usable rows loaded")
+        # Last-write-wins is DELIBERATE here (the file is a log, not a table),
+        # so a superseded row is legitimate — but it must not be silent. It is
+        # the only place in the pipeline where an earlier measurement is
+        # discarded, and how many were discarded is the difference between "the
+        # cache was resumed once" and "half the grid was re-run against a
+        # different model literal without anyone noticing".
+        self.n_superseded = n_lines - len(self._rows)
+        if self.n_superseded:
+            print(f"[cache] {n_lines} log lines -> {len(self._rows)} distinct "
+                  f"cells: {self.n_superseded} earlier row(s) SUPERSEDED by a "
+                  f"later re-run of the same (clip, condition, model). Last "
+                  f"write wins, by design — the older lines stay on disk as "
+                  f"history.")
 
     # --- lookup ------------------------------------------------------------
     def has(self, key: CacheKey) -> bool:
@@ -605,7 +649,7 @@ def resolve_models(models: Sequence[str] | Mapping[str, Callable[[str], dict]]
     no ASR dependency at all."""
     if isinstance(models, Mapping):
         return dict(models)
-    from model_compare import get_model                  # lazy: no SDKs for a dry run
+    from deadzone.model_compare import get_model                  # lazy: no SDKs for a dry run
     return {name: get_model(name) for name in models}
 
 
@@ -677,6 +721,22 @@ def run_grid(clips: Mapping[str, np.ndarray], refs: Mapping[str, str],
                           f"{rate:.1f} cells/s  eta {eta/60:.1f} min")
 
     out = [r for r in rows if r is not None]
+    # ROW-COUNT IDENTITY: one planned cell, one row. `rows` is preallocated to
+    # the plan's length and filled by index, so a slot left as None means a cell
+    # vanished between planning and writing — and filtering the Nones out (which
+    # is what the line above does) makes that vanishing invisible: the table is
+    # simply shorter, every mean still computes, and the missing cells are
+    # exactly the harsh ones most likely to have died. Failures are ROWS here
+    # (`failed=True`), never absences, so a None is never legitimate.
+    if len(out) != len(plan):
+        gaps = [plan[i] for i, r in enumerate(rows) if r is None][:5]
+        raise RuntimeError(
+            f"grid produced {len(out)} rows for {len(plan)} planned cells "
+            f"({len(plan) - len(out)} missing, e.g. "
+            f"{[(c, cond.name, m) for c, cond, m in gaps]}). A failed cell is "
+            f"written as a row with failed=True — an ABSENT cell is not a "
+            f"failure, it is a hole, and a shorter table is silently a "
+            f"survivorship-biased one.")
     n_failed = sum(1 for r in out if r["failed"])
     fail_rate = n_failed / len(out) if out else 0.0
 
@@ -791,6 +851,31 @@ def write_master(rows: Sequence[Mapping], results_dir: str | Path = "results",
     out_dir = Path(results_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     ordered = [_ordered(r) for r in rows]
+
+    # THE ONE-ROW-PER-CELL INVARIANT, asserted at the only place the artefact is
+    # created. Every downstream reader keys this table by (clip, condition,
+    # model): sensitivity fills W[clip, cell] (a duplicate silently overwrites
+    # and leaves no NaN), model_arms and confidence_gap group and average it (a
+    # duplicate silently double-weights). None of them can distinguish a
+    # duplicated measurement from a real one, and the table's shape, column set
+    # and row count all still look right. It is cheaper and far more honest to
+    # refuse to WRITE a table that violates it than to guard every reader.
+    seen: dict[CacheKey, int] = {}
+    for r in ordered:
+        k = cache_key(r)
+        seen[k] = seen.get(k, 0) + 1
+    dupes = sorted(((k, n) for k, n in seen.items() if n > 1),
+                   key=lambda kv: -kv[1])
+    if dupes:
+        raise ValueError(
+            f"refusing to write {out_dir / basename}: {len(ordered)} rows for "
+            f"{len(seen)} distinct (clip_id, condition_name, model) cells "
+            f"({len(ordered) - len(seen)} duplicates, worst {dupes[:3]}). A "
+            f"duplicate row is invisible to every analysis layer — "
+            f"sensitivity's factorial fill overwrites it with no NaN left "
+            f"behind, and the per-condition means weight that clip twice. Usual "
+            f"cause: two plans' rows concatenated, or a --rebuild whose plan "
+            f"listed a cell twice. Deduplicate on the cache key first.")
 
     csv_path = out_dir / f"{basename}.csv"
     with open(csv_path, "w", newline="", encoding="utf-8") as f:

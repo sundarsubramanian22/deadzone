@@ -25,7 +25,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Sequence
 
-from audio_pipeline import normalize_text
+from deadzone.audio_pipeline import normalize_text
 
 
 # ===========================================================================

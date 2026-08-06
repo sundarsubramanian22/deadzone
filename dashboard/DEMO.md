@@ -1,14 +1,45 @@
-# The 3-minute path through the dashboard
+# The demo — rehearsed running order and timings
 
-**Open:** `dashboard/deadzone.html`, double-clicked. No server, no terminal, no wifi.
-Turn wifi **off** before you start — it is a stronger demo than saying it works offline.
+Four pieces, ~5 minutes total. Every one of them runs with **wifi off** and with
+**no `DEEPGRAM_API_KEY` in the environment**. One command each; nothing is typed live.
 
-**Before you present, once:**
+| # | Piece | Command | Rehearsed | Measured |
+|---|---|---|---|---|
+| 1 | Opener — the trap functions are green | `make test-core` | **30 s** | ~6 s |
+| 2 | Degrade-and-break — the visceral one | `make demo-break` | **60 s** | ~14 s (12.6 s of it is audio) |
+| 3 | The active-learning loop | `make demo-al` | **30 s** | ~12 s |
+| 4 | The dashboard, the path below | `make dashboard` | **3 min** | opens instantly |
+
+`make demo` runs all four in that order. The measured column is the floor — the
+rehearsed column is the budget, because you are talking over pieces 1–3.
+
+There is **no live voice agent** in this demo. SPEC R7 was scoped out of this push
+deliberately; `agent_eval.py` exists as a synthetic-validated scaffold and that is
+exactly what it is presented as. Do not promise a live agent in the room.
+
+**Preflight, before you turn wifi off:**
 
 ```bash
-python3 dashboard/make_synthetic.py          # only if results/ has no table yet
-python3 dashboard/build.py                   # auto-picks results/master.csv if it exists
-python3 test_dashboard.py                    # 22 offline checks, ~3 s
+make demo-check     # every artifact the demo needs, verified on disk
+make test           # every offline suite
+```
+
+`make demo-check` prints `READY — you can turn wifi off.` or names the missing file
+and the target that rebuilds it.
+
+---
+
+# The 3-minute path through the dashboard
+
+**Open:** `make dashboard`, or double-click `dashboard/deadzone.html`. No server, no
+terminal, no wifi. Turn wifi **off** before you start — it is a stronger demo than
+saying it works offline.
+
+**If the dashboard needs rebuilding first (not needed on stage):**
+
+```bash
+make dashboard-build     # ~20 s; regenerates from results/master.csv
+./.venv/bin/python tests/test_dashboard.py    # offline render checks
 ```
 
 `build.py` prints a per-panel `ok` / `EMPTY` line. **Read it before you walk into the room.**
@@ -81,13 +112,19 @@ Scroll to the verdict box and read the status word out loud, *especially* if it 
 
 If the provenance line says the indices came from a GP surrogate, say so in the same breath.
 
-## 2:40–3:00 — Close on panels 5 and 6
+## 2:40–3:00 — Close on panels 5 through 8
 
-Click **step ▶** three or four times.
+There are **eight** panels: hero, factor-space heatmap, fingerprints, sensitivity,
+active learning, sim2real, multi-model comparison, and paralinguistic decoupling.
+Panels 7 and 8 sit **outside** the model toggle — they are cross-model by construction,
+so they do not change when you switch arms. Say that if anyone notices.
+
+Click **step ▶** three or four times on panel 5.
 
 > "The grid is expensive, so the surrogate chooses the next condition to measure — watch the points
 > walk onto the failure boundary instead of spreading out evenly. Below is active versus random
-> against the same budget."
+> against the same budget. Note the seed band, not a single seed — the variance here is large and
+> the honest number is a median across seeds."
 
 Then panel 6, and end on the honest note rather than a claim:
 
@@ -108,6 +145,8 @@ Then panel 6, and end on the honest note rather than a claim:
 | The page looks wrong on the projector | Zoom to 150%. Everything is relative units; wide charts scroll inside their own container, the page body never scrolls sideways. |
 | Someone asks "is this real data?" | Answer from the badge, immediately. Synthetic means planted structure and the panels are demonstrating that the instrument reads its plant back. |
 | The model toggle is greyed | The table had one model arm. Say so; do not click at it. |
+| Switching to `whisper-base` blanks a panel | The Whisper arm is a **partial** run — it does not cover every condition, so its hero / fingerprint panels can have no data to draw. Check this with `make dashboard-build` before you present; if it is still partial, say "the open-model arm is partial, here is how far it got" and switch back. Do not click the toggle blind. |
+| Panels 7–8 don't change with the toggle | Correct — multi-model comparison and paralinguistic decoupling are cross-model by construction. |
 | Numbers differ from last week | The footer's build line has the source table and timestamp. Read it rather than guessing. |
 
 ## Rebuilding against the real grid
@@ -115,7 +154,7 @@ Then panel 6, and end on the honest note rather than a claim:
 One flag. Nothing else changes — the front end never knows which table it got:
 
 ```bash
-python3 dashboard/build.py --master results/master.csv
+make dashboard-build        # == ./.venv/bin/python dashboard/build.py --master results/master.csv
 ```
 
 `--no-al` skips the active-learning loop (saves ~15 s of build time; the panel then renders its

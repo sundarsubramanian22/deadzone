@@ -5,6 +5,17 @@ it launders a broken corpus into every downstream layer.
 
 Each test plants ONE defect and asserts the checker names it.
 """
+
+# --- repo-root bootstrap -------------------------------------------------
+# Makes `deadzone`, `scripts` and `demos` importable when this file is run
+# directly (`python tests/test_pipeline.py`) with no install step. Harmless
+# when it is imported as a module instead.
+import os as _os
+import sys as _sys
+_REPO_ROOT = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+if _REPO_ROOT not in _sys.path:
+    _sys.path.insert(0, _REPO_ROOT)
+# -------------------------------------------------------------------------
 import csv
 import tempfile
 from pathlib import Path
@@ -12,7 +23,7 @@ from pathlib import Path
 import numpy as np
 import soundfile as sf
 
-from check_recordings import (
+from scripts.check_recordings import (
     ClipStats, check_corpus, check_manifest_rows,
     evaluate_clip, evaluate_corpus, measure_clip,
 )
