@@ -20,7 +20,9 @@ active-vs-random gap has large seed variance (SPEC A.R5.5), so the headline
 savings figure is a multi-seed result in the write-up, not a 20-second demo.
 
 WHAT TO WATCH. The map is a 2-D slice of the 5-D factor space (reverb on x, SNR
-on y) through the channel settings of measured dead zone #1. Shading is the
+on y) held at a harsh channel chosen so the failure contour crosses the middle of
+the plane -- see SLICE_FIXED for why that is not the #1 dead zone's channel and
+why it was not moved to match. Shading is the
 surrogate's predicted WER; the bright cells are where it predicts WER within a
 hair of the failure threshold. As evaluations are spent, watch two things move
 together: the bright band sharpens, and the median distance of each new pick from
@@ -59,9 +61,26 @@ from deadzone.design import DEFAULT_FACTOR_SPACE as SPACE
 MASTER = Path("results/master.csv")
 MODEL = "nova-3"
 
-# The slice we draw: held at the channel settings of the #1 measured dead zone, so
-# the contour on screen runs through the region the headline finding is about
-# rather than an arbitrary plane.
+# The slice we draw: a deliberately harsh channel -- babble + opus-lowrate + full
+# mic rolloff -- chosen because the 0.5 WER contour runs across the MIDDLE of this
+# plane, which is the only reason the picture is legible.
+#
+# THIS IS NOT THE #1 DEAD ZONE'S CHANNEL, AND IT USED TO CLAIM IT WAS. The comment
+# here previously said "held at the channel settings of the #1 measured dead zone".
+# That was true of the OLD #1 (rt60-0.7_snr-20_babble_opus-lowrate_roll-1), which
+# ranked first only under the confidence/WER pairing defect and is now classified
+# `silence_driven` (see demo_break.py). The corrected #1 is
+# rt60-0.45_snr-0_engine_g726_roll-0 -- engine / g726 / flat mic.
+#
+# The slice was NOT moved to match it, and the reason is measured rather than
+# assumed. On the engine/g726/roll-0 plane the surrogate's predicted WER spans
+# -0.224 to 0.520 over the rt60 x SNR grid: it only grazes the 0.5 threshold in one
+# corner (1.7% of cells inside the draw band, against 6.8% here), and a large part
+# of the plane goes NEGATIVE, which is unphysical for a WER and reads as a broken
+# render on a projector. Moving the slice would trade a legible contour for a corner
+# artifact. So this plane is chosen for legibility of the MECHANISM -- straddle
+# acquisition concentrating on a contour -- and it is not a depiction of the
+# headline condition. demo_break.py is the demo that shows the headline condition.
 SLICE_FIXED = {"noise_type": "babble", "codec": "opus-lowrate", "mic_rolloff": 1.0}
 
 RAMP = " .:-=+*#%@"

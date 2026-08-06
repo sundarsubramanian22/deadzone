@@ -168,18 +168,73 @@ touch the §5 pre-registration of `rt60 x snr_db`, which stands as written.
 
 ### D1 — the headline is more nuanced than the premise assumed
 
-- Global **spearman(confidence, WER) = -0.957**. Nova-3 largely *does* know when
-  it is failing. This is reported first, on purpose: the self-aware regions are
-  the majority and burying them would oversell the result.
-- But it is **overconfident in 92 % of conditions** (mean gap 0.256), and
-  **3.41 % of conditions (6/176) are genuine dead zones**.
-- Ranked #1: `rt60 = 0.7 s, SNR = 20 dB, babble, opus-lowrate, rolloff = 1.0`
-  -> mean word confidence **0.843** while WER is **0.387** (n = 40 clips).
+> ⚠️ **CORRECTED 2026-08-05 — the numbers first published in this section were an
+> estimand mismatch and are RETRACTED.** Per-condition `mean_conf` was averaged
+> over only the clips that produced words, while `wer` was averaged over **all**
+> clips — including the ones that returned an *empty transcript*, which
+> contribute WER 1.0 and no confidence at all. Subtracting two averages taken
+> over different populations inflated every gap (mean **+0.109**, max **+0.524**)
+> and manufactured four of the six published dead zones. Neither average was
+> wrong on its own; the defect lived entirely in the subtraction, which is why
+> nothing looked wrong. It was found by the **listening pass** (SPEC A.R3.5) and
+> by no test: the dead-zone exemplar clips sounded intelligible. Fixed in
+> `d7afd32`; full account in SPEC Appendix G and write-up §6.1. Corrected figures
+> below; the retracted ones are kept folded underneath, because the correction is
+> itself a finding.
 
-The honest framing for the write-up: the danger is not that the model is blind,
-it is that it is *mostly* self-aware — which makes the 3.4 % of conditions where
-it is not far more dangerous, because a downstream system calibrated on the
-average behaviour will trust it there.
+- Global **spearman(confidence, WER) = −0.9795** on the same-subset (paired)
+  pairing and **−0.9523** on the all-clips pairing, **n = 169** either way — the
+  7 conditions that emitted no words on any clip have no confidence to correlate
+  and are excluded from both. Nova-3 largely *does* know when it is failing. This
+  is reported first, on purpose: the self-aware regions are the majority and
+  burying them would oversell the result.
+- It is **overconfident in 91 % of conditions (154/169)**, mean gap **+0.147**.
+- **1.14 % of conditions (2/176) are genuine dead zones**, and the taxonomy is
+  now three-way: **2 `dead_zone`** (confidently wrong on the clips it spoke on),
+  **4 `silence_driven`** (the apparent gap was the mismatch, not confident
+  error), **7 `mute_zone`** (empty transcript on *every* clip). Mute zones are
+  deliberately *not* dead zones: they are the worst conditions measured, and a
+  confidence-based monitor is structurally blind to them because there is no
+  confidence to be low.
+- Ranked #1: `rt60 = 0.45 s (measured 0.474), SNR = 0 dB, engine, g726,
+  rolloff = 0.0` -> mean word confidence **0.8294** while WER is **0.3061**
+  (n = 40 clips, 363 ref words, gap **+0.1355**). **0 of its 40 clips were
+  silent**, so its confidence and its WER are averaged over the same 40 clips and
+  the claim needs no asterisk.
+- **31.4 % of clip-rows (2210/7040) produced no words at all**, spanning 123 of
+  the 176 conditions. That is the population the mismatch was silently mixing in.
+
+The honest framing for the write-up is unchanged in shape and smaller in
+magnitude: the danger is not that the model is blind, it is that it is *mostly*
+self-aware — which makes the 1.1 % of conditions where it is not far more
+dangerous, because a downstream system calibrated on the average behaviour will
+trust it there.
+
+<details><summary>the retracted pre-correction numbers (kept visible on purpose)</summary>
+
+Published here before the fix, computed on the mismatched pairing:
+
+- *"Global **spearman(confidence, WER) = -0.957**."* — an **artifact**. All 176
+  conditions were passed to the correlation while n = 169 was reported, so the 7
+  mute conditions entered as fabricated points sitting exactly at the ideal
+  corner of a negative correlation. −0.957 sat *between* the two honest numbers
+  (−0.9795 and −0.9523), which is precisely why it never looked wrong. An earlier
+  investigation of this same number concluded "n = 169, not 176" and stopped
+  there; the count was right and the computation was still mixing populations. A
+  partial explanation that reconciles the arithmetic is the most dangerous kind,
+  because it closes the question.
+- *"**overconfident in 92 % of conditions** (mean gap 0.256)"* — those are the
+  all-clips pairing's figures. That pairing alone would also have called
+  **6/176 (3.41 %)** conditions dead zones.
+- *"Ranked #1: `rt60 = 0.7 s, SNR = 20 dB, babble, opus-lowrate, rolloff = 1.0`
+  -> mean word confidence **0.843** while WER is **0.387**."* — this condition is
+  now classified **`silence_driven`, not a dead zone**. **10 of its 40 clips were
+  silent**; on the 30 it spoke on the model was **81.8 % accurate at 0.843 mean
+  confidence**, i.e. well calibrated. Its gap fell **+0.230 → +0.025**. The
+  published headline dead zone was a condition where the model was behaving
+  correctly.
+
+</details>
 
 ### D2 — deletions dominate; entities are hit hardest
 

@@ -6,20 +6,42 @@ cutting-edge voice AI — and the model under test is their product.
 - **Do not explain WER, SNR, RT60, or what a RIR is.** They know. Explaining
   basics is the fastest way to lose an expert's attention.
 - **The subject under test is their product.** The framing is *"I built an
-  instrument that finds where any streaming ASR fails silently, and here is what
-  it found"* — never *"your model is bad."* The instrument is the deliverable;
-  Nova-3 is the first thing measured with it.
-- **The data is genuinely favourable to them where it matters.** Nova-3's
-  confidence tracks its own error rate at spearman **−0.980**, and against
-  Whisper it is not close (§4.4). Lead the model comparison with that: it is
-  true, it is the strongest result in the study, and it is theirs.
+  instrument that finds where an ASR fails silently, and here is what it found"* —
+  never *"your model is bad."* The instrument is the deliverable; Nova-3 is the
+  first thing measured with it. Say **"streaming-capable, measured in batch"**
+  rather than "streaming" from the very first sentence — the concession later in
+  this document only works if you have not already overclaimed it in the opener.
+- **The data is favourable to them on the measured arms — but do not build the
+  segment on that.** Nova-3's confidence tracks its own error rate at spearman
+  **−0.980** (D1, 40 clips), and on the matched subset it beats Whisper by a
+  distance (§4.4). That is true and it is theirs. It is *not* the load-bearing
+  claim, because a **third arm is landing that is a commercial peer, not a weak
+  baseline** — see the box below and §4.4.
 - **They asked about product decisions.** Budget real time for what a deployment
   should *do* with these findings.
 
 > **Two dead-zone rates — say which is which.** D1 runs the full 40-clip corpus:
-> **2 of 176 (1.14 %)**. L1 restricts *both* arms to the 10 clips Whisper also
-> ran: **1 of 176 (0.57 %)**. Quote the matched one whenever Whisper is on the
-> page.
+> **2 of 176 (1.14 %)**. L1 restricts *every* arm to the 10 clips Whisper also
+> ran: **1 of 176 (0.57 %)**. Quote the matched one whenever a second model is on
+> the page, and never put 1.14 % and 39.20 % side by side as if they were
+> matched — they are not.
+
+> ⚠️ **ELEVENLABS SCRIBE: THE ARM EXISTS, THE RESULTS DO NOT.** The day-one
+> confidence gate passed — Scribe returns a per-word `logprob` (≤ 0; `exp()` for
+> a probability), `transcribe_elevenlabs` is in `audio_pipeline.py`, and
+> `elevenlabs-scribe` → `scribe_v2` is in `MODEL_REGISTRY`. **Zero Scribe rows
+> exist in `results/master.csv`.** Every Scribe claim in this document is marked
+> `[[PENDING SCRIBE]]` and **must not be spoken until the grid has run.** If
+> asked, the honest answer is *"the adapter and the confidence gate are done; the
+> arm is gated on an orthography audit and I have not spent the calls yet."*
+> Rehearse the whole hour **without** Scribe; treat it as an upgrade, never a
+> dependency.
+
+> 🔁 **The model-comparison beat is RESULT-CONDITIONAL now.** Scribe is
+> apples-to-apples with Nova-3 on the exact metric this project leads with, so
+> "lead with Nova-3 winning" is a framing that can invert on stage in a room full
+> of people who build Nova-3. §4.4 gives the direction-independent primary
+> framing and both fallback branches. Read it before the interview, not during.
 
 ---
 
@@ -48,39 +70,128 @@ the work in its literature within five minutes whether you do it or not.
 ### 2. The visceral demo (6 min) — DO THIS EARLY
 
 Audio first, while attention is highest. Everything is in `results/audio/demo/`;
-hand over **`blind/` only** (8 neutral filenames + `BLIND_SHEET.md`) and run
-from `DEMO_SCRIPT.md`. The working filenames in the parent directory say
-`reverb` and `babble` — a listener who sees them has been told the answer.
+hand over **`blind/` only** (8 neutral filenames + `BLIND_SHEET.md`). The working
+filenames in the parent directory say `reverb` and `babble` — a listener who sees
+them has been told the answer.
 
-**Beat 1 — the ranking, as a sealed prediction.** Show that
+> ⚠️ **`DEMO_SCRIPT.md` IS STALE — do not read it verbatim.** It was written
+> before the pre-registered listening prediction had been run. Three things in it
+> are now wrong: it calls **pairs 1 and 2** the primary evidence (use **2 and
+> 3**); its §4 "The mechanism" asserts precedence-effect-vs-informational-masking
+> as the *explanation* for what the listener heard, and that mechanism was
+> **refuted** at this DRR; and its fallback list still handles only the "they rank
+> them equal" case. Use the beats below. The *numbers* in `DEMO_SCRIPT.md` and
+> `KEY.md` are still correct and are recomputed from `results/master.csv` at build
+> time — it is the narration that has gone stale.
+
+**Beat 1 — the ranking. Ask, do not predict.** Show that
 `PREREGISTERED_PREDICTION.md` exists and **leave it closed** — stating a
 prediction aloud before someone judges is a demand characteristic, and this
 project's whole subject is not fooling yourself with a number you wanted. Say
-only *"I've written down what I think you'll say."* Play pair 1
-(`blind_03`/`blind_07`, `u40`) and pair 2 (`blind_06`/`blind_01`, `u21`), let
-him finish ranking, then open the file and reveal:
+only *"I've written down what I think you'll say."*
 
-- `rt60 1.0 / SNR 20 dB` — Shower IR, DRR **−10.02 dB**, but *quiet* → **0.1123**
-- `rt60 0.2 / SNR 0 dB` — Restaurant IR, DRR **+16.90 dB**, speech buried → **0.1301**
-- paired over the same 40 clips: **−0.0178, 95 % CI [−0.0654, +0.0310]** —
+Play, in this order:
+
+- **Pair 2 — `blind_06` / `blind_01` (`u21`)** ← lead here
+- **Pair 3 — `blind_08` / `blind_04` (`u26`)**
+- Pair 1 — `blind_03` / `blind_07` (`u40`) — only if he wants a third.
+
+`BLIND_SHEET.md` lists the pairs as 1-2-3 and that numbering is fine to leave
+alone — you are choosing the *play order*, not renumbering the sheet. The sheet
+already asks him to say **how confident** he is on each pair; keep that, because
+it is the thing that makes his answers comparable to the listener already run.
+
+Pairs 2 and 3 are the ones the single listener so far called **confidently**;
+pair 1 he called with low confidence by his own account ("not 100 % everyone
+would agree"), so it is the weakest place to open. Ask one question — *"which of
+these is harder to understand?"* — and let him finish every ranking before you
+say anything.
+
+**The reveal is that the model has no preference.** This is direction-agnostic:
+it lands identically whichever way he ranks, which is exactly why the beat is
+built on it.
+
+- **A** = `rt60 1.0 / SNR 20 dB` — Shower IR, measured RT60 1.011 s, DRR
+  **−10.02 dB**, but *quiet* → mean WER **0.1123**
+- **B** = `rt60 0.2 / SNR 0 dB` — Restaurant IR, measured RT60 0.193 s, DRR
+  **+16.90 dB**, speech buried → mean WER **0.1301**
+- Neither has a codec or mic rolloff on it, so nothing else moves between them.
+- Paired over the same 40 clips: **−0.0178, 95 % CI [−0.0654, +0.0310]** —
   10,000-resample paired bootstrap over clips, spans zero.
 
-On `u40`, `u26`, `u21` and `u10` the two score **exactly** equal per clip — at
-0.333, 0.250, 0.222, 0.125, so **not** because it got both right. It got both
-wrong, by the same amount, in different places; the transcripts in
-`DEMO_SCRIPT.md` show that better than the scalar does.
+Per clip, inside the pairs he just heard:
 
-Mechanism, in their vocabulary: humans get the precedence effect and a lifetime
-of room adaptation, so reverb is close to free for us; competing speech causes
-informational masking, which is brutal for us. The model has neither prior.
+| pair | clip | A (reverb) | B (babble) |
+|---|---|---|---|
+| 2 | `u21` | WER **0.222**, conf 0.879 | WER **0.222**, conf 0.854 |
+| 3 | `u26` | WER **0.250**, conf 0.864 | WER **0.250**, conf 0.883 |
+| 1 | `u40` | WER **0.333**, conf 0.805 | WER **0.333**, conf 0.807 |
 
-**Label it honestly, out loud:** the human half is n = 1 and unblinded — an
-intuition pump, not a measurement. The *measured* half is the paired model-side
-result and its CI, and it reads the same whichever way he ranks. Blurring those
-is the only way this beat can hurt you here.
+**18 of the 40 clips tie exactly.** Four of those ties are non-zero — `u40`
+0.333, `u26` 0.250, `u21` 0.222, `u10` 0.125 — so on those it did **not** get
+both right; it got both **wrong, by the same amount, in different places.** The
+transcripts make that better than the scalar does:
 
-**The takeaway is a product claim, and it is the point:** *you cannot QA a voice
-agent by listening to it.* "Sounds fine to me" is not evidence the ASR works.
+- `u21` ref `forward the file to accounting and legal by monday` →
+  reverb `…and legal filing` (substitution) vs babble `…and legal` (deletion)
+- `u26` ref `text me the address for the kowalski wedding` →
+  reverb `…for the cool seaway` (the name mangled into words) vs babble
+  `…for the` (the name simply gone)
+
+Same WER, different failure *shape* — which is the whole argument for typed edits
+over a scalar, made audible.
+
+**Beat 1b — NOW open `PREREGISTERED_PREDICTION.md`. The prediction FAILED, and
+you say so first.** Report it as a result. Do not soften it and do not skip it:
+this is the project's own thesis applied to itself, in front of someone who will
+notice if you only volunteer the predictions that worked.
+
+> "I sealed a prediction about how you'd rank these before anyone listened, and I
+> got it wrong. I predicted the loud-babble clip would be clearly harder in both
+> of the pairs the document names — informational masking is brutal for a human,
+> and the precedence effect makes reverb close to free. It held in **one of those
+> two**, and weakly. In the third pair, the backup one, it went the other way as
+> well. So: **one of three**, and the listener called the *reverb* clip harder
+> twice. The mechanism I proposed does not hold at this DRR.
+>
+> And I'll say something worse about my own document: it listed exactly two
+> outcomes, *unequal* → holds and *equal* → fails. It never considered **unequal
+> but backwards**, which is what actually happened. A pre-registration that can
+> only be confirmed or shrugged at is a badly written one, and that is a flaw in
+> the registration, not in the data.
+>
+> What survives is the half I would have kept either way: **a human had a
+> preference in 3 of 3 pairs, and the model scores every pair exactly equal.** The
+> disagreement is the result. *'And here's why'* is not — I had a mechanism, I
+> wrote it down, and the data went the other way."
+
+Have the tally ready if he asks: preference expressed in **3 of 3** pairs,
+confident in **2 of 3** (pairs 2 and 3), predicted direction held in **1 of 3**
+(and in **1 of the 2** the sealed document actually named), reverb judged harder
+in **2 of 3**.
+
+**Do not repair the story on stage.** The tempting move is to reach for a new
+mechanism — "well, at −10 dB DRR the reflections stop fusing" — and it is
+available and it might even be right. It is also a post-hoc explanation for an
+n = 1 observation that just refuted a pre-registered one, which is the exact move
+this project spends 176 conditions refusing to make. If he proposes it, agree
+that it is testable and say what would test it (a real listening study,
+DRR-swept, many listeners). Do not adopt it as a finding.
+
+**Label it honestly, out loud:** the human half is **n = 1, unblinded, one
+listener, one speaker, one accent, clips not level-matched, order not
+counterbalanced** — an intuition pump, not a measurement. The *measured* half is
+the paired model-side result and its CI, and it reads the same whichever way he
+ranks. Blurring those is the only way this beat can hurt you here. Doing the
+human half properly is a listening study with many listeners, randomised order
+and level-matched stimuli — the experiment this project does not have, and the
+limitations section says so.
+
+**The takeaway is a product claim, and it survives the failed prediction intact:**
+*you cannot QA a voice agent by listening to it.* "Sounds fine to me" is not
+evidence the ASR works, and "sounds terrible" is not evidence it fails — a human
+ranks these unequal, in a direction I could not predict, and the model scores them
+the same.
 
 **Beat 2 — the payoff.** Play `blind_02` (clean control) then `blind_05`: `u03`
 under `rt60-0.7 / snr-20 / babble / opus-lowrate / roll-1`. The SNR is **20 dB**
@@ -125,23 +236,56 @@ Offline, `file://`, wifi off. Order matters:
    **engine** noise, where confidence otherwise tracks WER at ρ = −0.99: a point
    failure, not a bad region.
 2. **DRR, not RT60** — the best mechanistic result. The `rt60` axis is
-   non-monotonic (0.2026 → 0.6359 → 0.4495 → 0.7581) because each level is
-   delivered by the *nearest measured RIR*, i.e. a different real room.
-   `spearman(DRR, WER) = −1.000` against `spearman(RT60, WER) = +0.800`.
+   non-monotonic (0.2026 → 0.6359 → 0.4495 → 0.7581, marginals over the babble
+   factorial core) because each level is delivered by the *nearest measured RIR*,
+   i.e. a different real room. `spearman(DRR, WER) = −1.000` against
+   `spearman(RT60, WER) = +0.800`.
    **Reverb benchmarks parameterised by RT60 alone will mis-rank conditions.**
    Directly useful to anyone building an ASR eval set, which is them.
+   *(If he checks a different table and gets 0.2026 → 0.5559 → 0.4495 → 0.7217:
+   that is the same four rooms averaged over all 176 conditions instead of the
+   babble core. Both orderings are identical and both Spearmans are unchanged —
+   say which population you are quoting and it is a non-event.)*
 3. **Fingerprints → fixes.** Reverb and low SNR → *deletions*; g726 and road
    noise → *substitutions*; babble → insertions that are 92 % foreign tokens,
    the model transcribing background speakers, a different mechanism from
-   acoustic confusion. Proper nouns destroyed at 0.646 vs 0.462 for function
-   words. Each signature implies a fix: keyword boosting, dereverberation,
-   entity-aware decoding.
-4. **Model comparison.** Lead with Nova-3 winning, decisively: dead-zone rate
-   **0.57 % (1/176) vs 39.20 % (69/176)**, confidence-vs-WER **−0.970 (n = 164)
-   vs −0.590 (n = 171)**, insertions **0.021 vs 0.197** of reference words. Then
-   Whisper's hallucination mode as the interesting part: 3 reference words became
-   49, and WER exceeds 1.0 in two whole factor regions because insertions are
-   unbounded. *WER understates that failure* — it caps damage at one error per
+   acoustic confusion. **Do not call that babble-specific** — the foreign fraction
+   is 0.94 under engine and 0.89 under road too; what babble has is ~3× the
+   insertion *count*. The mechanism claim is "competing-source capture", not
+   "babble". Proper nouns destroyed at 0.646 vs 0.462 for function words —
+   carried by proper nouns and spelled letters (0.613), **not** by digits, which
+   are the *least* destroyed class. Each signature implies a fix: keyword
+   boosting, dereverberation, entity-aware decoding.
+4. **Model comparison — the framing must not depend on who wins.** See the
+   `[[PENDING SCRIBE]]` box at the top: **a third arm is a commercial peer, and
+   its results do not exist yet.**
+
+   **Primary framing, and it is direction-independent — open with this:** the
+   interesting result is not which model is better, it is that the models have
+   **different** dead zones. Measured, twice, in two unrelated senses:
+   - **across model families:** nova-3 vs whisper-base, shared dead zones **0**,
+     union 70, **Jaccard 0.000** (`results/model_arms.json`);
+   - **across RIR provenance:** measured vs simulated RIRs, real 1, sim 0, shared
+     0, **Jaccard 0.00, recall 0.00** (`results/sim2real.txt`).
+
+   > "**You cannot borrow someone else's dead-zone map.** Not from another model,
+   > not from a simulator. The map is the deliverable and it does not transfer —
+   > which is an argument for the instrument, not for any one model's ranking."
+
+   A third arm makes that claim *stronger whichever way it ranks*, and that is
+   the whole reason to lead with it.
+
+   **The Whisper leg — measured, quote freely, matched 10-clip subset:**
+   dead-zone rate **0.57 % (1/176) vs 39.20 % (69/176)**, confidence-vs-WER
+   **−0.970 (n = 164) vs −0.590 (n = 171)**, insertions **0.021 vs 0.197** of
+   reference words. **State the asymmetry yourself:** Whisper is a *weak open
+   baseline* whose "confidence" is a derived segment proxy — `exp(avg_logprob)`
+   spread over the words — not a per-word posterior. He will know that. Beating it
+   tests whether the confidence-vs-WER *shape* differs across families; it is not
+   a peer comparison and you should not sell it as one.
+   Then Whisper's hallucination mode as the interesting part: 3 reference words
+   became 49, and WER exceeds 1.0 in two whole factor regions because insertions
+   are unbounded. *WER understates that failure* — it caps damage at one error per
    reference word, while a 49-word hallucination handed to a downstream LLM is
    unbounded harm.
    **Best detail: §5's correction moves the two arms in *opposite* directions.**
@@ -150,6 +294,60 @@ Offline, `file://`, wifi off. Order matters:
    clips score exactly 1.0, so dropping them removes its *cheapest* rows and
    leaves the ones that hallucinate past 1.0. One model goes quiet under stress;
    the other invents.
+
+   **The Scribe leg — three branches, decided now, not on stage.**
+   `[[PENDING SCRIBE — do not speak any of these until rows exist]]`
+
+   - **(a) Nova-3 ahead on dead-zone rate and calibration.** Then §4.4 reads as it
+     always did, *but the ranking is still the second sentence.* First sentence
+     stays the disjoint map: *"two commercial models, both exposing per-word
+     confidence, and their dead zones do not overlap — one of them happens to have
+     fewer."*
+   - **(b) Scribe ahead on dead-zone rate or on ECE.** Deliver it as a finding, in
+     one flat sentence, and then keep going:
+     > "In region X the commercial peer was better calibrated — its dead-zone rate
+     > there is A against Nova-3's B, and its post-calibration ECE is C against D.
+     > The mechanism is visible in the edit signature: [substitutions vs deletions
+     > vs silence]. That is the instrument doing its job — it was built to find
+     > where *a* model fails silently, and it found a region where this one does.
+     > What I'd want from you is whether that region matches anything you already
+     > know about the acoustic front end."
+     Said flatly, that is a result. Said apologetically, it is a concession — and
+     hedging it in front of the people who build the model is the worse failure.
+     **Never** editorialise beyond the measurement, and never generalise from a
+     region to the product.
+   - **(c) Mixed / within noise.** Most likely outcome. The primary framing above
+     already covers it verbatim; add *"neither arm dominates, and the regions where
+     each is blind are disjoint,"* which is the strongest version of the claim.
+
+   **Comparability rules that must survive contact with an expert:**
+   - Scribe reports a **log-probability**; `exp(logprob)` is its own scale and is
+     **not** commensurate with a Deepgram acoustic confidence or with Whisper's
+     segment proxy. Every cross-model claim goes through
+     `within_model_conf_percentile`. Say this before he asks.
+   - **The orthography audit is a gate, not a nicety** —
+     `scripts/probe_scribe_orthography.py`, run and read before a single Scribe row
+     enters `master.csv`. Benchmarks to quote: nova-3 shifts **−0.014** (already
+     word-form, so ~0 is the *expected* result), whisper **+0.090** (the normalizer
+     recovering digit orthography, not accuracy). A large unexplained Scribe shift
+     means a condition-independent formatting offset — indistinguishable from an
+     acoustic effect once it is in the table, which is exactly the failure this
+     project is about.
+   - **A third arm narrows the matched comparison.** L1 matches to the cells
+     *every* arm ran; the current intersection is 10 clips × 176 conditions = 1757
+     rows per arm. An arm on a different clip subset shrinks that further, and the
+     arm census in `results/model_arms.txt` prints it. Quote the census, never a
+     bare WER.
+   - **With three arms, quote the PAIRWISE Jaccard, not the all-arm one.** The
+     headline 0.000 today is a two-arm number, where all-arm and pairwise
+     coincide. At three arms the all-arm figure becomes *"flagged by every arm"* —
+     a stricter and different claim that will trend to zero for trivial reasons.
+     `dead_zone_overlap.pairwise["nova-3|elevenlabs-scribe"]` is the one that
+     carries the "you cannot borrow someone else's map" argument.
+   - **Every dead-zone rate is flagged on `wer_spoke`, on the matched cells.**
+     That is the §5 correction, and it applies to a new arm on day one rather than
+     being discovered in it later. If a Scribe comparison ever gets quoted off the
+     all-clips pairing, it is the same defect this whole runbook opens on.
 
 ### 5. Judgment — the section that decides the interview (8 min)
 
@@ -210,12 +408,32 @@ signal available, and much stronger from you than found by them.
   random on planted synthetic structure, so this is a method meeting a surface
   with no exploitable boundary, not a broken implementation. **Report the
   budget, not a ratio.**
+- **"Did you re-run it under DRR?" — yes, and it is still a null.** He will ask
+  this the moment you say DRR orders the conditions and RT60 does not. Under DRR,
+  straddle beats random in **14/32** paired runs, median paired difference
+  **+0.000** (RT60: 13/32, +0.003; negative would mean active is better). Across
+  **44 coordinate systems** the median paired difference spans −0.0053 to +0.0106
+  and **0/44** have a winner stable across 4 splits. Two negative controls:
+  all 24 permutations of the same four DRR values put the true assignment at rank
+  **18/24** (permutation p = 0.750), and random monotone relabellings of RT60 beat
+  it 7/16. The ceiling is the honest part: **the grid contains exactly four
+  distinct RIRs**, so any reparameterisation of the reverb axis is a relabelling
+  of four points on a line, and the GP normalises each axis by its bounds — DRR
+  cannot add information the grid never measured. Straddle *did* concentrate
+  58.3 % of acquired evaluations near the contour vs 21.1 % for random, so the
+  acquisition function worked and the job did not pay. `results/al_drr.txt`.
 - **The pre-registration was CONFIRMED**, registered before any real audio
   existed (`d8ddd4f`, 2026-07-27) with a decision rule fixed in advance:
   ST−S1 = 0.128 (`rt60`), 0.112 (`snr_db`), `rt60 × snr_db` ranks 1/6 in S2. The
   quoted CI is ~2.5× wider than necessary — it adds S1 and ST in quadrature while
   their bootstrap correlation is +0.86, conservative in the only direction that
   matters for a pre-registered test.
+  **Pair it with the one that failed** (§2 beat 1b) — *"I ran two
+  pre-registrations. The one about the model confirmed. The one about the
+  listener failed, in a direction my own document hadn't allowed for, and it's
+  still in the repo."* Two registrations with one verdict each is a process; one
+  registration with one confirmation is a lucky guess, and he can't tell the
+  difference unless you show him both.
 - **The sim-vs-real gap survived the correction untouched, and say so.** Level
   and order carry **no confidence term**, so both are bit-identical before and
   after: synthetic RIRs underestimate WER by **12.1 points [−15.0, −9.6]** but
@@ -252,6 +470,31 @@ signal available, and much stronger from you than found by them.
   `agent_eval.py` is built and synthetic-validated — task/entity metrics and a
   turn-taking analyzer over a typed event stream — a drop-in once there is an
   agent to score. Have the file open.
+- **"Why ElevenLabs Scribe, and where is it?"** `[[PENDING SCRIBE]]` The honest
+  status: **the adapter and the confidence gate are done, the grid has not run,
+  and there is no Scribe number to quote.** What the day-one gate actually
+  established, which is the interesting part:
+  - Scribe returns a **per-word `logprob`** (≤ 0), so it is the second arm in the
+    study that can be asked the silent-failure question at all. Whisper cannot —
+    its confidence is a derived segment proxy.
+  - **The vendor's own docs disagreed with each other:** the capabilities page
+    shows a response with no `logprob`; the API reference lists it. That is
+    precisely why the gate is a live probe and not a documentation read.
+  - **The trap that was avoided:** `language_probability` is a *document-level
+    language-detection* score on 0–1. Mistaking it for confidence would assign
+    every word in a clip the same value — a perfectly smooth, entirely fake
+    confidence signal, and **no test in this repo would catch it.**
+  - Observed live: a word (`u02`, "at") with `logprob` exactly **0.0**, i.e.
+    `exp()` = exactly 1.0. Anything that then takes a logit of that confidence
+    must clip — the same class of bug as the calibration layer's `_logit` guard.
+  - Cost is not the constraint: $0.22/hr batch ⇒ the 10-clip subset ≈ **$0.43**,
+    the full 40-clip grid ≈ **$1.72**. **The gate is the constraint** (the
+    orthography audit, §4.4).
+  - The forward-looking half, and it belongs in the *next steps* answer rather
+    than the results: `scribe_v2_realtime` exposes **the same per-word `logprob`
+    over a websocket**, so it is the cheapest route to this project's first
+    genuinely *streaming* arm — which is the gap the streaming-framing section
+    below already concedes.
 - **Why G.726 and not AMR-NB?** Stock ffmpeg is AMR decode-only. The split paid
   off anyway: g726 produces substitutions, opus-lowrate deletions — two
   mechanisms from one factor.
@@ -271,8 +514,14 @@ signal available, and much stronger from you than found by them.
 - Timings: reframe 2 · audio 6 · instrument 4 · dashboard 9 · judgment 8 ·
   product 4 = **33 min**, leaving ~25 for the conversation, which is where the
   hiring signal actually lives.
-- Running long? Cut §3 to two bullets and §4 item 3. **Never cut §5's first
-  item.**
+- Running long? Cut §3 to two bullets and §4 item 3. Inside §2, cut **pair 1**
+  (`u40`) — two pairs carry the beat and pair 1 is the marginal one. **Never cut
+  §5's first item, and never cut §2's beat 1b** (the failed pre-registration):
+  a demo that only reports the predictions that worked is the exact failure this
+  project is about.
+- **Nothing in the run-of-show depends on a Scribe result.** If the arm has not
+  run by the day, every `[[PENDING SCRIBE]]` block is skipped and the hour is
+  unchanged. Rehearse it that way at least once.
 
 ---
 
@@ -339,6 +588,13 @@ Ending on a question is good here. Labs engineers like being asked.
 **One caution:** "vendor confidence is not a calibrated probability" is the
 *premise* of that layer, not a criticism of their product. Say it that way.
 
+**If the third arm comes up here** — and it will, because "what is your
+confidence" and "how do you compare it to someone else's" are the same
+conversation: ElevenLabs documents theirs as a **log-probability**, Deepgram
+documents a confidence without saying what it is a posterior over. That
+difference is the reason nothing in this study ever pools confidences across
+vendors. It is a methods statement, not a scoreboard.
+
 ### On novelty
 
 Labs values ambition, and the positioning rule says claim none. Not in tension:
@@ -348,7 +604,7 @@ earn that simulation cannot.
 
 ---
 
-## The three things to be sure you say
+## The four things to be sure you say
 
 1. *"This genre is well-trodden and nothing in the method is novel."* — first
    five minutes, unprompted.
@@ -358,3 +614,10 @@ earn that simulation cannot.
    found it by listening to the audio, not by running a test, and the fix
    produced a category — the mute zone — that a confidence monitor cannot see at
    all."*
+4. *"I pre-registered how you'd rank those clips and I was wrong — and my
+   pre-registration was badly written, because it never allowed for 'unequal but
+   backwards.' The measured half is untouched: a human has a preference, the
+   model scores them equal."*
+
+**And the one thing to be sure you do NOT say:** any Scribe number, until the arm
+has run. `[[PENDING SCRIBE]]`

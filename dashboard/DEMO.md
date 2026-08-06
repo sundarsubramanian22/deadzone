@@ -145,7 +145,7 @@ Then panel 6, and end on the honest note rather than a claim:
 | The page looks wrong on the projector | Zoom to 150%. Everything is relative units; wide charts scroll inside their own container, the page body never scrolls sideways. |
 | Someone asks "is this real data?" | Answer from the badge, immediately. Synthetic means planted structure and the panels are demonstrating that the instrument reads its plant back. |
 | The model toggle is greyed | The table had one model arm. Say so; do not click at it. |
-| Switching to `whisper-base` blanks a panel | The Whisper arm is a **partial** run — it does not cover every condition, so its hero / fingerprint panels can have no data to draw. Check this with `make dashboard-build` before you present; if it is still partial, say "the open-model arm is partial, here is how far it got" and switch back. Do not click the toggle blind. |
+| Switching to `whisper-base` blanks **panel 6, sim2real** | Expected, and it explains itself on screen — read the box out. The simulated-RIR arm was only ever run for `nova-3`, because D4 compares **measured-vs-synthetic RIR provenance**, not model families; running it per model would double the API spend to answer a question nobody asked. Every other panel is populated for Whisper: the arm covers all **176 conditions** (10 clips each, 1760 rows), so hero and fingerprints both draw with 176 points. Say "the sim arm is nova-3 only, by design" and carry on — do not treat it as a build failure. |
 | Panels 7–8 don't change with the toggle | Correct — multi-model comparison and paralinguistic decoupling are cross-model by construction. |
 | Numbers differ from last week | The footer's build line has the source table and timestamp. Read it rather than guessing. |
 

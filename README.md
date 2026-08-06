@@ -1,4 +1,4 @@
-# Deadzone — a silent-failure map for streaming ASR
+# Deadzone — a silent-failure map for streaming-capable ASR
 
 Deadzone is a controlled testbed that asks a different question of a speech
 recognizer than the usual one. Not *how much does it break* under acoustic
@@ -24,10 +24,15 @@ What is different is the lens, not the machinery:
    instead of collapsing to a scalar.
 3. **An active-learning surrogate** that maps the failure boundary in far fewer
    oracle calls than a grid (boundary-seeking straddle acquisition over a GP).
-4. **A commercial streaming model that exposes per-word confidence** (Deepgram
-   Nova-3) as the primary arm, where the literature mostly uses
+4. **A commercial streaming-capable model that exposes per-word confidence**
+   (Deepgram Nova-3) as the primary arm, where the literature mostly uses
    Whisper / Conformer / wav2vec. Without per-word confidence there is no
-   silent-failure question to ask.
+   silent-failure question to ask. **Measured in batch:** every row went through
+   the pre-recorded endpoint (`listen.v1.media.transcribe_file`), not
+   `listen.live`, and the Whisper arm runs locally with full-file lookahead — so
+   both arms are batch and the comparison is not mode-confounded, but what is
+   mapped is acoustic robustness rather than streaming behaviour. See the
+   write-up's limitation 17.
 
 ## The headline result
 

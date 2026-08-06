@@ -4,11 +4,13 @@ Persistent project context. Read at the start of every session. Keep this lean;
 full detail lives in `SPEC.md`.
 
 ## What this is
-Deadzone is a general, domain-neutral testbed that maps where a **streaming ASR
-model** fails **silently** (confident but wrong) under controlled acoustic
+Deadzone is a general, domain-neutral testbed that maps where a **streaming-capable
+ASR model** fails **silently** (confident but wrong) under controlled acoustic
 degradation — the "dead zones" — what *kind* of failure each condition causes,
-and a cheap early-warning signal. Any streaming ASR, any acoustic domain. Full
-brief: @SPEC.md
+and a cheap early-warning signal. Any streaming ASR, any acoustic domain. Note the
+measured grid is **batch**: Deepgram via the pre-recorded endpoint
+(`listen.v1.media.transcribe_file`), Whisper locally — no arm uses `listen.live`.
+Full brief: @SPEC.md
 
 ## Build / test / run commands
 - Run unit tests: `python3 tests/test_pipeline.py`  (offline, synthetic — must stay green)
