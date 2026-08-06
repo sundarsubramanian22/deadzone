@@ -13,54 +13,59 @@ the confidence–accuracy gap as the headline measurement.
 ## 1. Abstract
 
 **Across 176 controlled acoustic conditions, Nova-3's word confidence tracks its own error
-rate almost perfectly (Spearman ρ = −0.957) — and is nonetheless overconfident in 92 % of
-them (mean gap 0.256), with 6 of 176 (3.41 %) qualifying as genuine dead zones. The worst
-reports mean word confidence 0.843 at WER 0.387.**
+rate almost perfectly (Spearman ρ = −0.980) — and is nonetheless overconfident in 91 % of
+them (mean gap +0.147), with 2 of 176 (1.14 %) qualifying as genuine dead zones. The worst
+reports mean word confidence 0.829 at WER 0.306, on 40 clips none of which came back empty.**
 
-The model is not blind, it is *mostly* self-aware, and that makes the residual 3.4 %
-dangerous: a system whose "ask the caller to repeat" threshold was tuned on average behaviour
-will trust it precisely where it should not. The same grid — a **complete 4 × 4 × 3 × 3
-factorial**, so its Sobol decomposition is *exact* rather than sampled — also gives typed
-failure fingerprints, a **confirmed** pre-registered `rt60 × snr_db` interaction, the
-mechanistic result that reverb damage is monotone in **direct-to-reverberant ratio, not RT60**
-(ρ = −1.000 vs +0.800), and a **null** on active learning reported as a null. And a dead-zone
-map does not transfer, in two independent senses: simulated RIRs rank conditions well
-(ρ = 0.873) yet recover **none** of the real dead zones (Jaccard 0.00), and neither does a
-second model family (Jaccard 0.00).
+**That headline is a correction.** An earlier version reported 6 dead zones at a mean gap of
+0.256, because per-condition confidence was averaged over the clips that produced words while
+WER was averaged over *all* of them — clean arithmetic on two different estimands (§6.1). The
+fix splits the old set into three categories needing three different mitigations — **dead
+zone**, **silence-driven**, **mute zone** — and the last, where the model emits nothing at all,
+is invisible to any confidence-based monitor.
+
+The model is not blind, it is *mostly* self-aware, and that makes the residual 1.1 % dangerous:
+a system whose "ask the caller to repeat" threshold was tuned on average behaviour will trust it
+precisely where it should not. The same grid — a **complete 4 × 4 × 3 × 3 factorial**, so its
+Sobol decomposition is *exact* rather than sampled — also gives typed failure fingerprints, a
+**confirmed** pre-registered `rt60 × snr_db` interaction, the mechanistic result that reverb
+damage is monotone in **direct-to-reverberant ratio, not RT60** (ρ = −1.000 vs +0.800), and a
+**null** on active learning reported as a null. And a dead-zone map does not transfer: simulated
+RIRs rank conditions well (ρ = 0.873) yet recover **none** of the real dead zones, and neither
+does a second model family (both Jaccard 0.00).
 
 ---
 
 ## 2. Motivation
 
-Aggregate WER hides three things a deployment needs: *which* conditions break the model,
-*what kind* of error each produces, and *whether the model knows it is failing*.
+Aggregate WER hides three things a deployment needs: *which* conditions break the model, *what
+kind* of error each produces, and *whether the model knows it is failing*.
 
 The third matters most and is least reported. A model that is wrong and knows it is an
-engineering problem — ask the caller to repeat, fall back, escalate. A model that is wrong
-and confident is a silent failure: the system commits and the error propagates. So the
-question is not "how much does the model break" but **"does it know it is breaking, and where
-does that self-knowledge fail?"** Answering it needs counterfactual isolation, which field
-recordings cannot give: in the wild the mic, placement, noise and codec all move at once.
-Isolation, not fidelity, is the goal; the gap to reality is measured (§7), not hidden.
+engineering problem — ask the caller to repeat, fall back, escalate. A model that is wrong and
+confident is a silent failure: the system commits and the error propagates. So the question is
+not "how much does the model break" but **"does it know it is breaking, and where does that
+self-knowledge fail?"** Answering it needs counterfactual isolation, which field recordings
+cannot give — in the wild the mic, placement, noise and codec all move at once. Isolation, not
+fidelity, is the goal; the gap to reality is measured (§7), not hidden.
 
 ---
 
 ## 3. Prior work — this is a well-trodden genre
 
-**The controlled-degradation ASR testbed is an established genre and nothing in the method
-here is novel.** The lineage, before any of my own results and annotated in Appendix I:
-**WildASR / "Back to Basics" (2026)**, the closest neighbour in method and framing; **Speech
-Robustness Bench**; **"When Denoising Hinders" (2026)**, which already publishes the
-perception/recognition mismatch hypothesis; the far-field lineage of **Ko et al. 2017**, **Kim
-et al. 2017**, **REVERB** and **CHiME**; **Scheibler et al. 2018 (pyroomacoustics)**, the
-simulator used for §7; and **Carlini & Wagner** on audio adversarial examples.
+**The controlled-degradation ASR testbed is an established genre and nothing in the method here
+is novel.** The lineage, before any of my own results and annotated in Appendix I: **WildASR /
+"Back to Basics" (2026)**, the closest neighbour in method and framing; **Speech Robustness
+Bench**; **"When Denoising Hinders" (2026)**, which already publishes the perception/recognition
+mismatch hypothesis; the far-field lineage of **Ko et al. 2017**, **Kim et al. 2017**, **REVERB**
+and **CHiME**; **Scheibler et al. 2018 (pyroomacoustics)**; and **Carlini & Wagner**.
 
 **The delta is modest and specific — a lens, not a method:** the confidence–accuracy gap per
 condition rather than WER per condition; typed fingerprints naming which *class* of reference
 word dies, so each condition implies a fix; an active-learning surrogate, which here returns a
 null (§6.5); and a **commercial streaming model that exposes per-word confidence**, where the
-literature overwhelmingly uses Whisper, Conformer and wav2vec — none of which expose one, so
-the question is unanswerable on them.
+literature overwhelmingly uses Whisper, Conformer and wav2vec — none of which expose one, so the
+question is unanswerable on them.
 
 ---
 
@@ -75,55 +80,47 @@ the question is unanswerable on them.
 | `mic_rolloff` | continuous | 0 – 1 | cheap-microphone frequency response |
 
 **Realism principle: every ingredient is real, only the assembly is controlled** — 16 measured
-RIRs (T20 RT60 **0.193 – 1.011 s**), DEMAND noise, real ffmpeg codec round-trips, with
-composition order physically motivated and therefore a constant, not a knob (A.4, Appendix F).
-**The narrowband codec is G.726, not AMR-NB** — stock ffmpeg ships AMR-NB decode-only — and
-keeping *two* paid off: `g726` produces substitutions, `opus-lowrate` deletions (§6.2).
+RIRs (T20 RT60 **0.193 – 1.011 s**), DEMAND noise, real ffmpeg round-trips, composition order
+physically motivated and therefore a constant (A.4, F). **The narrowband codec is G.726, not
+AMR-NB** — stock ffmpeg ships AMR-NB decode-only — and keeping *two* paid off: `g726` produces
+substitutions, `opus-lowrate` deletions (§6.2).
 
-**The trap functions.** Three functions are correctness-critical in the same way: each
-produces **clean-looking garbage** if subtly wrong — no exception, plausible audio, plausible
-numbers. `mix_at_snr` computes SNR over **active-speech energy**, not whole-file power, which
-the silent pad deflates by a clip-dependent amount, making it a per-clip confound rather than
-a constant (requested vs delivered agreed to **0.01 dB** at the JOIN-1 gate).
-`classify_errors` returns **typed edits** and normalizes both sides identically; apostrophe
-handling alone caused 4 of 11 clean-condition errors, and such offsets land in every cell,
-indistinguishable from a dead zone. And `apply_rir`, the one I got wrong first: it must trim
-the RIR's direct-path delay — else a pure alignment artifact reads as "reverb causes
-deletions" — *and* renormalize over the input's **active region**. My first version used
-whole-file RMS, which the reverb tail inflates by dumping energy into the formerly-silent pad,
-so the renormalizer scaled the signal *down* and `mix_at_snr` delivered a worse SNR than
-requested **by an amount that grew with RT60**. No error, plausible audio, and a WER curve
-that looked like a real reverb effect. A test that reconstructed the mix and asserted
-delivered SNR against the request caught it (**Appendix A**). Three later recurrences of the
-same shape (Appendix B; §6.7; A.5 — one found by audit in this project's *own* analysis code)
-are named rather than quietly fixed, because the shape is the point.
+**The trap functions.** Three are correctness-critical in the same way: each produces
+**clean-looking garbage** if subtly wrong — no exception, plausible audio, plausible numbers.
+`mix_at_snr` computes SNR over **active-speech energy**, not whole-file power (requested vs
+delivered agreed to **0.01 dB** at the JOIN-1 gate); `classify_errors` returns **typed edits**
+and normalizes both sides identically, since such offsets otherwise land in every cell,
+indistinguishable from a dead zone; and `apply_rir` must trim the direct-path delay *and*
+renormalize over the input's **active region** — my first version used whole-file RMS, which the
+reverb tail inflates, de-calibrating every downstream SNR **by an amount that grew with RT60**
+(A). **Four later defects share that shape** (B; §6.7; A.5, found by auditing this project's own
+analysis code; and the §6.1 estimand mismatch, the most consequential). All are named rather than
+quietly fixed, because the shape — a computation that succeeds on meaningless input and emits a
+clean number — is the point.
 
 ---
 
 ## 5. Experimental design
 
 **Corpus.** 40 domain-neutral utterances, one speaker, mono PCM in one sitting at fixed mic
-distance and level, loaded with entity stress cases (H.2). **363 reference words per
-condition**, putting the binomial standard error on a per-condition WER of 0.5 at ~2.6 points.
-Every clean-condition error was adjudicated *by ear*, the reference never edited to match the
-model.
+distance and level, loaded with entity stress cases (H.2). **363 reference words per condition**,
+putting the binomial standard error on a per-condition WER of 0.5 at ~2.6 points; every
+clean-condition error was adjudicated *by ear*.
 
-**The grid.** A 13-call probe reallocated the design before it ran: **SNR alone barely moves
-the model** while **the damage is an interaction** (Appendix G). What ran is a **complete
-4 × 4 × 3 × 3 factorial** over `rt60 × snr_db × codec × mic_rolloff` on babble (144 cells)
-plus a 32-cell engine/road arm — **176 conditions × 40 clips = 7040 rows, 0 failures, 394 s,
-≈ $2.52**, per-condition WER spanning 0.006 – 1.000. That reallocated where we *sample*, not
-what we *predicted* (§6.3). `snr_db` stops at 20 dB because the corpus's inherent SNR is
-~25–28 dB, and nothing downstream was trusted until the JOIN-1 gate passed **9/9** (Appendix
-G).
+**The grid.** A 13-call probe reallocated the design before it ran: **SNR alone barely moves the
+model** while **the damage is an interaction** (G). What ran is a **complete 4 × 4 × 3 × 3
+factorial** over `rt60 × snr_db × codec × mic_rolloff` on babble (144 cells) plus a 32-cell
+engine/road arm — **176 conditions × 40 clips = 7040 rows, 0 failures, 394 s, ≈ $2.52**,
+per-condition WER spanning 0.006 – 1.000. That reallocated where we *sample*, not what we
+*predicted* (§6.3). `snr_db` stops at 20 dB because the corpus's inherent SNR is ~25–28 dB, and
+nothing downstream was trusted until the JOIN-1 gate passed **9/9** (G).
 
 **Sensitivity is computed *exactly*.** A complete factorial with equal cell counts admits a
-finite variance partition, so §6.3's Sobol indices are an **exact functional-ANOVA
-decomposition of the measured grid**, not a Saltelli estimate (`sum(S_u) = 1.000000000000`) —
-strictly stronger than the planned Saltelli-on-a-GP, which would have inherited both the
-surrogate's bias and the sampler's variance. **CIs bootstrap the 40 clips**, not the cells.
-The grid-derived Plackett–Burman screen costs 0 fresh API calls, all four factors survive,
-and `SCREEN_CAVEAT` is quoted verbatim in **D.5** (with D.6 on why aliasing cannot bind here).
+finite variance partition, so §6.3's Sobol indices are an **exact functional-ANOVA decomposition
+of the measured grid**, not a Saltelli estimate (`sum(S_u) = 1.000000000000`) — strictly stronger
+than the planned Saltelli-on-a-GP, which would have inherited the surrogate's bias *and* the
+sampler's variance. **CIs bootstrap the 40 clips**, not the cells; the grid-derived
+Plackett–Burman screen costs 0 fresh API calls and all four factors survive (D.5–D.6).
 
 ---
 
@@ -132,33 +129,45 @@ and `SCREEN_CAVEAT` is quoted verbatim in **D.5** (with D.6 on why aliasing cann
 ### 6.1 D1 — the silent-failure map (headline)
 
 **Reported first because it is the majority behaviour: Nova-3 largely does know when it is
-failing.** Spearman between its within-model confidence percentile and its WER is **−0.957**
+failing.** Spearman between its within-model confidence percentile and its WER is **−0.980**
 across the **169 of 176** conditions that returned any words. The danger is the residual:
-**overconfident in 92 % of them** (155/169; mean gap `mean_conf − (1 − WER)` = **0.256**),
-with **6 of 176 (3.41 %)** meeting the dead-zone criterion. Ranked #1: **rt60 0.7 s, SNR
-20 dB, babble, opus-lowrate, rolloff 1.0 → mean word confidence 0.843 at WER 0.387** (n = 40
-clips, 363 reference words). All six sit **mid-range, not at the harsh end** (D.1) — at the
-harsh corners the model does the safe thing and emits nothing at confidence 0, so silent
-failure lives in exactly the region a deployment considers acceptable. **The danger is not
+**overconfident in 91 % of them** (154/169; mean gap `mean_conf − (1 − WER)` = **+0.147**), with
+**2 of 176 (1.14 %)** meeting the dead-zone criterion. Ranked #1: **rt60 0.45 s, SNR 0 dB,
+engine, g726, rolloff 0 → mean word confidence 0.829 at WER 0.306** (n = 40 clips, 363 reference
+words) — and **0 of those 40 came back empty**, so confidence and WER cover the same clips and
+the claim needs no asterisk. Both dead zones sit **mid-range, not at the harsh end**; the harsh
+corners are the **7 mute zones** below, where the model emits nothing at all. **The danger is not
 that the model is blind but that it is mostly self-aware**, so a system calibrated on average
-behaviour trusts it precisely where it should not.
+behaviour trusts it precisely where it should not — and silent failure lives in exactly the
+region a deployment considers acceptable.
 
-**The strongest argument against this finding, stated unprompted.** `mean_conf` is
-**survivor-biased**: deletions carry no hypothesis word and therefore no confidence, and
-deletions are **22,416 words = 35.1 % of the reference and 69.3 % of ALL errors** — so a
-perfectly calibrated confidence converges on emitted-word accuracy and overstates reference
-recovery by **0.254**, while the **7 of 176 conditions that returned an empty transcript on
-every clip** contribute zero words to any confidence statistic (D.11). The gap metric
-therefore partly measures an artifact of how confidence is defined. That does not rescue the
-deployment: a consumer reading `mean_conf = 0.843` cannot know 35 % of the utterance never
-entered the denominator, so the *operational* hazard is real where the *statistical*
-attribution is contestable — and the fix, an emission-rate signal alongside confidence, no
-vendor exposes (limitation 7).
+**The strongest argument against this finding is the bug it turned up.** `mean_conf` is
+**survivor-biased**, and the *clip*-level case was a live defect in this report: confidence was
+averaged only over clips that produced words, WER over all 40, so the published gap subtracted a
+40-clip WER from a ~30-clip confidence. Right row count, no NaN, no error — a mismatch of
+**estimands**, not of arithmetic, and only asserting the estimands caught it. What sent me
+looking was **listening** to the exemplars and finding them intelligible. It moves the mean gap
+0.256 → **+0.147** and the count 6 → **2**, and forces a taxonomy of three categories needing
+three different mitigations (D.1, D.11b):
+
+- **dead zone (2)** — confidently wrong on the clips it spoke on; the hazard this project was
+  built to find.
+- **silence-driven (4)** — an apparent gap produced entirely by the mismatch. The former #1 went
+  silent on 10 of 40 clips; on the 30 where it spoke it was **81.8 % accurate at 0.843
+  confidence, i.e. well calibrated**, its gap falling **+0.230 → +0.025**. The fix is an
+  emission-rate alarm, not a confidence threshold — and **the pair 0.843 / 0.387 is not a finding
+  and is not quoted as one again**.
+- **mute zone (7)** — no words on *any* clip: the worst conditions measured, and **invisible to a
+  confidence-based monitor**, because absent is not wrong.
+
+The *word*-level survivor bias is not fixable by pairing and remains: confidence converges on
+emitted-word accuracy **0.767** where a reader assumes reference recovery **0.513** — an
+overstatement of **0.254** (D.11, limitation 7).
 
 ### 6.2 D2 — failure fingerprints, and the fix each implies
 
-Across the 63,888 reference words scored: **deletions 0.351**, substitutions 0.136,
-insertions 0.020 — deletion is not one mechanism among several, it is *the* failure mode. The
+Across the 63,888 reference words scored: **deletions 0.351**, substitutions 0.136, insertions
+0.020 — deletion is not one mechanism among several, it is *the* failure mode. The
 deletion/substitution split is the actionable part (D.2): `snr_db` (+0.344), `mic_rolloff`
 (+0.264), `rt60` (+0.212) and `opus-lowrate` produce **deletions** → front-end fixes only;
 `g726` and `road` produce **substitutions** → entity-aware decoding and boosting; `engine`
@@ -166,8 +175,8 @@ deletion/substitution split is the actionable part (D.2): `snr_db` (+0.344), `mi
 
 **Entities degrade faster than words:** destroyed-word rate **0.646 for proper nouns against
 0.361 for digit words**, and **entity error rate 0.633 against WER 0.511** (D.3). Insertions
-under babble are a separate mechanism, **92 % foreign tokens** — competing-speech capture, not
-confusion, so the fix is target-speaker extraction (D.3b).
+under babble are a separate mechanism, **92 % foreign tokens** — competing-speech capture, so the
+fix is target-speaker extraction (D.3b).
 
 ### 6.3 D3a — sensitivity, the pre-registration verdict, and DRR
 
@@ -184,14 +193,15 @@ half-widths):
 First-order terms carry 0.860 of the variance, second-order 0.067; the **ST − S1 gap is the
 primary interaction evidence**, S2 direction only (D.6).
 
+
 **Pre-registration: CONFIRMED.**
 
-> We pre-registered `rt60 × snr_db` as a genuine two-way interaction (SPEC §5, committed
-> **`d8ddd4f`, 2026-07-27**, before any audio existed), under a rule fixed in advance:
-> confirmed **iff** both factors' ST − S1 gaps exceed 0.020 with the 95 % bootstrap CI
-> entirely above it, **and** the pair ranks first in S2. Measured: **0.128 [0.091, 0.164]**
-> for `rt60`, **0.112 [0.072, 0.152]** for `snr_db`, S2(`rt60`, `snr_db`) = **0.034 ± 0.006,
-> rank 1/6** (direction only) — **CONFIRMED**, ~5× clear. Reverb and noise compound.
+> `rt60 × snr_db` was pre-registered as a genuine two-way interaction (SPEC §5, committed
+> **`d8ddd4f`, 2026-07-27**, before any audio existed), under a rule fixed in advance: confirmed
+> **iff** both gaps exceed 0.020 with the 95 % CI entirely above it **and** the pair ranks first
+> in S2. Measured **0.128 [0.091, 0.164]** and **0.112 [0.072, 0.152]**, with
+> S2(`rt60`, `snr_db`) = **0.034 ± 0.006, rank 1/6** — **CONFIRMED**, ~5× clear. Reverb and
+> noise compound.
 
 **The best mechanistic finding: the damage is monotone in DRR, not RT60.** The `rt60` marginal
 is **non-monotonic** — 0.2026 → 0.6359 → 0.4495 → 0.7581, a dip at 0.7 of depth **0.1864
@@ -206,24 +216,31 @@ different real room**, and RT60 says nothing about how much direct sound reaches
 | 1.0 | Shower | 1.011 | **−10.02** | 2.12 | 0.7581 |
 
 `spearman(DRR, WER) = −1.000` against `spearman(RT60, WER) = +0.800`: **reverb benchmarks
-parameterised by RT60 alone will mis-rank conditions.** The conclusion is sharper still —
-**non-monotonicity along `rt60` is not a property of a response surface at all: each request
-indexes an unrelated real room, so whether a dip exists is a property of which RIRs were
-curated, not of reverberation time.** Re-sample the axis and it moves, which is why **0 of 6**
-surrogate-proposed cells reproduced under real oracle calls and why my own explanation for
-that was itself **falsified** (D.7; the six are nowhere presented as measured surprises). A GP
-given `rt60` as a *continuous* coordinate assumes a smoothness the instrument lacks; the
-defensible coordinate is **DRR**.
+parameterised by RT60 alone will mis-rank conditions.** Sharper still — **non-monotonicity along
+`rt60` is not a property of a response surface at all: each request indexes an unrelated real
+room, so whether a dip exists depends on which RIRs were curated.** Re-sample the axis and it
+moves, which is why **0 of 6** surrogate-proposed cells reproduced under real oracle calls and
+why my own explanation for that was itself **falsified** (D.7). A GP given `rt60` as a
+*continuous* coordinate assumes a smoothness the instrument lacks; the defensible coordinate is
+**DRR**.
+
+**A corollary, and the reason listening is not QA.** Two conditions isolating one degradation
+each are **statistically indistinguishable** to the model: **A**, Shower RIR at SNR 20 dB
+(DRR −10.02 dB, drenched but quiet), WER **0.1123**, against **B**, Restaurant RIR at SNR 0 dB
+(DRR +16.90 dB, dry but buried in babble), WER **0.1301** — paired difference **−0.018, 95 % CI
+[−0.065, +0.031]**, spanning zero, with 18 of 40 clips scoring *identically* (D.12). A human does
+not experience them as equivalent; B is much harder to follow. **"It sounds fine to me" is not
+evidence the ASR works.**
 
 ### 6.4 L2 — learned confidence calibration
 
 Grouped by **condition** and never by word — a random word split leaks, and the symptom is a
-*better* ECE — **a feature-conditioned calibrator cuts ECE from 0.0507 raw to 0.0077**,
-against 0.0346 for a global temperature. **Above rt60 = 0.7 reported confidence must be
-discounted by ~0.07** to become a calibrated probability (0.81 reported vs 0.75 observed,
-8144 held-out words), above `mic_rolloff` 0.5 by ~0.06 (D.10). The layer inherits §6.1's blind
-spot: a calibrated confidence can only describe words the model emitted, so this one is fit on
-the 169 conditions that emitted any and is **silent about the worst 7**.
+*better* ECE — **a feature-conditioned calibrator cuts ECE from 0.0507 raw to 0.0077**, against
+0.0346 for a global temperature. **Above rt60 = 0.7 reported confidence must be discounted by
+~0.07** to become a calibrated probability (0.81 reported vs 0.75 observed, 8144 held-out words),
+above `mic_rolloff` 0.5 by ~0.06 (D.10). The layer inherits §6.1's blind spot — a calibrated
+confidence can only describe words the model emitted, so this one is fit on the 169 conditions
+that emitted any and is **silent about the worst 7**.
 
 ### 6.5 D3b — active learning: a NULL, and the null is robust
 
@@ -242,25 +259,45 @@ synthetic structure* with the banner "active sampling reaches target fidelity in
 oracle calls than random."** The same machinery beats random when the boundary is sharp and
 fails here — a reader will assume a bug unless this is said (D.8).
 
+**The null's own obvious fix was tested, and it survives.** §6.3 says RT60 mislabels the
+delivered acoustics while DRR orders them perfectly, so the natural rescue is to re-run the race
+in DRR coordinates. It changes nothing: over 4 splits × 8 seeds, straddle beats random in
+**14/32** paired runs under DRR (median paired difference **+0.000**) against **13/32** and
+**+0.003** under RT60, winning **0 of 4** splits to RT60's 2, with no coordinate stable across
+splits. The RT60 arm **reproduces the published result bit-identically**, which validates the
+harness rather than the harness validating itself. **The negative control is the result:** across
+all 24 permutations of the same four DRR values — spacing fixed, ordering varied — the physically
+correct assignment ranks **18th of 24** (p = **0.75**), and across 44 parameterisations the
+median paired difference is **−0.0001** with 23/44 favouring active, a coin flip. **A random
+relabelling does as well as the right one, and the reason is a ceiling worth stating rather than
+hedging: the reverb axis is four discrete rooms, so any reparameterisation is a relabelling of
+four points and cannot add information the grid never measured.** Meanwhile straddle demonstrably
+*worked* — **58.3 %** of its acquired evaluations landed near the decision contour against
+**21.1 %** for random — and gained nothing. **The null belongs to the surface, not the
+acquisition function** (D.8b).
+
 ### 6.6 L1 — multi-model comparison
 
-**Scope first, because it explains an apparent contradiction.** The Whisper arm ran on the
-10-clip AL subset, so L1 uses the **n = 1757 rows per model** both arms ran — which is why
-nova-3's dead-zone rate reads **1.14 % (2/176)** here but **3.41 % (6/176)** in §6.1. The arms
-also disagree about number *orthography*, not acoustics, an offset indistinguishable from an
-acoustic effect, so **both** were re-scored once through one published normalizer (C).
+**Scope first.** The Whisper arm ran on the 10-clip AL subset, so L1 uses the **n = 1757 rows per
+model** both arms ran — which is why nova-3's dead-zone rate reads **0.57 % (1/176)** here but
+**1.14 % (2/176)** in §6.1. The arms also disagree about number *orthography*, an offset
+indistinguishable from an acoustic effect, so **both** were re-scored through one published
+normalizer (C).
 
 **The finding is not that Whisper is worse — it is that Whisper is worse *at knowing* it is
-worse.** Within-model confidence-vs-WER shape (percentiles only; scales are not comparable
-across families): **nova-3 ρ = −0.929 vs whisper-base ρ = −0.566**, dead-zone rate **1.14 % vs
-39.20 %**, and **the two models do not fail silently in the same places: shared dead zones 0,
-Jaccard 0.000.** With §7's sim2real Jaccard of 0.00 that is two independent senses in which a
-dead-zone map fails to transfer — across RIR provenance and across model family. **You cannot
-borrow someone else's dead-zone map.**
+worse.** Within-model confidence-vs-WER shape (percentiles only; scales are not comparable across
+families): **nova-3 ρ = −0.970 (n = 164) vs whisper-base ρ = −0.590 (n = 171)**, dead-zone rate
+**0.57 % vs 39.20 %**, and **the two models do not fail silently in the same places: shared dead
+zones 0, Jaccard 0.000.** With §7's sim2real Jaccard that is two independent senses in which a
+dead-zone map fails to transfer. **You cannot borrow someone else's.**
 
-**The mechanism differs, not just the magnitude:** whisper-base runs insertions **9.4×**
-nova-3's rate per reference word and is worse in all eight divergence regions (D.9). Nova-3
-goes quiet; **Whisper invents**:
+**The §6.1 correction moves the two arms in opposite directions, which is itself a finding.**
+Pairing each condition to the clips it spoke on *lowers* nova-3's WER (0.433 → **0.307**) and
+demotes one of its two dead zones, but *raises* whisper-base's (0.996 → **1.128**): a silent clip
+scores exactly 1.0, whereas Whisper's *speaking* clips hallucinate past 1.0, so dropping the
+silent clips pushes it further above the threshold, not below it. (The threshold is applied to
+WER directly; this is not accuracy clipping.) One correction, two signs, because the models fail
+in opposite directions — **nova-3 goes quiet, Whisper invents**:
 
 ```
 [u02 @ rt60-1_snr-5_babble_opus-lowrate_roll-1]   3 ref words -> 49 hyp words
@@ -270,55 +307,60 @@ HYP: I'm gonna go here and do a little bit of the work. You call her, you have a
      you have a file, you have a file. You have a file.
 ```
 
-**A WER of 0.996 understates this**: WER caps damage per reference word, whereas an invented
-sentence fed to a downstream agent is unbounded harm — which is why Whisper's WER exceeds 1.0
-in two regions (D.9).
+Whisper-base runs insertions **9.4×** nova-3's rate per reference word and is the worse model in
+**all 17** divergence regions (D.9). **A WER of 0.996 understates this**: WER caps damage per
+reference word, whereas an invented sentence fed to a downstream agent is unbounded harm — which
+is why Whisper's WER exceeds 1.0 in 8 of the 17. At the extreme, in the grid's harshest cell it
+returned a row of **decorative Unicode glyphs — not language at all — at confidence 0.926**
+(n = 1, an illustration of the mode's limit, not a rate; D.9).
 
 ### 6.7 L3 — paralinguistic vs lexical: the monitor alarms *early*
 
-An agent monitoring its own audio health with cheap features is assuming they track lexical
-accuracy. Six single-factor sweeps say they do not. **Two return a DECOUPLED
-verdict and both point the same way:** under increasing reverb **`f0` collapses at
-rt60 ≈ 0.62 while WER only halves at ≈ 0.85**, and under falling SNR **`rms` collapses at
-≈ 4.46 dB while WER halves at ≈ 6.61 dB**. **The paralinguistic stream LEADS, so a
-feature-based monitor would alarm *before* the transcript measurably degrades — the opposite
-of the failure mode this layer was designed to find**; such a monitor is conservative, not
-blind. The other four hit a lexical floor or yield no supportable threshold, **a power
-limitation and not a finding of stability**. The layer also produced **this project's second
-worked example of its signature failure mode** — a degeneracy that let
-`compare_degradation_rates` do real arithmetic on a meaningless curve and report it as a
-finding, now refused rather than invented (E).
+An agent monitoring its own audio health with cheap features assumes they track lexical accuracy.
+Six single-factor sweeps say they do not. **Two return a DECOUPLED verdict and both point the
+same way:** under increasing reverb **`f0` collapses at rt60 ≈ 0.62 while WER only halves at
+≈ 0.85**, and under falling SNR **`rms` collapses at ≈ 4.46 dB while WER halves at ≈ 6.61 dB**.
+**The paralinguistic stream LEADS, so a feature-based monitor would alarm *before* the transcript
+measurably degrades — the opposite of the failure mode this layer was designed to find**;
+conservative, not blind. The other four hit a lexical floor or yield no supportable threshold,
+**a power limitation and not a finding of stability** — and refusing to quote a threshold there
+is another instance of the shape §4 names (E).
 
 ### 6.8 L4 — voice-agent layer: NOT BUILT
 
-**The live voice agent was scoped out and not built.** `deadzone/agent_eval.py` is a
-**synthetic-validated scaffold only** — no live STT → LLM → TTS loop, no turn-taking
-measurement on real audio — and §6.2's entity error rate is computed offline from the master
-table.
+**The live voice agent was scoped out and not built** — no STT → LLM → TTS loop, no turn-taking
+measurement on real audio (limitation 13).
 
 ---
 
 ## 7. The sim-vs-real gap
 
-**n_pairs = 176**, nova-3: the simulated arm re-runs the identical condition list on a common
-clip subset with 16 pyroomacoustics RIRs (failures excluded — real 0/7040, sim 6/1760). Two
-matchings are load-bearing and getting either wrong manufactures a result — **both arms are
-scored on the same 10 clips** (the 40-clip real arm against the 10-clip sim arm reads a
-19.9-point gap, a corpus difference masquerading as a simulation gap) and **pairs are matched
-on the measured Schroeder T20 RT60 of *both* files, never on the Sabine target** (max |Δ|
-**0.017 s**). Both are enforced in code (Appendix F).
+**n_pairs = 176**, nova-3: the simulated arm re-runs the identical condition list with 16
+pyroomacoustics RIRs. Two matchings are load-bearing, and getting either wrong manufactures a
+result — **both arms scored on the same 10 clips** (40-clip real against 10-clip sim reads a
+19.9-point gap, a corpus difference masquerading as a simulation gap) and **pairs matched on the
+measured Schroeder T20 RT60 of *both* files, never the Sabine target**. Both are enforced in code
+and pinned by tests (F).
 
 | aspect | result |
 |---|---|
 | **LEVEL** | sim **underestimates WER by 12.1 points**, 95 % CI [−15.0, −9.6] |
 | **ORDER** | Spearman **ρ = 0.873** (p = 3.2 × 10⁻⁵⁶), Kendall τ = 0.698 |
-| **DEAD ZONES** | real 2, sim 1, both 0 → **Jaccard 0.00, recall 0.00** |
+| **DEAD ZONES** | real 1, sim 0, both 0 → **Jaccard 0.00, recall 0.00** |
+| **MUTE ZONES** | real **12**, sim **4** — the simulation is also much less likely to silence the model |
+
+**LEVEL and ORDER are bit-identical to the pre-correction run** and reported unchanged for that
+reason: neither contains a confidence term, so the §6.1 estimand fix — which only touched *which
+clips confidence is paired with* — cannot move them. Only the dead-zone row moves,
+real 2 / sim 1 → real **1** / sim **0**.
 
 **The sharper finding is the dead-zone recall of zero.** Ranking is the easy part; what this
 project actually delivers — *which specific conditions are silently dangerous* — is what the
-simulation gets wrong, missing both real dead zones and inventing a different one. For a
-synthetic-RIR-only benchmark: trust it to say condition A is worse than B; do not trust it to
-locate your danger zone.
+simulation gets wrong: it **misses the one real dead zone and finds none of its own**. Trust a
+synthetic-RIR-only benchmark to rank, not to locate your danger zone. **Scope:** these dead zones
+are computed *within* the 10 clips both arms ran, a different measurement from §6.1's 40-clip
+table — and the one real dead zone here, `rt60-1_snr-0_road_none_roll-1`, is the same condition
+L1 independently surfaces as nova-3's sole dead zone on that subset (§6.6).
 
 ---
 
@@ -328,62 +370,63 @@ locate your danger zone.
 
 1. **Behavioural factors are bracketed out** — accent, code-switching, disfluency, rate, head
    orientation, and above all **the Lombard effect, which cannot be simulated: in noise people
-   involuntarily change pitch, loudness, spectral tilt and timing, so noise does not merely
-   mask the signal, it changes how the signal is produced.** Every SNR result here describes a
-   talker who does not react to the noise, which no real talker is.
+   involuntarily change pitch, loudness, spectral tilt and timing, so noise does not merely mask
+   the signal, it changes how the signal is produced** — every SNR result here describes a talker
+   who does not react to the noise, which no real talker is.
 2. **One speaker, one accent, 40 utterances** — a limit on external validity, not a caveat.
-3. **References are human-verified but human** — clean floor **WER 1.65 %** (6/363 words),
-   adjudicated by ear, never edited to match the model.
-4. **Elevated capture noise floor** — room tone **−52.9 dBFS** against a −60 dBFS target,
-   constant across takes: an offset, not a confound.
-5. **Commercial model literals move** — Deepgram **`nova-3`**, run **2026-08-05**: a re-run in
-   three months is not the same experiment.
-6. **The `rt60` axis is realized by nearest-match snapping**, so a continuous sweep sees a
-   step function — the other face of §6.3's DRR finding.
-7. **Deletions carry no confidence** — 35.1 % of reference words and 69.3 % of all errors,
-   invisible to every confidence-based analysis here including the headline (§6.1).
+3. **References are human-verified but human** — clean floor **WER 1.65 %**, adjudicated by ear.
+4. **Elevated capture noise floor** — room tone **−52.9 dBFS** against −60 dBFS, constant across
+   takes: an offset, not a confound.
+5. **Commercial model literals move** — Deepgram **`nova-3`**, run **2026-08-05**.
+6. **The `rt60` axis is realized by nearest-match snapping**, so a continuous sweep sees a step
+   function (the other face of §6.3).
+7. **Deletions carry no confidence** — 35.1 % of reference words, 69.3 % of errors, and **31.4 %
+   of clip-rows produced no words at all**, so confidence and WER average over different clip
+   sets unless paired; both pairings are published (§6.1).
 8. **The narrowband codec is G.726, not AMR-NB** (§4) — stated, not silent.
 9. **WER is not the deployment metric** — entity error diverges from it (§6.2) and it
    *understates* a hallucinating model (§6.6).
-10. **Composition order is fixed and order effects are unstudied** (§4, A.4).
-11. **`snr_db` is capped at 20 dB, a measurement not a preference** — a 25 dB request is
-    delivered at ~22.5 dB (§5).
-12. **Vendor confidence is not a calibrated probability by construction** — the premise of
-    §6.4, not a defect; Whisper's is *derived* differently, hence within-model percentiles.
-13. **The live voice agent was not built** (§6.8) — a scaffold, presented as exactly that.
-14. **Cross-model absolute WER is a comparison aid** — three residuals survive by design,
-    pinned by tests, and the L1 arm runs on 10 clips (Appendix C).
-15. **The active-learning null is a surrogate-oracle result** (§6.5), and the ST − S1 gaps
-    carry a small upward finite-clip bias (D.6).
+10. **Composition order is fixed and order effects are unstudied** (A.4).
+11. **`snr_db` is capped at 20 dB, a measurement not a preference** (§5).
+12. **Vendor confidence is not a calibrated probability by construction** — the premise of §6.4;
+    Whisper's is *derived* differently, hence within-model percentiles.
+13. **The live voice agent was not built** — a synthetic-validated scaffold, presented as that.
+14. **Cross-model absolute WER is a comparison aid** — three residuals survive by design, and the
+    L1 arm runs on 10 clips (C).
+15. **The active-learning null is a surrogate-oracle result** (§6.5) — including the DRR re-run,
+    which is bounded by a four-room reverb axis (D.8b) — and the ST − S1 gaps carry a small
+    upward finite-clip bias (D.6).
 16. **The L3 sweeps are n = 5 clips**, and four of six gave no quotable threshold.
 
 ---
 
 ## 9. What I'd do next, and what field data would earn
 
-**First, fix the survivor bias in the headline (limitation 7):** emission rate × calibrated
-per-word confidence, an "expected words recovered" score, robust to the deletion blind spot
-and needing no vendor change. **Second, re-parameterise the reverb axis on DRR or C50 and
-re-run** — §6.3 shows RT60 mislabels the delivered acoustics badly enough to invert the
-ordering, so a DRR-indexed grid would give the surrogate a coordinate it can interpolate and a
-fairer second test of §6.5's null. **Third, the agent layer as designed but not built:**
-replay-mode injection of degraded WAV bytes into a streaming socket, never speaker-to-mic
-playback, scored against the same `task_specs.json` slots.
+**First, finish the survivor-bias fix (limitation 7).** The clip-level half is corrected here by
+pairing; the word-level half and the mute zones are not, and one construction answers both —
+emission rate × calibrated per-word confidence, an "expected words recovered" score that degrades
+toward zero exactly where a confidence monitor goes blind, needing no vendor change. **Second,
+measure more rooms, not a better reverb coordinate.** Re-parameterising the axis on DRR was the
+obvious fix for §6.5's null and it has now been tested and refuted (D.8b) — with only four
+distinct RIRs the axis is four points, so a relabelling cannot help. What would help is a grid
+whose reverb axis is *sampled* rather than snapped: a dozen or more rooms chosen to tile DRR
+evenly, which would also retire limitation 6. **Third, the agent layer as designed but not
+built:** replay-mode injection of degraded WAV bytes into a streaming socket, never
+speaker-to-mic playback, scored against the `task_specs.json` slots.
 
 **And what field data would earn.** Everything in limitation 1, the Lombard effect above all:
-this rig can tell you what a room does to a fixed signal, not what a room does to a *person*.
-The right follow-up is not "replace the sim with field data" but "use the sim to find candidate
-dead zones cheaply, then spend field recordings confirming *only those*" — the active-learning
-argument, one level up.
+this rig tells you what a room does to a fixed signal, not what it does to a *person*. The right
+follow-up is not "replace the sim with field data" but "use the sim to find candidate dead zones
+cheaply, then spend field recordings confirming *only those*" — the active-learning argument, one
+level up.
 
 ---
 
 ## 10. Reproducibility
 
-**The experiment freeze is `results/MANIFEST.json`** and this section defers to it (Appendix
-F). Headline: **10,906 Deepgram calls ≈ 745 minutes of audio ≈ $3.20**, the main grid being
-7040 calls in 394 s. Whisper runs locally at zero cost; every row caches append-only, so an
-interrupted run resumes without re-billing.
+**The experiment freeze is `results/MANIFEST.json`**; this section defers to it (Appendix F).
+Headline: **10,906 Deepgram calls ≈ 745 min of audio ≈ $3.20**, the main grid 7040 calls in
+394 s. Whisper runs locally at zero cost; every row caches append-only.
 
 ```
 ./.venv/bin/python tests/test_pipeline.py            # the three trap functions, offline
@@ -393,23 +436,25 @@ interrupted run resumes without re-billing.
 ./.venv/bin/python scripts/run_experiment.py --clips all --models nova-3
 ./.venv/bin/python scripts/run_experiment.py --clips al --models whisper-base --workers 1
 ./.venv/bin/python scripts/run_experiment.py --clips al --rir-subdir rirs_sim --results results_sim
+./.venv/bin/python scripts/run_al_drr.py             # D.8b, offline and seeded, 0 API calls
 ```
 
 One gap, stated rather than glossed: the working tree was **dirty** when the manifest was
 written, so the recorded SHA identifies the commit the run started from, not an exact tree.
-`requirements.lock.txt` is committed alongside; `grid-v1` tags that SHA.
 
 ---
 
-*What surprised me:* the confidence–WER correlation came back at **−0.957** — far better
+*What surprised me:* the confidence–WER correlation came back at **−0.980** — far better
 self-knowledge than the premise assumed — and the right response was to lead with that rather
-than bury it and sell the 3.4 %.
+than bury it and sell the 1.1 %.
 
-*What I got wrong first:* `apply_rir` renormalized over whole-file RMS instead of the input's
-active-speech region, so the reverb tail quietly de-calibrated every downstream SNR by an
-amount that **grew with RT60** — clean-looking audio, plausible numbers, no error message,
-caught only by a test that reconstructed the mix and checked delivered SNR against the
-request (§4).
+*What I got wrong first:* the headline itself (§6.1). Clean arithmetic, right row count, no NaN,
+no error, and no failing test — because nothing was *computed* wrongly; the two quantities were
+simply not about the same population. Only asserting the estimands caught it, and what sent me
+looking was **listening** to the exemplars and noticing they were intelligible. It cost 4 of 6
+headline conditions: this project's own thesis turned on itself. *Earlier, same shape:*
+`apply_rir` renormalized over whole-file RMS instead of the input's active-speech region,
+de-calibrating every downstream SNR by an amount that **grew with RT60** (§4).
 
 ---
 ---
@@ -542,6 +587,14 @@ the headline ECE: raw −0.0005, temperature −0.0000, feature +0.0001 — **ne
 The defect was real, but the old path *skipped* rather than zipped, so the
 previously reported number was already safe.
 
+*Consequence for every word count in this report:* the number of hypothesis words in a row is
+derived from the **alignment** — the edits that carry a hypothesis token — and never from
+`len(word_confidences)`. The two disagree on **225 of the 8797 rows** that returned
+confidences, because confidences are per raw vendor token while edits are over normalized
+tokens; reading the count off the confidence list would miscount precisely the rows where
+normalization split or merged something, which are also the rows most likely to be entity-
+bearing.
+
 ## Appendix C — Cross-model normalization for the L1 arm
 
 The two arms disagree about **orthography**, not acoustics:
@@ -596,17 +649,34 @@ pins that genuine recognition errors are still counted as errors.
 
 ## Appendix D — Full result tables
 
-**D.1 The six dead-zone conditions** (nova-3, n = 40 clips, 363 reference words
-each; gap = `mean_conf − (1 − WER)`). Source: `results/dead_zones.csv`.
+**D.1 The categorized silent-failure table** (nova-3, n = 40 clips, 363 reference words each).
+`WER sp` is over the clips that emitted words — the population `mean_conf` is averaged over,
+and the only accuracy a confidence may legitimately be thresholded against; `WER all` is over
+all 40. `gap sp` = `mean_conf − (1 − WER sp)`, `gap all` = `mean_conf − (1 − WER all)`, and
+`infl` is the difference the mismatched pairing invented. **The four `silence_driven` rows and
+the top two ranks were produced by that mismatch**; the two `dead_zone` rows survive it. Source:
+`results/dead_zones.csv`, `results/confidence_gap.txt`.
 
-| # | rt60 | SNR | noise | codec | rolloff | mean conf | WER | gap |
-|---|---|---|---|---|---|---|---|---|
-| 1 | 0.7 | 20 | babble | opus-lowrate | 1.0 | 0.843 | 0.387 | 0.230 |
-| 2 | 0.45 | 10 | road | none | 1.0 | 0.822 | 0.377 | 0.199 |
-| 3 | 0.45 | 10 | road | g726 | 0.0 | 0.806 | 0.337 | 0.143 |
-| 4 | 0.2 | 0 | babble | opus-lowrate | 0.5 | 0.807 | 0.336 | 0.143 |
-| 5 | 0.45 | 0 | engine | g726 | 0.0 | 0.829 | 0.306 | 0.136 |
-| 6 | 0.2 | 0 | babble | g726 | 0.5 | 0.811 | 0.314 | 0.125 |
+| category | rt60 | SNR | noise | codec | roll | silent | conf | WER sp | WER all | gap sp | gap all | infl |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| **dead_zone** | 0.45 | 0 | engine | g726 | 0.0 | **0/40** | 0.829 | 0.306 | 0.306 | **+0.136** | +0.136 | 0.000 |
+| **dead_zone** | 0.2 | 0 | babble | opus-lowrate | 0.5 | 1/40 | 0.807 | 0.319 | 0.336 | **+0.126** | +0.143 | 0.017 |
+| silence_driven | 0.7 | 20 | babble | opus-lowrate | 1.0 | **10/40** | 0.843 | 0.182 | 0.387 | +0.025 | +0.230 | **0.204** |
+| silence_driven | 0.45 | 10 | road | none | 1.0 | 6/40 | 0.822 | 0.267 | 0.377 | +0.089 | +0.199 | 0.110 |
+| silence_driven | 0.45 | 10 | road | g726 | 0.0 | 3/40 | 0.806 | 0.283 | 0.337 | +0.090 | +0.143 | 0.054 |
+| silence_driven | 0.2 | 0 | babble | g726 | 0.5 | 2/40 | 0.811 | 0.278 | 0.314 | +0.089 | +0.125 | 0.036 |
+| mute_zone | 0.45 | 0 | babble | none | 1.0 | 40/40 | — | — | 1.000 | — | — | — |
+| mute_zone | 0.45 | 0 | babble | opus-lowrate | 1.0 | 40/40 | — | — | 1.000 | — | — | — |
+| mute_zone | 1.0 | 0 | babble | none | 1.0 | 40/40 | — | — | 1.000 | — | — | — |
+| mute_zone | 1.0 | 0 | babble | opus-lowrate | 0.0 | 40/40 | — | — | 1.000 | — | — | — |
+| mute_zone | 1.0 | 0 | babble | opus-lowrate | 0.5 | 40/40 | — | — | 1.000 | — | — | — |
+| mute_zone | 1.0 | 0 | babble | opus-lowrate | 1.0 | 40/40 | — | — | 1.000 | — | — | — |
+| mute_zone | 1.0 | 5 | babble | opus-lowrate | 1.0 | 40/40 | — | — | 1.000 | — | — | — |
+
+The mute zones have no confidence row at all, which is the point: they are the seven worst
+conditions in the grid and **no confidence-based analysis in this report can see them**. All
+seven are `rt60 ≥ 0.45` × `snr_db ≤ 5` × babble — the harsh corner §6.1 says the dead zones
+avoid, confirming by measurement what the pre-correction text could only assert.
 
 **D.2 Failure fingerprints by factor family**, Δ as a fraction of reference words,
 `d` = Cohen's d. Source: `./.venv/bin/python -m deadzone.analysis.fingerprints`.
@@ -783,19 +853,107 @@ sd of 0.333. **Leakage check:** 106 training vs 70 held-out conditions, 13 near 
 contour, shared factor vectors = 0 → disjoint, verified on the actual factor matrices
 rather than only by construction.
 
-**D.9 L1 divergence regions, full ranking** (`results/model_arms.txt`; whisper-base
-is the worse model in every region):
+**D.8b Does reparameterising the reverb axis rescue the null?** (`results/al_drr.{json,txt}`,
+`scripts/run_al_drr.py` — 44 coordinate systems × 4 splits × 8 seeds × 3 arms, 190,080 surrogate
+calls, **0 API calls**, deterministic and seeded.) §6.3 establishes that WER is monotone in DRR
+and not in RT60, which makes "the GP was given the wrong coordinate" the single most obvious
+explanation for §6.5's null. It is testable, so it was tested.
+
+*Identity check first, since the arms must be racing on the same data:* the test set is
+**identical across every coordinate system** — the same 176 conditions split 106 train / 70
+held out, the same 13 near the contour, train/test disjoint in every case. Only the reverb
+x-coordinate, and hence the refitted GP oracle's geometry, differs.
+
+| coordinate | splits won | paired won | median paired diff | stable? | floor | WER monotone |
+|---|---|---|---|---|---|---|
+| measured RT60 (**published baseline**) | 2/4 | 13/32 | **+0.0029** | FLIPS | 0.185 | no (ρ = +0.800) |
+| measured RT60 (delivered min/max bounds) | 1/4 | 16/32 | +0.0000 | FLIPS | 0.185 | no |
+| **direct-to-reverberant ratio (the hypothesis)** | **0/4** | 14/32 | **+0.0003** | FLIPS | 0.191 | **YES (ρ = −1.000)** |
+| C50 clarity index | 1/4 | 16/32 | −0.0027 | FLIPS | 0.189 | no (ρ = −0.800) |
+
+`diff` = median paired (active − random) final `boundary_rmse` over 4 splits × 8 seeds = 32
+paired runs; **negative would mean active is better**. The published-baseline row reproduces
+`results/al_savings.json` **exactly** — `median_paired_diff = 0.002884173361068651`, 13/32, and
+the identical per-split winner sequence `random, active, active, random`. That is the harness
+being validated by the earlier result rather than the other way round.
+
+**The negative controls are the experiment, not a formality.**
+
+- *Control A — all 24 permutations of the same four DRR values*, spacing held exactly fixed and
+  only which room receives which value varied. The true DRR assignment is one of the 24, so its
+  rank is an exhaustive permutation test of the ordering claim: it ranks **18th of 24**,
+  **17 permutations beat it**, permutation **p = 0.75**, and the spread over permutations is
+  median −0.0003 [−0.0036, +0.0063]. **The physically correct ordering is not distinguishable
+  from a random one.**
+- *Control B — 16 random monotone relabellings* (RT60's ordering preserved, spacing randomised,
+  against the min/max-bounded RT60 baseline), isolating spacing from ordering: **7 of 16 beat
+  the baseline.** Again a coin flip.
+- *Across all 44 parameterisations:* median paired difference **−0.0001**, range **[−0.0053,
+  +0.0106]**, **23/44** favour active, only **1/44** moves the gap by more than 0.010, and
+  **0/44** have a winner stable across the four splits.
+
+**The ceiling, stated plainly.** The master table contains exactly four distinct RIRs, one per
+`rt60` level, so the reverb axis is four discrete rooms. Because the GP normalises each axis by
+its bounds, a coordinate here is fully described by the *order* of the four rooms plus the
+relative spacing of the two interior points — so **any reparameterisation is a relabelling of
+four points on a line**, and DRR cannot add information the grid never measured. That caps what
+this experiment could ever have shown, and it is the reason Control A is decisive: if a random
+relabelling does as well as the physically correct one, the coordinate was never the binding
+constraint.
+
+**Mechanism, so the null is not read as a broken implementation.** Straddle acquisition did its
+job: it placed **58.3 %** of its *acquired* evaluations within ±0.15 of the 0.5 contour under
+DRR against **21.1 %** for uniform random (RT60: 58.3 % vs 30.0 %). High concentration with no
+fidelity gain means the acquisition function worked and the work did not pay — **the boundary
+was not the scarce information on this surface**. This complements, and does not duplicate, the
+planted-structure control in `tests/test_active_learning.py`: that test says the method *works
+when there is a boundary to find*; this says the method *behaved correctly here and still did
+not pay*.
+
+*An anti-mechanism signal, worth one clause.* C50 orders the conditions **worse** than DRR
+(ρ = −0.800 vs −1.000) yet scores nominally **best** (−0.0027) — and it is also the one
+coordinate where straddle failed to concentrate at all (93.3 % against random's 97.8 %, i.e. the
+whole space sits near the contour in C50 units). If the coordinate were what mattered, that
+ordering would not invert.
+
+**One claim deliberately not made.** On the headline split, DRR and C50 look like materially
+better surrogates of held-out WER than RT60 (`boundary_rmse` 0.139 and 0.090 against 0.162).
+Across all four splits that ordering **reverses** — means 0.133 and 0.142 against RT60's 0.111.
+Only ~13 held-out conditions sit near the contour, so a single split's fidelity is a 13-point
+statistic. **No absolute-fidelity improvement from DRR is claimed**, and the one-split version
+of that claim is exactly the kind of number this document argues against quoting.
+
+*A defect found while building this, and why it is not counted among §4's four.* `split_robustness`
+in `deadzone/analysis/al_savings.py` accepted a `space` argument and did not forward it to
+`surrogate_oracle_from_master`, so the oracle would have been fitted in `DEFAULT_FACTOR_SPACE`
+while the arms sampled and were scored in another — a `KeyError` for a renamed axis, and
+*silently wrong* for any custom space whose factor names happen to match. Same family as §4's
+defects (a parameter accepted and silently ignored, failing without an error), but it is not
+added to that count because **nothing published was affected and this is verified rather than
+asserted**: the published run used the default space, making the omission a genuine no-op, and
+the fixed code reproduces `al_savings.json`'s `median_paired_diff` to all 16 significant figures.
+It is recorded because it was inert only by luck of the argument being the default.
+
+**D.9 L1 divergence regions, top 8 of 17 by WER gap** (`results/model_arms.txt`; whisper-base
+is the worse model in **all 17**, and its WER exceeds 1.0 in 8 of them):
 
 | factor | span | WER gap | nova-3 | whisper | dead-zone rate |
 |---|---|---|---|---|---|
 | `snr_db` | 10–15 dB | 0.638 | 0.315 | 0.953 | 0.0 % / 38.5 % |
 | `noise_type` | engine | 0.627 | 0.335 | 0.962 | 0.0 % / 37.5 % |
 | `snr_db` | 15–20 dB | 0.624 | 0.150 | 0.774 | 0.0 % / 58.3 % |
-| `rt60` | 0.6–0.8 | 0.610 | 0.372 | 0.981 | 2.8 % / 47.2 % |
+| `rt60` | 0.6–0.8 | 0.610 | 0.372 | 0.981 | **0.0 %** / 47.2 % |
 | `codec` | g726 | 0.593 | 0.468 | **1.060** | 0.0 % / 28.1 % |
 | `rt60` | 0.4–0.6 | 0.585 | 0.481 | **1.066** | 0.0 % / 21.2 % |
 | `rt60` | 0.2–0.4 | 0.581 | 0.157 | 0.738 | 0.0 % / 72.2 % |
 | `mic_rolloff` | 0.0–0.25 | 0.576 | 0.336 | 0.912 | 0.0 % / 50.0 % |
+
+*The two columns use deliberately different pairings.* `WER gap` and the per-model WERs are
+**all-clips** — they measure corpus severity, contain no confidence term, and restricting them
+to the spoke subset would discount each arm's worst clips. `dead-zone rate` is the
+**same-subset** rate, flagged on `wer_spoke`. The §6.1 correction touches only the second: the
+one cell that moves is `rt60 0.6–0.8`, where nova-3 goes **2.8 % → 0.0 %** (its single flagged
+condition there was silence-driven). Every other cell is unchanged in both columns.
 
 **Hallucination metrics** (whisper-base): median hyp/ref length ratio 1.00, **p95
 2.75**, **9.9 %** of rows exceed twice the reference length, mean foreign-token fraction
@@ -821,6 +979,34 @@ REF: call maria at
 HYP: The car is going to be in the air for a minute. The car is going to be in the
      air at 4.05. The car is going to be in the air for a minute.
 ```
+
+**D.9b The limit case: 0.926 confidence in text that is not language.** Across all 8800 rows,
+exactly **5** carry a populated `mean_conf` while aligning to **zero scorable words**
+(`n_ref − n_del + n_ins ≤ 0`). All five are whisper-base. Four are unremarkable — an empty
+transcript or a lone `.` at confidence **0.003 – 0.015**, i.e. the model knows it has nothing.
+The fifth is not:
+
+```
+[u11 @ rt60-1_snr-0_babble_opus-lowrate_roll-1]   10 ref words -> 0 scorable words
+       (the grid's harshest cell: Shower RIR, SNR 0 dB, babble, opus-lowrate, full rolloff)
+HYP:   ◑‿‿‿‿‿‿‿‿‿‿‿‿‿‿‿‿‿‿ ‿‿‿‿‿‿‿‿‿‿‿‿‿‿‿‿‿‿‿‿‿‿‿‿‿‿‿‿‿‿‿‿‿‿‿‿‿‿‿‿‿‿ … ※‿‿‿‿‿‿‿‿‿
+mean_conf: 0.926
+```
+
+The glyphs normalize away to nothing, so the row scores as a total deletion. **This is n = 1 and
+an illustration of the failure mode's extreme, not a rate**, but it makes a point the 49-word
+example cannot: that transcript is fluent English, so a downstream consumer might plausibly act
+on it, whereas this one is not language at all *and the confidence is still 0.926*. The failure
+is not "the model wrote something wrong" but **"the confidence signal is uninformative about
+whether the output is even text."** It also sharpens §6.6's contrast — under the same class of
+stress nova-3 goes **silent** (its mute zones) while Whisper **invents**, and a mute zone at
+least announces itself by being empty.
+
+**This is not a defect in the analysis.** `is_silent_row` (`deadzone/analysis/__init__.py`) keys
+on the alignment — `n_hyp_words(row) <= 0` — and **never** on whether `mean_conf` is present, so
+these rows are already classified as silent everywhere in this report and contribute no
+confidence to any statistic. The row is a curiosity about the *vendor's* confidence, not a hole
+in the instrument.
 
 **D.10 L2 calibration, full numbers** (`results/calibration.{json,txt}`). 7040 rows,
 42,732 hypothesis words, grouped by **condition** (169 groups), 5 seeds. ECE median
@@ -858,6 +1044,60 @@ absent from every confidence statistic in this report: the D1 correlation is com
 the worst 7**. Nothing in the confidence-based layers can see the conditions where the model
 fails hardest, which is why §9's first proposal is a joint emission-rate × confidence
 statistic rather than a better calibrator.
+
+**D.11b The clip-level instance, and what correcting it reordered.** The same blindness bites
+one level up, and there it was a live defect rather than an acknowledged limitation. Emptiness
+is not rare in this grid: **2210 of 7040 clip-rows (31.4 %) came back with no words at all**,
+spread over **123 of 176 conditions** (116 partially silent, 7 fully mute). A per-condition
+`mean_conf` is therefore an average over `n_spoke` clips while the per-condition `wer` beside
+it is an average over all 40, and
+
+```
+gap = mean_conf - (1 - wer)          # mean_conf over n_spoke, wer over n_clips
+```
+
+silently differences two populations. It cannot fail loudly: both operands are finite, the row
+count is right, and every condition still yields one number. The corrected form pairs them —
+`wer_spoke` over exactly the clips `mean_conf` was averaged over — and the table publishes
+both, plus the difference:
+
+| statistic | mismatched pairing | paired | shift |
+|---|---|---|---|
+| mean gap over 169 conditions | 0.256 | **0.147** | inflation mean **+0.109**, max **+0.524** |
+| spearman(conf percentile, WER) | −0.952 | **−0.980** | the paired pairing is *tighter* |
+| conditions flagged as dead zones | 6 | **2** | 4 reclassified `silence_driven` |
+
+Two details worth naming. First, the **ranking** changed, not just the level: the old #1
+(gap +0.230) falls to +0.025 and out of the set entirely, while the old #5 becomes #1 — so
+quoting the old top row was quoting the condition the artifact had inflated *most*. Second,
+the previously reported ρ = −0.957 was computed over all 176 conditions while the text reported
+n = 169: the 7 mute conditions enter with WER 1.0 at confidence percentile 0, seven fabricated
+points sitting exactly at the ideal corner of a negative correlation. Excluding them and
+pairing correctly gives **−0.980 (n = 169)**, with the all-clips pairing at **−0.952 (n = 169)**
+published beside it.
+
+**D.12 Two conditions the model cannot tell apart** (§6.3's corollary). Each isolates one
+degradation, at opposite extremes of the two dominant factors; audio and the paired arithmetic
+are in `results/audio/demo/manifest.json`.
+
+| | RIR (room) | measured RT60 | DRR | SNR | mean WER over 40 clips |
+|---|---|---|---|---|---|
+| **A** | MIT *Shower* | 1.011 s | **−10.02 dB** | 20 dB (quiet) | **0.1123** |
+| **B** | MIT *Restaurant* | 0.193 s | **+16.90 dB** | 0 dB (babble) | **0.1301** |
+
+Paired over the same 40 clips: `A − B` = **−0.0178**, 95 % CI **[−0.0654, +0.0310]** (10,000
+clip bootstrap, seed 0) — spanning zero. **18 of the 40 clips score identically**, including
+four at non-zero WER: u40 0.333/0.333, u26 0.250/0.250, u21 0.222/0.222, u10 0.125/0.125.
+
+A 27 dB swing in direct-to-reverberant ratio and a 20 dB swing in SNR therefore land in the
+same place for this model, which is the practical face of §6.3: the two mechanisms are not
+commensurable to a human listener but are interchangeable to the recognizer. **The human half
+of that contrast is an intuition pump, not data** — n = 1, unblinded, my own ears. The
+mechanisms it would appeal to are standard (informational masking from competing speech makes
+B hard for a listener; the precedence effect and lifelong room adaptation make A easy), but
+nothing here measures them, and a listening study is not part of this project. The *measured*
+claim is only the model-side equivalence and its CI — which is enough for the operational
+point: your ear does not rank these conditions the way your ASR does.
 
 ## Appendix E — L3 sweep detail and the degeneracy guard
 
@@ -929,17 +1169,21 @@ clips, 4 per type, 300 s each, two environments per type; SHA-256 per file in
 | `results/MANIFEST.json` | the experiment freeze (§10); generated 2026-08-05T17:24:08Z at git `a6ece0c` |
 | `results/master.csv` | 176 conditions × 40 clips × nova-3 = 7040 rows, 0 failures; plus the 10-clip whisper-base arm |
 | `results/clean_baseline.csv` | 40 raw clips, WER 1.65 % |
-| `results/dead_zones.csv` | the 6 dead-zone conditions, ranked by gap (§6.1, D.1) |
+| `results/dead_zones.csv` | **87 rows across both models**, `category` in column one (`dead_zone` / `silence_driven` / `mute_zone`), carrying both pairings per condition — `mean_conf`, `wer_spoke`, `wer_all_clips`, `gap_spoke`, `gap_all_clips`, `gap_inflation`, `n_silent` (§6.1, D.1) |
+| `results/confidence_gap.txt` | the D1 report per model: silence accounting, the three categories, where confidence *does* track WER, and the headline sentence with its pairing stated (§6.1) |
 | `results/sensitivity_report.txt`, `results/sobol.json` | exact functional-ANOVA decomposition + clip bootstrap (§6.3, D.5–D.6) |
 | `results/interaction_report.txt`, `results/interactions.json` | in-grid dips, the DRR mechanism, the reconciliation, the pre-registration verdict (§6.3, D.7) |
 | `results/calibration.{json,txt}` | L2 ECE, temperature and feature calibrators, deletion-blindness audit (§6.4) |
 | `results/al_savings.{json,txt}`, `al_curve.json`, `al_trajectory.json` | the active-learning null, full target curve, leakage check, fidelity floor (§6.5, D.8) |
+| `results/al_drr.{json,txt}` | the DRR re-run that tests the null's own obvious fix: 44 coordinate systems, the 24-permutation control, the acquisition-concentration check, 0 API calls (§6.5, D.8b) |
 | `results/model_arms.{json,txt}` | L1 normalization audit, per-model dead zones, divergence regions, hallucination examples (§6.6, D.9) |
 | `results/sim2real.{json,txt}` | the paired measured-vs-simulated arm (§7); n_pairs 176 on the 10 clips common to both arms (`"clips_matched": false`, `"n_clips": 10` recorded explicitly), 5280 real rows dropped by the restriction and 0 sim, failures excluded (real 0/7040, sim 6/1760). The clip restriction is **enforced in code and pinned by a test** whose planted structure makes the unmatched arithmetic flip the *sign* of the gap (matched +0.10 vs unmatched −0.0714) |
 | `results/l3_decoupling.{json,txt}` | the six paralinguistic sweeps and the degeneracy guard (§6.7, Appendix E) |
 | `results/smoke_join1.csv` | JOIN-1 gate rows (3 clips × gates A/B/C) |
+| `results/audio/demo/` | the paired reverb-vs-babble clips behind §6.3's corollary, plus `manifest.json` with both conditions' DRR/C50 and the paired bootstrap (D.12) |
 | `results_sim/master_sim.csv` | the simulated-RIR arm, in a **separate** cache dir — the cache key is `(clip_id, condition_name, model)` and does not encode which RIR library produced the row, so a shared cache would report a sim2real gap of exactly zero |
 | `report/measurements.md` | capture-chain measurements recorded at record time |
+| `requirements.lock.txt` | pinned environment, committed alongside the manifest; `grid-v1` tags the SHA §10 names |
 
 ## Appendix G — Grid construction and the JOIN-1 gate
 
