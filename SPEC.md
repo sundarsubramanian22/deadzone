@@ -319,6 +319,72 @@ bottlenecks.
 
 ## 13. Suggested repo layout
 
+> **⚠️ SUPERSEDED 2026-08-05 — the repo was reorganized into a conventional
+> Python layout.** The flat original is kept below the fold for archaeology. The
+> structure that follows is the one on disk; CLAUDE.md's "match the layout in
+> SPEC §13" now means *this* one.
+
+**The split is by ROLE, and one boundary is load-bearing:** everything under
+`deadzone/` is importable library code that is **free to re-run**; everything
+under `scripts/` **spends money or writes artifacts**. That is why `run_d3a.py`
+and `run_experiment.py` live in `scripts/` and never under `analysis/` — the
+budget ceiling (`--max-calls`) is a checked invariant, not a comment, and an
+API-spending path must not hide behind a module whose contract is that it is
+cheap to call in a loop.
+
+```
+deadzone/                    # repo root
+  CLAUDE.md  SPEC.md  README.md  Makefile
+  requirements.txt  requirements.lock.txt
+  recording_manifest.csv     # 40 utterances + normalized ground truth
+  task_specs.json            # entity slots per clip (D2 + agent layer)
+
+  deadzone/                  # the importable package — FREE to re-run
+    audio_pipeline.py        # the 3 trap functions + the model adapters
+    conditions.py            # Condition, DiskAssetLibrary, apply_condition
+    design.py                # factor space, PB screen, Sobol, counterintuitive cells
+    active_learning.py       # GP surrogate + straddle acquisition
+    calibration.py           # L2: temperature + feature-conditioned calibrators
+    model_compare.py         # L1 primitives (within-model percentiles, dead zones)
+    paralinguistic.py        # L3: feature extraction + drift
+    agent_eval.py            # L4 scaffold (synthetic-validated; R7 out of scope)
+    cross_model_norm.py      # cross-model orthography, L1 ONLY — never the trap fn
+    analysis/                # all read the SAME master table; all free to re-run
+      confidence_gap.py      #   D1 headline — the silent-failure map
+      fingerprints.py        #   D2 mechanism — typed edit signatures
+      sensitivity.py         #   exact functional-ANOVA Sobol + clip bootstrap
+      interactions.py        #   D3a pre-registration verdict + dips
+      sim2real.py            #   D4 — clip-matched, see Appendix C.8
+      al_savings.py          #   D3b active-vs-random curves
+      model_arms.py          #   L1 cross-model comparison
+      calibration_report.py  #   L2 reporting
+      decoupling.py          #   L3 reporting
+      layers.py
+
+  scripts/                   # entry points that SPEND MONEY or write artifacts
+    run_experiment.py        #   ⋈2: the grid → master.{parquet,csv} + cache.jsonl
+    run_d3a.py               #   D3a: two-stage counterintuitive hunt (--max-calls)
+    probe_elevenlabs.py      #   the SPEC §12 day-one gate for a new vendor arm
+    make_manifest.py  make_sim_rirs.py  make_audio_sets.py
+    check_recordings.py  fetch_assets.py
+    smoke_deepgram.py  smoke_codec.py  smoke_join1.py
+
+  demos/                     # offline, no API key, no network
+    demo_break.py  demo_al.py
+  tests/                     # 21 suites, all offline; conftest.py bootstraps sys.path
+  dashboard/                 # E2 — build.py → self-contained deadzone.html
+  report/                    # E1 write-up
+  data/                      # gitignored: recordings/ rirs/ rirs_sim/ noise/
+  results/                   # gitignored: master table, artifacts, figures
+  results_sim/               # gitignored: the sim-RIR arm's SEPARATE cache (B.2 §7)
+```
+
+Invocation follows the layout: `./.venv/bin/python -m deadzone.analysis.<mod>`
+for analysis, `./.venv/bin/python scripts/<x>.py` for runners, and every path in
+the code resolves **relative to the repo root as CWD**.
+
+<details><summary>original flat layout (pre-2026-08-05, for archaeology)</summary>
+
 ```
 deadzone/
   CLAUDE.md              # persistent agent context (points here)
@@ -338,6 +404,7 @@ deadzone/
   results/              # gitignored: master table + figures
   report/               # E1 write-up
 ```
+</details>
 
 ---
 
@@ -1522,126 +1589,1097 @@ independent of each other — do them in any order, or in parallel.
 
 ---
 
-# Appendix B: Progress Log — state as of 2026-08-05
+# Appendix B: Progress Log — state as of 2026-08-05 (evening)
 
-> Written at a clean pause point. Read this FIRST when resuming; it supersedes the
-> checkbox states in Appendix A where the two disagree.
+> Written at a hard pause. **Read this FIRST when resuming**; it supersedes the
+> checkbox states in Appendix A wherever the two disagree. Everything below is
+> read off the actual artifacts in `results/`, not from memory.
+>
+> **Working tree is uncommitted and several files are mid-edit.** See B.7 before
+> you commit anything.
 
 ## B.1 Phase status
 
 | Phase | State | Evidence |
 |---|---|---|
-| **R0** environment | ✅ done | 17 suites green |
-| **R1** corpus | ✅ **done** | `check_recordings.py` → 40/40 OK; clean-condition WER **1.65 %** (6 errors / 363 ref words), 35/40 clips exact, every non-zero row adjudicated by ear |
-| **R2** assets | ✅ **done** | 16 curated RIRs (measured-RT60 gap **0.063 s** at curation, **0.108 s** as the library loads them), 12 noise clips (4/type, 300 s each), G.726 codec verified |
-| **R3** JOIN-1 gate | ✅ **PASSED** | 9/9 gates on u02/u17/u36; SNR calibration **exact to 0.01 dB** on real audio |
-| **R4** grid | ✅ **done** | 176 conditions × 40 clips × nova-3 = **7040 rows, 0 failures**, 394 s, ~$2.52 |
-| **R5** findings | 🟡 **partial** | D1 ✅ real · D2 ✅ real · L2 ✅ real · D3 ✅ built, not run on real Sobol · D4 ⛔ blocked · L1 ⛔ blocked · L3 ⛔ not run |
-| **R6** dashboard | ✅ **done** | 6 panels + model toggle, 267 KB self-contained, builds from the real grid, 22 tests |
-| **R7** live agent | ⬜ not started | scoped out of this push deliberately |
-| **R8** write-up | ⬜ not started | `report/measurements.md` holds the raw material |
-| **R9** demo kit | ⬜ not started | dashboard + `DEMO.md` exist; `demo_break.py` not built |
+| **R0** environment | ✅ done | all suites green |
+| **R1** corpus | ✅ done | `check_recordings.py` → 40/40 OK; clean-condition WER **1.65 %** (6 errors / 363 ref words), 35/40 clips exact, every non-zero row adjudicated by ear |
+| **R2** assets | ✅ done | 16 curated RIRs, 12 noise clips (4/type, 300 s), G.726 codec verified |
+| **R3** JOIN-1 gate | ✅ PASSED | 9/9 gates on u02/u17/u36; SNR calibration exact to 0.01 dB on real audio |
+| **R4** grid | ✅ done | 176 conditions × 40 clips × nova-3 = **7040 rows, 0 failures**, + the 1760-row whisper arm = **8800 rows, 3 failures (0.03 %)**, well under the 2 % gate; `results/master.parquet` now written too (pyarrow installed — it was silently falling back to CSV only) |
+| **R4.3/4.5** screen + sensitivity | ✅ **done, and better than planned** | exact functional-ANOVA decomposition of the real factorial — see B.3 |
+| **R4.7 / R5.5** active learning | ✅ done — **a null, and it is robust** | see B.4 |
+| **R5.1** D1 headline | ✅ real | ρ = −0.957, 92 % overconfident, 6/176 dead zones |
+| **R5.3** D2 fingerprints | ✅ real | deletions dominate; entity error 0.633 vs WER 0.511 |
+| **R5.4** D3a interactions | ✅ real — **pre-registration CONFIRMED**, report reconciled | see B.3 |
+| **R5.6** D4 sim2real | ✅ real | sim underestimates WER by 12.1 pts; Spearman 0.873; **dead-zone Jaccard 0.00** |
+| **R5.7** L1 multi-model | ✅ **UNBLOCKED AND DONE** | whisper arm 1760/1760; `results/model_arms.{json,txt}` written — see B.9 |
+| **R5.8** L2 calibration | ✅ **re-run and final** | see B.4 |
+| **R5.9** L3 decoupling | ✅ **real, two quotable verdicts** | see B.4 |
+| **R6** dashboard | ✅ **done** — all 8 panels `ok`, rebuilt on the full table | see B.6 |
+| **R7** live agent | ⬜ **deliberately out of scope** | user-scoped out; `agent_eval.py` remains a synthetic-validated scaffold |
+| **R8** write-up | 🟡 **compressed version being written** | see B.5 |
+| **R9** demo kit | ✅ **done** — every `make` target passes offline, 21/21 suites green | see B.6 |
+| **audit** sensitivity | ✅ **independently re-derived** | every headline Sobol number reproduced to 1e-16 without importing the module — see B.10 |
 
-## B.2 Decisions made (these are settled — do not relitigate)
+---
 
-1. **Narrowband codec is G.726, not AMR-NB** (R2.4). Stock ffmpeg is AMR
-   decode-only. Must be stated in the methods section.
+## B.2 Decisions made (settled — do not relitigate)
+
+Carried forward from the previous log and still binding:
+
+1. **Narrowband codec is G.726, not AMR-NB.** Stock ffmpeg is AMR decode-only.
+   Must be named in the methods section.
 2. **RIR source is the MIT Acoustical Reverberation Survey**, curated to 16 IRs by
-   greedy RT60 tiling, not bulk-extracted. BUT ReverbDB remains a documented
-   upgrade path if stronger provenance is wanted.
-3. **Noise is DEMAND**, two environments per `noise_type`, so a categorical level
-   means "this kind of place" rather than "this one recording".
-4. **The grid that runs is `interaction_grid()`, not `main_grid()`** — see B.3.
+   greedy RT60 tiling. BUT ReverbDB remains a documented upgrade path.
+3. **Noise is DEMAND**, two environments per `noise_type`.
+4. **The grid that runs is `interaction_grid()`, not `main_grid()`.**
 5. **Sim/real pairing is on measured Schroeder RT60**, never the Sabine target.
-6. **`normalize_text` deletes apostrophes and collapses a small orthographic
-   compound map**, applied symmetrically to reference and hypothesis.
+6. **`normalize_text` deletes apostrophes and collapses a small compound map**,
+   applied symmetrically to reference and hypothesis.
 7. **The sim arm uses a separate `results_sim/` cache.** The cache key is
    `(clip_id, condition_name, model)` and does **not** encode which RIR library
-   produced the row, so a shared cache would be 100 % false hits and would report a
-   sim2real gap of exactly zero. This is a live footgun; keep the dirs separate.
+   produced the row, so a shared cache would be 100 % false hits and would report
+   a sim2real gap of exactly zero. Keep the directories separate. The dashboard
+   now re-joins the two tables at build time via `--sim-master` and re-splits on
+   `rir_key`, which is the field that actually records provenance.
 
-## B.3 The grid rebalance (supersedes R4.1's allocation)
+New this session:
 
-A 13-call pre-grid probe on one clip changed the design:
+8. **Cross-model WER gets its own normalization module, and the trap function is
+   left alone.** `cross_model_norm.py` applies the Whisper authors' published
+   `EnglishTextNormalizer` plus symmetric digit-run splitting, to **both** arms,
+   used **only** for L1. Rationale: Whisper writes numbers as digits and has no
+   formatting switch, while the Deepgram adapter disables
+   `smart_format`/`punctuate`/`numerals`, so its output is already word-form. The
+   offset that creates is 0.20–0.60 depending on entity density and is
+   condition-independent — mathematically indistinguishable from an acoustic
+   effect once it is in the table. Adding digit mapping to `normalize_text` was
+   rejected because the corpus itself uses contradictory conventions
+   (`u02` "four zero five" → 405, but `u05` "fourteen hundred" → 1400 and
+   `u11` "eighty eight" → 88): no single rule is correct, and guessing inside a
+   trap function is the exact failure this project is about.
+   Three residuals are **pinned by tests rather than patched**: letter runs in
+   spelled codes (`AW` vs `a w`); the normalizer's asymmetry about leading zeros
+   (`Q9J05` costs one spurious deletion); and the transform is deliberately **not
+   idempotent** (`EnglishTextNormalizer` rewrites a standalone `1` as `one`, and
+   digit-splitting manufactures standalone digits) so it must be applied exactly
+   once, to raw text.
+9. **Sensitivity is computed by exact functional ANOVA, not Saltelli sampling.**
+   See B.3 — this supersedes R4.5's plan.
+10. **`make_manifest.py` freezes the experiment** into `results/MANIFEST.json`
+    (git SHA, model literals, ffmpeg build, codec rationale, asset SHA-256s,
+    realized totals). The write-up quotes it rather than restating it.
 
-- **SNR alone barely moves the model.** At rt60 0.5 / no codec / rolloff 0.3, WER
-  stayed ~0.00 from **0 dB to 25 dB**. Even 0 dB babble transcribed perfectly.
-- **The damage is an interaction.** At rt60 1.0 + g726 + rolloff 1.0, WER ran
-  0.18–0.46 at *every* SNR, confidence still 0.59–0.92, and **non-monotonic in
-  SNR** (0.455 at 25 dB vs 0.273 at 5 dB).
+---
 
-`main_grid()` put 42/60 cells at `codec="none"` and 2 in the harsh-channel region —
-~70 % of the budget on a flat surface. `interaction_grid()` crosses reverb × SNR ×
-codec × rolloff fully (144) plus a noise-character arm (32) = **176 conditions, 36
-harsh-channel cells**. SNR tops out at **20 dB** because the corpus's measured
-inherent SNR is ~25–28 dB, so a 25 dB request under-delivers by ~2.5 dB.
+## B.3 The methodological upgrade: the grid is a complete factorial
 
-**This does not touch the §5 pre-registration.** `rt60 × snr_db` stands exactly as
-written. Reallocating where we *sample* is not changing what we *predicted*, and
-the probe is reported alongside the verdict either way.
+The single most consequential discovery this session. `interaction_grid()`'s
+babble core turns out to be a **complete 4×4×3×3 factorial** —
+`rt60` {0.2, 0.45, 0.7, 1.0} × `snr_db` {0, 5, 10, 20} × `codec` {none, g726,
+opus-lowrate} × `mic_rolloff` {0.0, 0.5, 1.0}, 40 clips in every cell, 144 cells,
+5760 real transcriptions — plus a 32-cell engine/road arm.
 
-## B.4 Real findings so far
+A complete factorial with equal cell counts admits an **exact** variance
+decomposition. Main effects, every two-way interaction and the higher-order
+remainder form a finite partition of the measured response. So:
 
-**D1 — the headline is more nuanced than the premise assumed.**
-Global spearman(confidence, WER) = **−0.957**: nova-3 largely *does* know when it
-is failing. But it is **overconfident in 92 % of conditions** (mean gap 0.256) and
+- **Sobol indices are computed exactly, not estimated.** `analysis/sensitivity.py`
+  decomposes the measured grid directly. Verified partition:
+  `sum(S_u) = 1.000000000000`, max abs error 0.00e+00. No surrogate, no
+  Monte-Carlo sampling error. This is strictly stronger than running Saltelli
+  against a GP fitted to the same grid, which is what R4.5 originally planned.
+- **CIs come from bootstrapping the 40 CLIPS**, 2000 replicates — clips are the
+  right resampling unit because cells within a clip are correlated.
+- **The Plackett–Burman screen is derived from the grid**, saving 320 fresh API
+  calls. `SCREEN_CAVEAT` (Resolution-III aliasing) is quoted verbatim in the
+  write-up **with a note that it does not bind here**, because a complete
+  factorial has no aliasing.
+
+**Results** (`results/sobol.json`, `results/sensitivity_report.txt`, total
+variance of condition-mean WER 0.1266):
+
+| factor | S1 | ST | ST−S1 | 95 % CI | sig |
+|---|---|---|---|---|---|
+| `rt60` | 0.347 ± 0.024 | 0.474 ± 0.027 | **0.128** | [0.091, 0.164] | YES |
+| `snr_db` | 0.391 ± 0.030 | 0.503 ± 0.027 | **0.112** | [0.072, 0.152] | YES |
+| `mic_rolloff` | 0.099 ± 0.013 | 0.183 ± 0.020 | 0.084 | [0.060, 0.107] | YES |
+| `codec` | 0.023 ± 0.003 | 0.065 ± 0.009 | 0.042 | [0.032, 0.052] | YES |
+
+S2 ranking (**direction only, never magnitude**, per SPEC §5):
+`rt60×snr_db` 0.034 ± 0.006 (rank 1/6) > `rt60×mic_rolloff` 0.019 > the rest.
+
+### The pre-registration: **CONFIRMED**
+
+> We pre-registered `rt60 × snr_db` as a genuine two-way interaction (SPEC §5,
+> Track-C design notes, committed `d8ddd4f`, 2026-07-27). On the real grid
+> (N = 144, 5760 model evaluations) the ST−S1 gap is **0.128 [0.091, 0.164]** for
+> `rt60` and **0.112 [0.072, 0.152]** for `snr_db`, and S2(`rt60`, `snr_db`) =
+> 0.034 ± 0.006 (rank 1/6, direction only) — **CONFIRMED**. Reverb and noise
+> compound.
+
+Decision rule was fixed in advance: confirmed iff both registered factors' ST−S1
+gaps exceed 0.020 with the 95 % bootstrap CI entirely above it, **and** the
+registered pair ranks first in S2 (direction check only).
+
+### The best mechanistic finding in the project: DRR, not RT60
+
+The `rt60` axis is **non-monotonic** — marginal WER runs 0.2026 → 0.6359 → 0.4495
+→ 0.7581 across the four levels, a significant dip at 0.7 (depth 0.1864
+[0.1574, 0.2142], 36 cells × 40 clips; 33 cellwise dips have CIs entirely above
+zero, the deepest 0.5765 [0.4683, 0.6707]).
+
+The mechanism: each `rt60` level is delivered by the **nearest measured RIR**,
+i.e. a *different real room*. RT60 describes a decay slope and says nothing about
+how much direct sound reaches the mic.
+
+| requested | room | RT60 | DRR dB | C50 dB | WER |
+|---|---|---|---|---|---|
+| 0.2 | Restaurant | 0.193 | 16.90 | 28.10 | 0.2026 |
+| 0.45 | Bar | 0.474 | −2.05 | 10.22 | 0.6359 |
+| 0.7 | Campground Dining | 0.680 | 4.26 | 10.03 | 0.4495 |
+| 1.0 | Shower | 1.011 | −10.02 | 2.12 | 0.7581 |
+
+`spearman(DRR, WER) = −1.000` (pearson −0.995) against `spearman(RT60, WER) =
++0.800`. **The damage is monotone in direct-to-reverberant ratio, which RT60 does
+not capture.** Reverb benchmarks parameterised by RT60 alone will mis-rank
+conditions for exactly this reason. This is a genuinely quotable result and it
+should be prominent in the write-up.
+
+### ✅ RESOLVED — the in-grid dip vs the six unreproduced proposals
+
+`results/interaction_report.txt` reported **both** a significant in-grid rt60 dip
+**and** `0/6 proposals reproduced`, which read as a contradiction. It now carries a
+`RECONCILIATION` section, and the resolution is more interesting than the
+contradiction.
+
+**My working hypothesis was that the probe's three requests (0.6 / 0.7 / 0.8) all
+snapped to the same RIR, so the probe had nothing to dip. That hypothesis was
+tested and is FALSE** — it resolved to three *distinct* files. The real
+explanation: the two scans examined **different, almost non-overlapping room
+triplets**, sharing only one room.
+
+| scan | requests → rooms | DRR dB | outcome |
+|---|---|---|---|
+| GRID | 0.45 Bar · 0.7 Campground · 1.0 Shower | −2.05 / **4.26** / −10.02 | **DIP** (middle room has the *best* DRR) |
+| PROBE | 0.6 Office ConfRoom · 0.7 Campground · 0.8 Classroom | 7.76 / **4.26** / 9.42 | **PEAK** (middle room has the *worst* DRR) |
+
+The mechanism predicts **opposite signs** for the two triplets, and that is
+exactly what was measured. So the refutation is real but narrowly scoped: it
+refutes *those six surrogate-proposed cells only*, and is **not** a refutation of
+the in-grid measured dip.
+
+**The conclusion is the finding:** non-monotonicity along `rt60` is not a property
+of a response surface at all. Each `rt60` request indexes an unrelated real room
+via nearest-match snapping, so whether a dip exists — and where — is a property of
+**which RIRs were curated**, not of reverberation time. Re-sample the axis and the
+dip moves or disappears, which is literally what happened between the two scans.
+
+*Consequence for surrogates:* a GP fitted with `rt60` as a **continuous**
+coordinate assumes a smoothness the instrument does not have, so it will keep
+proposing cells the oracle cannot reproduce. The defensible parameterisation for
+this axis is **DRR (or C50)**, which orders the measured conditions perfectly
+where RT60 does not.
+
+The six proposals now print with the held-fixed coordinates that differ between
+them, instead of six identical lines.
+
+---
+
+## B.4 Real findings
+
+**D1 — the headline is more nuanced than the premise assumed.** Global
+spearman(confidence, WER) = **−0.957**: nova-3 largely *does* know when it is
+failing. But it is **overconfident in 92 % of conditions** (mean gap 0.256) and
 **3.41 % (6/176) are genuine dead zones**. Ranked #1: `rt60 0.7 s, SNR 20 dB,
-babble, opus-lowrate, rolloff 1.0` → confidence **0.843** at WER **0.387**.
+babble, opus-lowrate, rolloff 1.0` → mean word confidence **0.843** at WER
+**0.387** (n = 40 clips, 363 ref words, 0 failed; `conf_pct` 0.661, `gap` 0.230).
 
-*Framing for the write-up:* the danger is not that the model is blind — it is that
-it is *mostly* self-aware, so a system calibrated on average behaviour will trust
-it precisely where it shouldn't.
+> 📎 **Column-order note for `results/dead_zones.csv` — read this before quoting
+> the file.** The schema is `…, mic_rolloff, rt60_measured, mean_conf, conf_pct,
+> wer, …`. On the #1 row `rt60_measured = 0.680` sits immediately before
+> `mean_conf = 0.843`, and 0.680 reads exactly like a plausible confidence, so
+> an off-by-one column read silently swaps the *delivered reverb time* for the
+> *headline confidence* — and the result still looks sane. This was mis-read once
+> during the 2026-08-05 session and caught only by an arithmetic check.
+> **The check that settles it:** `gap = mean_conf − (1 − wer)`, i.e.
+> 0.843 − 0.613 = 0.2297, which reproduces the stored `gap` field exactly.
+> Corroborated independently by `demo_break.py` ("rt60 0.7s (measured 0.68s) …
+> mean confidence 0.843") and by `results/interaction_report.txt`, which lists
+> the rt60 = 0.7 room (Campground Dininghall) at measured RT60 0.680.
+> Verify any quoted row against that identity rather than by counting columns.
 
-**D2 — deletions dominate; entities are hit hardest.**
-`snr_db`, `mic_rolloff`, `rt60`, `opus-lowrate` → **deletions**. `g726`, `road` →
-**substitutions**. `engine` and `codec=none` correctly get **NO FIX** (relative
-improvements). Destroyed-word rate: proper_noun **0.646**, spelled_letter 0.613,
-content 0.530, function 0.462. Entity error rate **0.633 vs WER 0.511**. Babble
-insertions are **92 % foreign tokens** — the model transcribing background
-speakers, a different mechanism from confusion.
+*Framing:* the danger is not that the model is blind — it is that it is *mostly*
+self-aware, so a system calibrated on average behaviour will trust it precisely
+where it shouldn't. The strongest counter-argument (and it is in the write-up):
+`mean_conf` is **survivor-biased** — see the deletion blindness below.
 
-**L2 — calibration.** On held-out *conditions*: ECE **0.051 → 0.032** (temperature,
-T=1.39) **→ 0.006** (feature-conditioned).
+**D2 — deletions dominate; entities are hit hardest.** `snr_db`, `mic_rolloff`,
+`rt60`, `opus-lowrate` → **deletions**. `g726`, `road` → **substitutions**.
+`engine` and `codec=none` correctly get **NO FIX**. Destroyed-word rate:
+proper_noun **0.646**, spelled_letter 0.613, content 0.530, function 0.462.
+Entity error rate **0.633 vs WER 0.511**. Babble insertions are **92 % foreign
+tokens** — the model transcribing background speakers, a different mechanism from
+confusion.
+
+**L2 — calibration, re-run and now FINAL** (`results/calibration.{json,txt}`).
+7040 rows, 42 732 hypothesis words, grouped by **condition** (169 groups), 5 seeds:
+
+| | ECE, median [min, max] |
+|---|---|
+| raw confidence | **0.0507** [0.0496, 0.0586] |
+| + temperature scaling (T = 1.385 [1.354, 1.435]) | **0.0346** [0.0312, 0.0391] |
+| + feature-conditioned | **0.0077** [0.0045, 0.0106] |
+
+Held-out **clips** as a robustness check: 0.0487 → 0.0396 → 0.0196.
+A random word-level split is **not offered** by the code — it leaks, and the
+symptom is a *better* ECE.
+
+*Alignment-fix audit:* 123/7040 rows (1.75 %) re-aligned, 0 still misaligned;
+hypothesis words fit on went 41 692 → **42 732** (+1040, +2.43 %). Effect on the
+headline ECE: raw −0.0005, temperature −0.0000, feature +0.0001 — **negligible**.
+The defect was real (a `zip()` would have bound confidences to the wrong words)
+but the old path *skipped* rather than zipped, so the previously reported number
+was already safe.
+
+*Deletion blindness, quantified — this is a substantive hole, not a footnote:*
+deletions are **22 416 words = 35.1 % of the reference and 69.3 % of ALL errors**,
+and carry no hypothesis token and therefore no confidence. A perfectly calibrated
+confidence converges on **emitted-word accuracy 0.767**, not on **reference
+recovery 0.513** — an overstatement of **0.254** if read as the latter. At the
+limit, **7 of 176 conditions returned an empty transcript on every clip**
+(WER 1.00, 100 % deletions) and contribute *zero* words: the calibrator is fit on
+169 conditions and is **silent about the worst 7**.
+
+*Plain-language statement:* above `rt60 = 0.7` reported confidence must be
+discounted by ~0.07 to become a calibrated probability (0.81 reported vs 0.75
+observed on 8144 held-out words); above `mic_rolloff = 0.5`, by ~0.06 (0.82 vs
+0.76 on 13 823 words).
+
+**D3b — active learning is a NULL, and the null is robust.**
+(`results/al_savings.{json,txt}`, `al_curve.json`, `al_trajectory.json`.)
+
+> No savings claim: the `boundary_rmse` target 0.162 was reached by **2/8 active
+> seeds and 4/8 random seeds** within the 45-evaluation budget. Report the budget,
+> not a ratio.
+
+8 seeds, all against the **surrogate oracle**; **no seed was confirmed end-to-end
+against the live API** — the write-up must say so rather than let the reader
+assume it. The test set is held-out **real measurements** from the master table
+(0 oracle calls to build it). At every target threshold the whole curve is
+published so it cannot be cherry-picked; random matches or beats straddle
+acquisition throughout (e.g. at target 0.205: active 36 evals vs random 15).
+This is a legitimate finding — a smooth, low-dimensional surface with a wide
+boundary region gives boundary-seeking acquisition little to exploit. Do not
+massage the threshold to manufacture a win.
+
+**D4 — sim2real.** Simulated RIRs **underestimate WER by 12.1 points**; Spearman
+rank correlation across conditions **0.873**; **dead-zone Jaccard 0.00** — a
+pyroomacoustics-only testbed orders conditions well but recovers *none* of the
+actual dead zones. Note both sim2real arms use the 10-clip subset, so their
+dead-zone sets are computed within that subset and do not coincide with the
+40-clip D1 table.
+
+**L3 — decoupling, now with a harsh-region sweep and two real verdicts.**
+The first two sweeps (round 1) pinned the other factor at its benign end and
+therefore walked a **flat edge** of the response surface: WER never left the
+floor. Round 2 added four sweeps that cross the interaction region. Six sweeps
+total, in `results/l3_decoupling.{json,txt}`:
+
+| sweep | verdict |
+|---|---|
+| `rt60` (snr 20) | LEXICAL FLOOR — features move, WER does not |
+| `snr_db` (rt60 0.2) | LEXICAL FLOOR — features move, WER does not |
+| `rt60@snr0` | NO SUPPORTABLE THRESHOLD — WER moves, feature curves unreadable |
+| **`rt60@opus_roll1`** | **DECOUPLED** — f0 collapses at rt60 ≈ 0.62 while WER only halves at ≈ 0.85 |
+| `rt60@g726_roll0.5` | NO SUPPORTABLE THRESHOLD |
+| **`snr_db@g726_roll1`** | **DECOUPLED** — rms collapses at ≈ 4.46 dB while WER halves at ≈ 6.61 dB |
+
+Both decoupled verdicts point the **same** way: **the paralinguistic stream leads,
+so a feature-based monitor would alarm *before* the transcript measurably
+degrades** — the opposite of the failure mode the layer was designed to look for.
+
+*The degeneracy guard is itself a finding.* `compare_degradation_rates` min-max
+normalizes both curves before finding the 0.5 crossing, so it cannot distinguish
+a 0.0 → 1.0 collapse from a 0.000 → 0.054 wander. The first run duly reported
+*"rolloff holds to 15.29 dB while WER halves at 11.58 dB"* — real arithmetic on
+meaningless input, and exactly this project's signature failure mode. A
+`_curve_degeneracy` guard (`MIN_LEXICAL_RANGE = 0.10`) plus a feature-side trend
+guard (`MIN_TREND_RHO = 0.70` on spearman vs severity rank) now **refuses the
+threshold instead of inventing one**; non-quotable half-levels print in
+`[brackets]`; clips whose own WER is flat get no vote on `leads`; non-trending
+features are labelled a **power limitation, not a finding of stability**. This
+belongs in the write-up beside the `apply_rir` anecdote as a second worked
+example.
+
+*Second half of the baseline trap, found this session:* the raw captures in
+`data/recordings/` are 48 kHz while all sweep audio is 16 kHz, and
+`centroid`/`rolloff`/`flatness` integrate to Nyquist — so a 48 kHz baseline
+injects a large constant offset unrelated to degradation. Documented in the
+module header.
+
+*L3 API spend:* 85 calls round 1 (0 failures, all cached to
+`results/l3_transcripts.jsonl`, re-run is free), plus round 2.
+
+---
 
 ## B.5 Blockers and known defects (start here on resume)
 
-1. ⛔ **Whisper is not installed, so L1 has no second arm.** The background install
-   failed instantly (`./.venv/bin/pip` does not exist in that venv) and this was
-   briefly misreported as succeeding. Fix: `python3 -m pip install openai-whisper`
-   inside the venv, then run the grid with `--models whisper-base`. Whisper is
-   local, so it is immune to the API throttling in (2).
-2. ⛔ **D4 has no real numbers.** The module, the synthetic RIRs and the pairing are
-   all done and tested, but the sim grid arm is **~3111 cells cached of 1760 needed
-   for the 10-clip subset** and stalled: Deepgram began throttling hard after
-   ~10 k calls (`WriteTimeout`, 0.4 rows/s vs 18 earlier). Resume with
-   `--clips al --workers 4 --rir-subdir rirs_sim --results results_sim`; every row
-   caches on write so nothing is lost.
-3. 🐛 **Confidence/edit alignment is skipped, not fixed** (1.75 % of rows).
-   `edits` are built from *normalized* tokens while `word_confidences` come from
-   *raw* transcript tokens, so anything changing token count (e.g. `follow-up`
-   splitting on the hyphen) breaks the 1:1 assumption. `word_records` correctly
-   **raises** rather than zipping — a `zip()` would silently bind confidences to the
-   wrong words. Currently handled by the counted-skip path. **The proper fix is to
-   carry confidences through the same transformation as the text** (duplicate on a
-   split, average on a merge) and should land before L2's numbers are final.
-4. ⚠️ **35.6 % of reference words are deletions and carry no confidence**, so they
-   are invisible to any confidence-calibration analysis. Since D2 shows deletions
-   are the *dominant* failure mode, this is a substantive hole in the headline
-   signal, not a footnote. Belongs in the limitations section.
-5. ⚠️ **Counterintuitive cells are surrogate-PROPOSED, never confirmed.** They carry
-   `presentable_as_measured=False`. Real oracle calls must confirm each one before
-   it can be written up as a measured surprise.
-6. ⬜ **Nobody has listened to the degraded audio yet** (A.R3.5). It is sitting in
-   `results/audio/`. Cheap, and it is the only test for "is this physically
-   plausible" — the unit tests prove the maths, not the result.
-7. ⚠️ **`DEFAULT_FACTOR_SPACE` still declares `snr_db` 0–25** even though
-   `interaction_grid()` samples only to 20. Either cap the factor space (touches
-   `design.py`, which `conditions.py` asserts against) or state the discrepancy.
+1. 🟡 **Whisper arm is at 1597/1760 rows** (163 left) — every row cached, so
+   resuming costs nothing for work already done. **Resume with `--workers 1`:**
+   `SSL_CERT_FILE=$(./.venv/bin/python -c 'import certifi;print(certifi.where())') ./.venv/bin/python run_experiment.py --models whisper-base --clips al --workers 1`
+   Then `--rebuild --models nova-3,whisper-base` to refresh `results/master.csv`,
+   then `./.venv/bin/python -m analysis.model_arms` to produce
+   `results/model_arms.json` and unblock L1 and dashboard panel 7.
 
-## B.6 Repo delta vs §13's layout
+   **⚠️ Do NOT run the Whisper arm with more than one worker.** At `--workers 4`
+   it aborted with exit 134:
+   *"Numba workqueue threading layer is terminating: Concurrent access has been
+   detected. The workqueue threading layer is not threadsafe."* Whisper pulls in
+   Numba, and the default workqueue layer cannot be entered from multiple Python
+   threads. Earlier multi-worker runs survived by luck. Whisper is CPU-bound
+   anyway, so the threads bought little; serial is both safe and barely slower.
+   (`NUMBA_THREADING_LAYER=tbb` is the documented alternative if parallelism is
+   ever actually needed — untested here.)
 
-Added beyond the original plan: `check_recordings.py` (+tests), `fetch_assets.py`,
-`smoke_join1.py`, `make_sim_rirs.py`, `task_specs.json` (+tests),
-`analysis/{confidence_gap,fingerprints,sim2real,interactions,al_savings,layers}.py`,
-`dashboard/`, `report/measurements.md`. `results_sim/` is gitignored alongside
-`results/`.
+   *(The earlier note here blaming a missing `./.venv/bin/pip` was wrong: pip
+   exists; `nohup` failed to resolve the relative path. The first real blocker was
+   `CERTIFICATE_VERIFY_FAILED` on the model-weights download — the same macOS
+   missing-CA-bundle issue that bit the DEMAND fetch. Note that
+   `./.venv/bin/pip` IS a broken console script on this machine for an unrelated
+   reason — its shebang points at the venv's pre-rename path — so always use
+   `python -m pip`.)*
+2. ✅ **The `interaction_report.txt` contradiction is RESOLVED** — see B.3. The
+   report now carries a `RECONCILIATION` section and the two results are shown to
+   be consistent under the DRR mechanism.
+3. ⚠️ **The six surrogate-proposed counterintuitive cells remain unreproduced**
+   and must not be presented as measured surprises. The *in-grid* dips (B.3) are
+   real measurements with CIs and stand on their own. The report now scopes the
+   refutation explicitly to those six cells.
+4. 🟡 **`report/writeup.md` is still the LONG version** — 885 lines, §1–10 plus
+   Appendices A–F, **7 `[[PENDING: ...]]` markers**. **DECISION MADE: ship the
+   compressed version only.** Target is **~3,500 words in the main body, under 10
+   minutes end to end**; deep material moves to appendices rather than being
+   deleted; do not expand §4 back out. The agent had all the final numbers in hand
+   and was writing the compressed version when the pause landed, so none of that
+   work is in the file yet. Every number it needs is in B.3/B.4 above.
+5. ✅ **`test_demo.py` is 22/22 — the earlier "1 failing" note was STALE.**
+   Re-verified 2026-08-05 with **zero code changes**: the fix bar was already met
+   in the tree. `test_demo.py`'s `cache()` helper self-heals (runs
+   `demo_break.py --prepare` itself if `results/demo/demo_cache.json` is absent),
+   and `demo_break.py:play()` checks `is_file()` and prints
+   `(audio missing: … -- run 'make demo-prep')` instead of raising. The line that
+   was mistaken for a failure is that **intended** message. Verified robustly by
+   moving `results/demo/` out of the repo entirely, re-running (it rebuilt from
+   scratch, offline, no API key, 22/22), then restoring the original — so the pass
+   is not a stale-cache illusion.
+6. 🟡 **`test_dashboard.py`: 21/22, one remaining failure.** Confirmed
+   2026-08-05 to be exactly the Whisper dependency: `test_model_toggle_re_renders_
+   every_panel` → *"panel-hero went empty after switching model"* — the second
+   model has no rows in `master.csv` yet. Do the final rebuild as
+   `./.venv/bin/python dashboard/build.py` (**no flags** — `--no-al` was what
+   broke one of the two already-fixed tests) after the Whisper arm lands.
+7. ⬜ **Nobody has listened to the degraded audio yet** (A.R3.5). The files are in
+   `results/audio/listen/` with `WHAT_TO_LISTEN_FOR.md`. Cheap, and it is the only
+   test for "is this physically plausible" — the unit tests prove the maths, not
+   the result.
+8. ⬜ **`grid-v1` is not tagged** and the tree is uncommitted (B.7).
+9. ✅ **`run_d3a.py` stays at the repo root — RESOLVED, do not relitigate.** It
+   shares `run_experiment.py`'s defining property: **it spends money**. Everything
+   under `analysis/` is pure analysis of already-collected data and is safe to run
+   in a loop; `run_d3a.py` is not, and its budget ceiling (`--max-calls`) is a
+   checked invariant rather than a comment. Folding it into
+   `analysis/sensitivity.py:main()` would put an API-spending path behind a module
+   whose whole contract is that it is free to re-run. The root/`analysis` split is
+   the money boundary; keep it legible.
+
+---
+
+## B.6 Dashboard and demo kit
+
+**Dashboard (R6) — 8 panels.** Panels 1–6 unchanged and per-model. Added this
+session:
+- **Panel 7 — L1 multi-model comparison** and **Panel 8 — L3 decoupling**, both
+  **cross-cutting**: they sit outside the model toggle because panel 7 *is* the
+  comparison between arms and panel 8 reads audio rather than the per-model
+  table. They live under a new `cross` key in the payload, and
+  `test_dashboard.py` now lists them separately in `CROSS_PANEL_IDS` so the
+  toggle test does not wrongly demand they re-render.
+- **`--sim-master`**: the sim arm is joined at build time from
+  `results_sim/master_sim.csv` and re-split on `rir_key`, which fixed
+  `sim2real=EMPTY`. Defaults to that path when it exists.
+- Panel 8 draws WER on a **fixed 0–1 axis, never auto-scaled** — a flat curve must
+  *look* flat, and auto-scaling would stretch a 0.05 wander to fill the panel.
+  Half-degradation levels are suppressed entirely when the analysis refused to
+  quote them.
+- `build_sim2real` now returns an explained empty state when the requested model
+  has no sim arm, instead of surfacing a raw `KeyError`.
+
+Current build status (`--no-al`, Whisper not yet complete):
+`[nova-3] silent_failure=ok, fingerprints=ok, sensitivity=ok, sim2real=ok` ·
+`[cross-model] decoupling=ok, model_arms=EMPTY`.
+
+**Demo kit (R9).** `Makefile` (auto-discovers `test_*.py` so a new suite is picked
+up without editing it), `demo_break.py` (752 lines), `demo_al.py` (343 lines),
+`requirements.lock.txt`, `test_demo.py` (22 tests, 1 failing — see B.5).
+**`README.md` is now written** (128 lines) and `dashboard/DEMO.md` has been
+updated — neither has been reviewed. Note DEMO.md must describe **8 panels, not
+6**, and must not reference a live voice agent (R7 is out of scope).
+The full sweep of every `make` target had not completed when work stopped.
+
+---
+
+## B.7 Repo state at the pause — READ BEFORE COMMITTING
+
+Nothing is committed. `git status`:
+
+```
+ M SPEC.md                     M dashboard/app.css       M dashboard/app.js
+ M dashboard/build.py          M dashboard/deadzone.html M dashboard/shell.html
+ M analysis/al_savings.py      M test_calibration.py     M test_dashboard.py
+ M test_paralinguistic.py
+?? Makefile                    ?? cross_model_norm.py    ?? make_manifest.py
+?? demo_al.py                  ?? demo_break.py          ?? requirements.lock.txt
+?? report/writeup.md           ?? run_d3a.py
+?? analysis/calibration_report.py  ?? analysis/decoupling.py
+?? analysis/model_arms.py          ?? analysis/sensitivity.py
+?? test_cross_model_norm.py    ?? test_demo.py           ?? test_model_arms.py
+?? test_sensitivity.py
+```
+
+**✅ The mid-edit risk is largely retired.** A full sweep at this pause found
+**every suite green** except the two named in B.5 (`test_demo` 1/22,
+`test_dashboard` 1 remaining). Verified passing:
+
+`test_pipeline` · `test_adapters` · `test_conditions` · `test_check_recordings`
+`test_task_specs` · `test_cross_model_norm` · `test_model_arms` ·
+`test_run_experiment` · `test_calibration` · `test_paralinguistic` ·
+`test_analysis` · `test_layers` · `test_active_learning` · `test_design` ·
+`test_model_compare` · `test_sim2real` · `test_agent_eval`
+
+Still worth re-running before committing, since `test_sensitivity.py` and
+`report/writeup.md` were being edited when work stopped:
+
+```
+for t in test_*.py; do ./.venv/bin/python $t >/dev/null 2>&1 || echo "FAIL $t"; done
+```
+
+**One result from that sweep is load-bearing for the write-up.**
+`test_active_learning` passes with the banner *"active sampling reaches target
+fidelity in far fewer oracle calls than random"* — on **planted synthetic
+structure**, where the boundary is sharp. So the real-grid null (B.4) is **not a
+broken implementation**: the machinery beats random on a surface with an
+exploitable boundary and fails to beat it on the real one. That is the difference
+between a broken method and a method meeting a surface it has no purchase on, and
+a reader will assume the former unless it is said. The synthetic suite is the
+control; cite it.
+
+**Resume order (highest value first):**
+1. **Write the compressed `report/writeup.md`** (~3,500-word main body) and fill
+   its markers. This is now the single biggest remaining item and every number it
+   needs is already in B.3/B.4 — no new computation required.
+2. Finish the Whisper arm **at `--workers 1`** → `--rebuild` master →
+   `python -m analysis.model_arms` → L1 lands and dashboard panel 7 fills.
+3. Rebuild the dashboard with **no flags**; re-run `test_dashboard.py`.
+4. Fix the one `test_demo.py` failure; review the generated `README.md` and
+   `dashboard/DEMO.md`; run every `make` target end to end with wifi off.
+5. `make_manifest.py` again on a clean tree, commit, then `git tag grid-v1`.
+6. The listening pass (A.R3.5) — user's task, ~10 minutes, and the only test for
+   "is this physically plausible".
+
+**Time estimate at this pause:** ~1–2 h wall clock with agents in parallel, of
+which ~45 min is the user's own attention (reading the compressed write-up,
+eyeballing the dashboard, the listening pass). The mid-edit risk that widened the
+earlier estimate has been retired by the green sweep above.
+
+## B.8 Repo delta vs §13's layout
+
+Beyond the previous log: `make_manifest.py`, `cross_model_norm.py` (+tests),
+`analysis/{sensitivity,decoupling,model_arms,calibration_report}.py` (+tests),
+`demo_break.py`, `demo_al.py`, `Makefile`, `requirements.lock.txt`,
+`report/writeup.md`, `run_d3a.py`, and `results/audio/sweep/harsh/`.
+`results_sim/` remains gitignored alongside `results/`.
+
+---
+
+# Appendix C: Session log — 2026-08-05 (resumed)
+
+> Supersedes Appendix B wherever the two disagree. Everything here is read off
+> artifacts regenerated during this session, not from memory.
+
+## C.1 What closed
+
+| item | before | now |
+|---|---|---|
+| Whisper arm | 1597/1760, `--workers 4` crashed on Numba | **1760/1760** at `--workers 1` |
+| master table | 7040 nova-3 rows, CSV only | **8800 rows** (nova-3 + whisper), **3 failures = 0.03 %**, and `master.parquet` now actually written |
+| L1 multi-model | blocked | **done** — see C.3 |
+| dashboard | 8 panels wired, `model_arms=EMPTY` | **all 8 `ok`**, rebuilt on the full table |
+| `test_dashboard.py` | 21/22 | **22/22** (see C.2) |
+| `test_demo.py` | reported 1 failing | **22/22 — the report was stale**, fix was already in the tree |
+| whole suite | 17 green + 2 known failures | **21/21 green** |
+| `make` targets | never swept | `help`, `demo-check`, `demo-break`, `demo-al`, `dashboard-build` **all pass offline** |
+
+**`pyarrow` was missing**, so `run_experiment.py --rebuild` had been silently
+falling back to CSV-only and printing the reason. R4.4's DoD names
+`results/master.parquet`; it exists now, and `requirements.lock.txt` was
+re-frozen (65 packages) to include it.
+
+## C.2 The last dashboard failure was a WRONG TEST, not a broken panel
+
+`test_model_toggle_re_renders_every_panel` asserted that **no** panel is an empty
+state after switching model. Once the whisper arm landed, the failure moved from
+`panel-hero` (a genuine bug, fixed by the rebuild) to `panel-sim2real` — and
+that one is **correct behaviour**: the simulated-RIR arm was only ever run for
+nova-3, because D4 compares measured vs synthetic **RIR provenance**, not model
+families, and re-running it per model would double the API spend to answer a
+question nobody asked. A model with no sim arm has genuinely nothing to plot.
+
+The test now encodes the real invariant instead of the convenient one:
+
+- **every** panel must still *render something* after the toggle (a blank hole
+  and a crashed panel are indistinguishable to someone demoing this), and
+- a panel in `MODEL_CONDITIONAL_EMPTY` may be empty **only if it explains
+  itself** — the assertion checks the empty state carries text.
+
+`build_sim2real` emits *"The simulated-RIR arm was only run for nova-3, not for
+whisper-base"*, so the test is not passing vacuously. The exemption set is one
+named panel with the reason written next to it, not a blanket relaxation.
+
+## C.3 L1 — the multi-model comparison (R5.7), real numbers
+
+**Scope caveat that must travel with every number here:** the whisper arm ran on
+the **10-clip AL subset**, so L1 is computed on cells *both* models ran —
+n = 1757 rows per model (176 conditions × 10 clips − 3 whisper failures). This is
+why nova-3's dead-zone rate reads **1.14 % (2/176)** here but **3.41 % (6/176)**
+in the D1 headline table. Different clip subsets, not a contradiction — and an
+unexplained 1.14-vs-3.41 in the same document would cost the reader's trust.
+
+**The normalization audit is the validity check for the layer** — without it no
+cross-model WER is quotable:
+
+| model | WER strict | WER x-model | shift | n |
+|---|---|---|---|---|
+| nova-3 | 0.433 | 0.447 | **−0.014** | 1757 |
+| whisper-base | 0.996 | 0.906 | **+0.090** | 1757 |
+
+nova-3 is already word-form (the adapter disables `smart_format`/`punctuate`/
+`numerals`), so its shift *should* be ~0 and is. Whisper's +0.090 is the
+normalizer recovering its digit orthography, not inventing accuracy. A large
+nova-3 shift would have meant the normalizer was changing more than spelling.
+
+**The finding:**
+
+| model | conds | WER | dead-zone rate | spearman(conf, WER) |
+|---|---|---|---|---|
+| nova-3 | 176 | 0.433 | **1.14 %** (2) | **−0.929** |
+| whisper-base | 176 | 0.996 | **39.20 %** (69) | **−0.566** |
+
+Whisper is not merely worse — it is **worse at knowing it is worse**, which is
+the project's thesis restated across model families.
+
+**Dead zones do not transfer at all:** shared 0, **Jaccard 0.000**, nova-only 2,
+whisper-only 69. Pair this with D4's sim2real Jaccard of **0.00** and there are
+now *two independent senses* in which a dead-zone map fails to transfer — across
+RIR provenance and across model family. Quotable practitioner warning: **you
+cannot borrow someone else's dead-zone map.**
+
+**The mechanism differs, not just the magnitude** (fraction of reference words):
+
+| model | sub | del | ins |
+|---|---|---|---|
+| nova-3 | 0.149 | 0.270 | 0.021 |
+| whisper-base | 0.413 | 0.289 | **0.197** |
+
+Deletions are comparable (0.270 vs 0.289); substitutions are **2.8×** and
+insertions **9.4×**. Under degradation nova-3 goes quiet; **whisper invents.**
+
+**Hallucination** (its own callout per R5.7): median hyp/ref length ratio 1.00,
+p95 **2.75**, **9.9 %** of rows exceed 2× the reference length, mean foreign-token
+fraction **0.528**. Whisper's WER exceeds 1.0 in two regions (g726 1.060,
+rt60 0.4–0.6 1.066) — possible precisely because insertions are unbounded. The
+example to quote, 3 reference words becoming 49:
+
+> `[u02 @ rt60-1_snr-5_babble_opus-lowrate_roll-1]`
+> **REF:** "call maria at"
+> **HYP:** "I'm gonna go here and do a little bit of the work. You call her, you
+> have a passport, you have a file. You have a file, you have a file, you have a
+> file, you have a file, you have a file. You have a file."
+
+Note the degenerate repetition loop. **WER understates this**: WER caps damage at
+one error per reference word, while a 49-word hallucination handed to a
+downstream LLM agent is unbounded harm. That is a second, independent argument
+for why WER is not the deployment metric.
+
+**Top divergence regions** (ranked by WER gap; whisper is the worse arm in every
+one): `snr_db` 10–15 dB gap 0.638 (dead-zone rate 0 % vs 38.5 %) · `noise_type`
+engine 0.627 · `snr_db` 15–20 dB 0.624 (0 % vs 58.3 %) · `rt60` 0.6–0.8 0.610
+(2.8 % vs 47.2 %) · `codec` g726 0.593.
+
+## C.4 Independent audit of the sensitivity decomposition
+
+Everything B.3 claims was **re-derived from `results/master.csv` with plain
+numpy, importing nothing from `analysis.sensitivity`** — the only evidence worth
+having for a number this load-bearing.
+
+- **Complete factorial: VERIFIED.** 5760 nova-3 babble rows = 144 × 40 exactly;
+  cell-size histogram `{40: 144}`; zero missing cells, zero extras, zero
+  duplicate `(cell, clip)` pairs, zero failed/non-finite rows. Every cell holds
+  *literally the same* 40 clip ids. The precondition is **validated, not
+  assumed** — injecting a deletion or flipping rows to `failed=True` both make
+  `load_factorial` raise.
+- **Exact ANOVA: VERIFIED.** A deliberately different implementation reproduced
+  `V_total = 0.12658007899684545` with Δ = 0.00e+00, and every S1/ST to ≤1.1e-16.
+  Centering and orthogonality checked *directly* rather than inferred from the
+  sum: max |effect summed over its own axis| = 1.33e-15, max inner product over
+  all 105 pairs = 1.21e-17.
+- **Clip-level bootstrap: VERIFIED**, and the stated reason is empirically
+  right. Re-running the bootstrap with explicit index resampling and a different
+  seed matched every CI to Monte-Carlo noise. Building the **wrong** bootstrap
+  (resampling clips *within* each cell, destroying the coupling) gives gap
+  half-widths ~35–45 % too narrow — so the module is on the correct side of a
+  choice that would otherwise have quietly manufactured significance.
+- **Pre-registration rule: VERIFIED**, and it is applied *conservatively*. The
+  gap CI adds S1 and ST half-widths in quadrature, which assumes independence;
+  the bootstrap correlation is strongly positive (+0.86 / +0.88 / +0.68 / +0.86),
+  so the published interval is **~2.5× wider than the honest one** (rt60
+  half-width 0.0360 vs 0.0143). The code computes the tighter interval and
+  deliberately declines to use it. Conservative in the only direction that
+  matters for a pre-registered test. No branch can omit the verdict.
+
+**One defect found and fixed.** `load_factorial`'s hole check cannot see a
+**duplicate**: the fill loop assigns `W[clip, cell] = y`, so a second row for an
+already-written cell silently overwrites the first and leaves no NaN behind —
+the block still looks complete and the exact ANOVA decomposes whichever row
+landed last. Inert on the current table (`n_rows == W.size == 5760`), but the
+realizable cause is mundane (a partial re-run appending a fresh transcript for a
+measured cell). Now guarded by asserting `n_used == W.size`, with a test pinning
+both the raise and the negative case. **This is the project's signature failure
+mode found in the project's own analysis code**, and it belongs in the write-up
+beside the `apply_rir` and `_curve_degeneracy` anecdotes as a third worked
+example.
+
+**Two disclosures for the write-up** (neither changes a headline number):
+
+1. **The ST−S1 gap carries a small upward finite-clip bias.** Clip-sampling
+   noise lands disproportionately in high-order ANOVA terms (weight 0.25 for the
+   4-way term vs 0.021 for a main effect), inflating ST and deflating S1.
+   Measured two ways that agree: bootstrap bias +0.0041 for both `rt60` and
+   `snr_db`; split-half (20 clips) gaps 0.1312/0.1156 vs full-sample
+   0.1275/0.1120. Bias-corrected gaps ≈0.124 and ≈0.108, and the order-4 share
+   (0.0112) is mostly noise floor. **Does not threaten the verdict** — the margin
+   over the pre-set 0.020 threshold is ~5×, and the conservative CI lower bound
+   (0.0915) is 4.5× it.
+2. **The decomposed response is the *unweighted* mean of per-clip WER**, not
+   word-weighted pooled corpus WER. Both were computed: max per-cell difference
+   0.0194, `V_total` 0.12658 vs 0.12586, S1/ST shift ≤0.0033, rankings identical,
+   verdict unchanged. Immaterial — but **name it in methods**, because A.R1.1
+   justifies the corpus size in reference *words*, which implies the pooled
+   quantity. The unweighted mean is the right estimand to pair with a clip-level
+   bootstrap; that is the justification and it just needs saying.
+
+## C.5 A correction worth keeping
+
+Mid-session I "corrected" the headline dead-zone number from confidence **0.843**
+to **0.680**, having miscounted the columns of `results/dead_zones.csv`. The
+schema is `…, mic_rolloff, rt60_measured, mean_conf, conf_pct, wer, …`, and
+`rt60_measured = 0.680` sits immediately before `mean_conf = 0.843` — 0.680 reads
+exactly like a plausible confidence, so an off-by-one column read swaps the
+*delivered reverb time* for the *headline confidence* and the result still looks
+sane. The original number was right; the correction was wrong and was retracted.
+
+**The check that settles it is an identity, not a column count:**
+`gap = mean_conf − (1 − wer)` → 0.843 − 0.613 = 0.2297, reproducing the stored
+`gap` field exactly. Corroborated by `demo_break.py` ("rt60 0.7s (measured
+0.68s) … mean confidence 0.843") and by `results/interaction_report.txt`, which
+lists the rt60 = 0.7 room (Campground Dininghall) at measured RT60 0.680.
+
+Kept in the log deliberately: this is the same class of error the project exists
+to study, committed against the project's own results file, and caught only
+because a redundant arithmetic identity was available to check against. That is
+an argument for storing derived fields like `gap` even though they are
+recomputable — **redundancy is what makes a silent error loud.**
+
+## C.6 What remains
+
+1. **The compressed write-up** — the last substantive item. All numbers are in
+   B.3, B.4, C.3 and C.4; no computation remains.
+2. **`git tag grid-v1`** on the committed SHA, then regenerate
+   `results/MANIFEST.json` so it records a clean tree (it currently reads
+   `a6ece0c455af (dirty)`; 11,086 Deepgram calls, ~$3.26).
+3. **The listening pass (A.R3.5)** — still nobody's ears on the degraded audio.
+   Files in `results/audio/listen/` with `WHAT_TO_LISTEN_FOR.md`. ~10 minutes,
+   the user's own task, and the only test for "is this physically plausible."
+
+## C.7 Five numbers Appendix B had wrong (found while writing the report)
+
+The write-up pass re-derived every quoted number from the artifacts rather than
+from the progress log, and caught five discrepancies. **The write-up is correct;
+B.3/B.4 above are stale on these points.**
+
+1. **The sim2real gap of 12.1 points REQUIRES clip-matching, and the matching is
+   load-bearing.** The sim arm ran on 10 clips; the real table has 40. Comparing
+   them as-is gives **19.9 points** [−22.9, −17.1]. Restricting the real arm to
+   the same 10 clips reproduces **12.1** [−15.0, −9.6] with ρ 0.873, τ 0.698,
+   Jaccard 0.00 exactly. The 19.9 figure is an artifact of not matching, and the
+   write-up names it as such. Anyone re-running D4 must match clips first.
+   (Also: max |Δ| measured RT60 in the D4 pairing is **0.017 s**, distinct from
+   the 0.019 s quoted for RIR *generation* in R2.5 — two different quantities.)
+2. **ρ = −0.957 is the confidence-PERCENTILE correlation over 169 conditions,
+   not 176.** Raw `mean_conf` over the same 169 gives −0.9523; the canonical
+   `overall_correlation` is −0.95714, n = 169. The 7 missing conditions are the
+   silent ones — they emit no words and therefore have no confidence at all.
+   Stating n = 169 *strengthens* the deletion-blindness argument rather than
+   weakening the headline.
+3. **`digit_word` is the LEAST destroyed word class (0.361), below function
+   words (0.462).** So "entities degrade faster than the transcript" is carried
+   by **proper nouns (0.646) and spelled letters (0.613)**, not by numbers. The
+   naive reading of the destroyed-word table gets this backwards.
+4. **Competing-speech capture is not babble-specific.** Foreign-insertion
+   fractions are also high for engine (0.94) and road (0.89), even though babble
+   carries ~3× the insertions. The mechanism claim must be about *insertions
+   under any competing source*, not about babble alone.
+5. **Stale scalars corrected:** deletions **35.1 %** (not 35.6 %), **22,416**
+   (not 22,411), the rt60 calibration discount is 0.81 vs **0.75** on **8,144**
+   held-out words (not 0.74 / 7,980), and the clean-baseline floor is three
+   proper-noun mis-spellings among **six errors across five clips** (not "three
+   of five residual errors").
+
+**Process note.** Four of these five survived multiple earlier reviews because
+they were being copied forward from the progress log rather than re-read from
+`results/`. The log is a *summary*, not a source. Quote artifacts.
+
+## C.8 D4 defect: `sim2real.py` never enforced the clip half of its own premise
+
+Found while reconciling the write-up against the artifacts, and it is the most
+serious thing this session turned up.
+
+`analysis/sim2real.py`'s docstring states the premise plainly: *"same clips, same
+condition list, only the reverb ingredient swapped."* The code enforces the
+**condition** half correctly — conditions are paired on **measured** Schroeder
+RT60, never the Sabine target (B.2 item 5). It never enforced the **clip** half.
+The real arm has **40 clips**; the sim arm has **10** (the AL subset, run small
+deliberately to save API spend). So each condition's real mean WER was computed
+over 40 clips and its simulated mean over a *different, smaller* set, and the
+difference silently absorbed **clip difficulty** on top of the RIR-provenance
+effect it exists to isolate.
+
+Reproduced independently with plain pandas, no repo imports:
+
+```
+unmatched (as shipped)                       mean gap -0.1991   n = 176
+clip-matched (real arm cut to the sim's 10)  mean gap -0.1212   n = 176
+```
+
+**The published 19.9-point gap was inflated by 7.8 points of pure confound.** The
+defensible number is **12.1 points** — which is what B.4 quoted all along, so the
+progress log was right and the stored artifact had drifted to the unmatched
+computation.
+
+Why this one stings: **counterfactual isolation is the entire premise of the
+project** (§1) — vary one factor with everything else held constant. Comparing
+different clip sets breaks exactly that, in the one layer whose job is to
+validate the simulation. The failure signature is the house one: no exception,
+no warning, a plausible number, and a docstring asserting the invariant the code
+does not check.
+
+**Fix in flight:** intersect the two arms' `clip_id` sets before any aggregation,
+exclude failed rows, and make the mismatch **loud** — the output and the
+formatted report must state each arm's clip count, the common count, and the rows
+dropped. Report-and-proceed rather than raise, because a 10-vs-40 mismatch is the
+*expected* situation given the sim arm was deliberately run on a subset; raise
+only if the intersection is empty or implausibly small. Pinned by a test in which
+the excluded clips are deliberately easier, so the unmatched and matched gaps
+differ materially and only the matched one passes.
+
+**Generalized lesson, worth one line in the write-up:** every layer that joins
+two arms needs an explicit matching step with a loud mismatch report.
+`analysis/model_arms.py` already got this right (`matched_arms`, `RaggedArmsError`,
+"arms matched to the cells BOTH models ran; failed rows dropped") — D4 simply
+never received the same treatment. When one module in a codebase has learned a
+lesson, check whether its siblings have.
+
+### C.8.1 — D4 defect RESOLVED
+
+Fixed in `analysis/sim2real.py` (+210 lines) with three tests in
+`test_sim2real.py` (8 → **11**, all green; full suite **21/21**). The RT60
+condition-matching logic was deliberately left untouched.
+
+**Corrected headline (nova-3), and every value SPEC B.4 recorded reproduces:**
+
+| | unmatched (as shipped) | **matched (correct)** |
+|---|---|---|
+| mean gap | −0.1991 | **−0.12122** |
+| 95 % CI | — | **[−0.15008, −0.09582]** |
+| Spearman ρ | 0.8787 | **0.87326** (p = 3.2e−56) |
+| Kendall τ | — | **0.69814** |
+| dead-zone Jaccard | 0.00 | **0.00** (real 2, sim 1, both 0) |
+| n_pairs | 176 | **176** |
+
+Clip census: real arm 40 clips, sim arm 10, **common 10** — exactly the AL subset
+`u02, u05, u06, u11, u17, u22, u24, u33, u36, u39`. 5280 real rows dropped, 0
+sim. Failures excluded (real 0/7040, sim 6/1760). Max |ΔRT60| **0.017 s**.
+The verdict text is unchanged — **"ORDER PRESERVED, LEVEL OFFSET"** — but the
+quotable sentence is now **"12.1 points optimistic," not 19.9.**
+**The 19.9 figure is dead; it must not appear as a result anywhere.**
+
+**Design decisions worth keeping:**
+
+- **Report-and-proceed, with a raise as the floor.** A 10-vs-40 mismatch is the
+  *designed* state (the sim arm was run small on purpose), so refusing it would
+  delete a legitimate finding over a deliberate cost-saving choice. A partial
+  mismatch restricts both arms and reports the census loudly. New
+  `ClipSetMismatchError` fires only below `MIN_COMMON_CLIPS = 3`, where a
+  per-condition mean stops describing an acoustic condition and starts describing
+  which two utterances happened to overlap.
+- **The census is unavoidable downstream.** `clip_match` is carried into the
+  report, and `n_clips` / `clips_matched` are injected into `headline` itself —
+  so a consumer reading only the headline still cannot quote the gap without
+  seeing what it is a gap over. `results/sim2real.json` now records
+  `"clips_matched": false, "n_clips": 10`.
+- **`usable_rows()`** was extracted so the clip census is taken over exactly the
+  rows that can contribute a measurement — a clip that only ever *failed* on one
+  arm is correctly not counted as having run there.
+- **New `results/sim2real.txt`** (the module previously wrote no text artifact),
+  matching the sibling-`.txt` convention of `calibration.txt` / `model_arms.txt`.
+
+**The test is the good part.** The sim arm gets a strict subset of the real
+arm's clips, and the real-only clips are planted **0.30 WER points harder** — so
+the two arithmetics differ enough to **flip the sign**: matched **+0.10** (the
+pure planted RIR effect) vs unmatched **−0.0714** (RIR + clip difficulty). A test
+that merely asserted "the gap is finite" could have passed by accident; this one
+cannot.
+
+## C.9 Write-up status — DONE, but longer than the ~3,500-word target
+
+`report/writeup.md`, 1028 lines. **Zero `[[PENDING]]` markers** — every one
+resolved from artifacts, including L1 (the whisper arm landed mid-write).
+
+**Main body §1–§10 is ~4,550 prose words (~4,985 counting table cells and
+numerals) — roughly a 17–20 minute read, against the "under 10 minutes" bar.**
+Structure: §1–§10 plus Appendices **A–G** and result tables **D.1–D.10**.
+
+Two compression passes ran (5,810 → 4,553 prose words, −21 %). The second pass
+stopped after four successive rounds yielded 17, 11, 23 and 1 words: everything
+remaining in the body is either a protected claim or a numbered result with its
+interval, so further cuts **delete content rather than compress it**. That is a
+scope decision, not an editing one, and it is the user's call.
+
+**If a further cut is wanted, take these in order** (named by the editor, all
+currently protected):
+1. §6.3's pre-registration blockquote (78 words) — restates the table directly
+   above it.
+2. §8 item 1's final sentence.
+3. §6.1's third paragraph.
+
+**Honest read of the overshoot:** the ~3,500 target was set *before* three
+mid-flight additions that did not exist then — the full L1 section with its scope
+caveat, normalization audit, divergence table and hallucination callout; the four
+sensitivity disclosures; and the AL split-seed robustness. Those are ~900–1,000
+words of material the project genuinely produced this session. The body is dense,
+not padded.
+
+**Relocated, not deleted** (this is why the appendices grew): new **Appendix G**
+(grid construction + the JOIN-1 gate probe and A/B/C table), new **D.10** (full
+L2 calibration numbers), the GRID-vs-PROBE room-triplet table → D.7, L3 sweep
+ranges and guard constants → Appendix E, the cross-model audit and divergence
+tables → Appendix C / D.9, Sabine-vs-Schroeder detail → Appendix F.
+
+**Deleted outright — redundancy only:** a verbatim duplicate of limitation 12,
+a restatement of the clean-floor number already in limitation 3, and transitional
+filler.
+
+**Verified present after compression** (normalized grep, every must-survive
+item): 0.843 @ WER 0.387 · ρ = −0.957 over 169 conditions · "mostly self-aware"
+· survivor bias + 35.1 % / 69.3 % / silent-about-the-worst-7 · DRR −1.000 vs
+RT60 +0.800 and "a property of which RIRs were curated" · the pre-registration
+verdict with `d8ddd4f` / 2026-07-27 / both gaps and CIs / the decision rule fixed
+in advance · the AL null with "NO seed was confirmed" and the
+`test_active_learning.py` control · both Jaccard 0.00 results and "you cannot
+borrow someone else's dead-zone map" · the 3→49-word whisper transcript · prior
+work with no novelty claim · Lombard named in §8 item 1 · both closing honest
+sentences · all **16** limitations. Every cross-reference resolves.
+
+**19.9 appears exactly once**, as *"a corpus difference masquerading as a
+simulation gap"* — a named artifact, never a result. Correct treatment.
+
+## C.10 Final state
+
+- **21/21 test suites green** (test_sim2real 8 → **13**, test_sensitivity +2).
+- **Dashboard**: all 8 panels `ok`, rebuilt on the full 10,560-row joined table.
+- **Every `make` target passes offline**, no API key.
+- **`results/MANIFEST.json`** regenerated: 11,086 Deepgram calls, ~$3.26.
+  It currently records `a6ece0c455af (dirty)` — **regenerate it after the commit**
+  so it names a clean tree, then `git tag grid-v1`.
+- **Not committed.** The tree is uncommitted by choice; committing and tagging
+  were left for the user. Note the repo is on `main`.
+- **Still outstanding: the listening pass (A.R3.5).** Nobody has put ears on the
+  degraded audio. `results/audio/listen/` + `WHAT_TO_LISTEN_FOR.md`, ~10 minutes.
+  The unit tests prove the maths; only listening proves the *result*.
+
+---
+
+# Appendix D: ElevenLabs Scribe arm — the day-one gate (2026-08-05)
+
+## D.1 GATE RESULT: BLOCKED on the key, zero spend
+
+`scripts/probe_elevenlabs.py` (written, working, one clip / one call) cannot run.
+The vendor rejected the credential before ever looking at the audio:
+
+```
+HTTP 400  {"type":"authentication_error","code":"invalid_api_key",
+           "message":"API key must start with 'sk_'.",
+           "status":"invalid_api_key_prefix"}
+```
+
+The `.env` value is **64 characters and does not begin with `sk_`**. Verified it
+is not a parsing artifact — no stray quotes, no `export` prefix, and the
+`DEEPGRAM_API_KEY` in the same file parses and authenticates fine. **Nothing was
+spent.** Needs a fresh key from the ElevenLabs dashboard (Developers → API Keys).
+
+## D.2 What the docs say to expect (so the probe CONFIRMS a prediction)
+
+| question | answer | source |
+|---|---|---|
+| per-word confidence? | **YES — `logprob`**, inside `words[]` | API ref, `POST /v1/speech-to-text` |
+| scale | **[−∞, 0]**, higher = more confident — a genuine **log-probability**, not a [0,1] score | ditto |
+| batch model literal | **`scribe_v2`** (current flagship) | models overview |
+| streaming? | **YES — `scribe_v2_realtime`**, websocket, ~150 ms | realtime API ref |
+| streaming schema | **same per-word `logprob`**, in `CommittedTranscriptWithTimestamps` | ditto |
+| `scribe_v1` | **deprecated, removed 2026-07-09** — dead as of today | changelog 2026-06-08 |
+| price | **$0.22/hr batch**, $0.39/hr realtime | pricing/api |
+
+**Two traps recorded in the probe itself:**
+
+1. The **capabilities** page shows an abbreviated example response with **no
+   `logprob`**; the full API reference does list it. So the field's real presence
+   still needs one live call — documentation disagreement is exactly why the gate
+   is a probe and not a doc read.
+2. **`language_probability` is NOT per-word confidence.** It is a document-level
+   *language-detection* score on a 0–1 scale. Mistaking it for confidence would
+   assign every word in a clip the same value — a perfectly smooth, entirely
+   fake confidence signal that no test would catch. The probe prints it with a
+   warning label for exactly this reason.
+
+The probe deliberately has **no `scribe_v1` fallback**: v1 is removed, so falling
+back would convert one clear error into a second, more confusing one.
+
+## D.3 Cost is ~7× cheaper than budgeted
+
+At $0.22/hr batch and ~4 s/clip: the 10-clip subset (1,760 calls ≈ 2.0 hr audio)
+is **≈ $0.43**, and the full 40-clip grid (7,040 calls ≈ 7.8 hr) is **≈ $1.72** —
+against the ~$3 estimate. Cost is not a constraint on this arm; the gate is.
+
+## D.4 A decision this opens up (needs the user)
+
+`scribe_v2_realtime` exposes **the same per-word `logprob` over a websocket**.
+The current Deepgram arm uses the **pre-recorded** endpoint, so the grid today has
+**no genuinely streaming arm at all** — a framing gap the write-up handles by
+labelling arms honestly. An ElevenLabs realtime arm would be the project's first
+true streaming measurement with per-word confidence.
+
+That is a **larger** piece of work than the batch arm (websocket, realtime pacing,
+chunking) and it is **not** what was scoped. Default remains: **batch
+`scribe_v2`, labelled batch, exactly as the Whisper arm is labelled.** Flagging
+it because it is a genuine opportunity, not because it should be taken now.
+
+## D.5 Order of operations once a valid key lands (unchanged)
+
+1. Probe → yes/no on `logprob`, shown to the user before any adapter exists.
+2. Adapter to the existing return contract. If `logprob`, transform `exp(logprob)`
+   and keep it **strictly in its own scale** — never pool confidences across
+   vendors (the `within_model_conf_percentile` rule the Whisper/Vosk arms follow).
+3. **Normalization audit as a GATE**, before a single row enters `master`. Extend
+   `cross_model_norm.py` for Scribe's orthography and show the arm's WER shift is
+   **orthography, not accuracy** — the same trap that was worth 0.20–0.60 WER on
+   the Whisper arm and is indistinguishable from an acoustic effect once in the
+   table. Deepgram's shift was −0.014 (≈0, as predicted) and Whisper's +0.090;
+   Scribe's must be explainable in the same terms.
+4. Smoke-test one clip, then the 10-clip subset, verify, then decide on the grid.
+
+---
+
+# Appendix E: Invariant hardening — and three more real defects (2026-08-05)
+
+A systematic pass over every loader and merge path, after three defects of the
+same shape turned up in one session. **Three more latent defects were found**,
+not merely guarded against. All headline artifacts re-verified byte-identical.
+
+## E.1 The three defects
+
+**1. The Sobol partition check was defeated by exactly what it exists to catch.**
+`_check_partition` computed `worst = float(np.max(err))` then `if worst > tol:
+raise`. With a NaN anywhere in the response `worst` is `nan`, and **`nan > tol`
+is False** — so the guard *passes*, every Sobol index comes back `nan`, and the
+report prints `sum(S_u) = nan` as though it were a measurement. **The guard's
+success condition and its failure condition were indistinguishable.** This is
+the single sharpest example the project has produced, because it is the failure
+mode occurring *inside the instrument built to detect it*. The test now asserts
+explicitly that the bare threshold **would** have passed.
+
+**2. `rescore_cross_model` scored unknown clips against an empty reference.**
+`refs.get(r["clip_id"], "")` — and `cross_model_classify_errors("", hyp)` returns
+`wer=1.0, n_ref=0`. A clip-id typo or any manifest/table drift therefore produced
+a clean-looking **total model failure** that dragged the arm's cross-model mean
+toward 1.0, indistinguishable from a real acoustic collapse. Now raises, naming
+the offending ids.
+
+**3. `matched_arms`' equal-size check was blind to duplicates.** `common` is a
+**set** of cells, so a cell appearing twice in one arm contributes one set member
+and two rows. One duplicate per arm and `len(set(sizes.values())) == 1` still
+holds, while `condition_table` double-weights that clip and `n_clips` merely
+reads one higher. Replaced with the row-count identity `len(rows_m) ==
+len(common)` per arm.
+
+## E.2 Near-misses worth recording
+
+- **`edit_signature`'s `... or 1`** turned a zero denominator into a `0/0/0`
+  composition that reads as *"this model destroyed no words"* — the exact
+  inversion of *"there was nothing to score."*
+- **`split_robustness` guarded the dict field but not the SENTENCE.** The
+  verdict string interpolated an unguarded `np.median(all_diffs)`, so it could
+  print *"median paired difference nan"* as a measured tie.
+- **Duplicate seeds.** The AL arms are deterministic in the seed, so
+  `seeds=(0,0,0)` cleared the `MIN_SEEDS` gate and produced a **zero-width band
+  labelled "median over 3 seeds"** — a single-seed anecdote wearing the strongest
+  available form of the claim. Now rejected in both `seed_band` and
+  `multi_seed_curves`.
+- **`nan >= wer_hi` is False**, so an unmeasured cell silently counted as **not**
+  a dead zone *and* stayed in the denominator, diluting D1's headline rate. The
+  test measures the exact dilution: 0.333 → 0.311.
+
+## E.3 The structural fix
+
+`write_master` now **refuses to write** a table violating one-row-per-
+`(clip_id, condition_name, model)` at all. That is the origin of this entire
+family, and it is cheaper to refuse writing than to guard every reader — it also
+leaves nothing on disk to be misread later. `load_manifest` refuses duplicate
+ids (SPEC §12's unfixable bug: the later ground truth silently wins). `run_grid`
+asserts `len(out) == len(plan)` — a `None` row filtered out would shorten the
+table *exactly where harsh cells die*. `ResultCache` counts and **reports**
+superseded rows: report-and-proceed, since last-write-wins is deliberate there.
+
+23 guards, 9 new test functions across 7 suites. Every guard raises with the
+count identity, the worst offenders, and the likely cause. Every test constructs
+the violating input, asserts the raise, **and carries a negative control** so the
+guard is pinned to its violation rather than to some incidental property of the
+fixture.
+
+## E.4 Regression evidence
+
+Byte-identical after the pass: `sobol.json`, `sobol_5factor.json`, `screen.json`,
+`model_arms.{json,txt}`, `l3_decoupling.json`, `calibration.{json,txt}`.
+Headline numbers unchanged: rt60 S1 0.3466 / ST 0.4741, snr_db 0.3905 / 0.5025,
+`sum(S_u) = 1.0`; nova-3 WER 0.433 / dead-zone 1.14 %, whisper 0.996 / 39.20 %;
+ECE 0.0507 → 0.0346 → 0.0077. **21/21 suites green.**
+
+## E.5 The generalized lesson
+
+Every one of these six findings has the same shape: **a guard whose failure mode
+is silence.** `nan > tol`, `nan >= wer_hi`, `... or 1`, a set-based size check, a
+`.get(key, "")` default, a deterministic seed repeated three times. In each case
+the degenerate input produced not an error but a *plausible value* — and in two
+cases the plausible value was the more flattering one (no dead zone; no destroyed
+words). When writing a guard, ask what it returns for the degenerate input, not
+just for the good one.
