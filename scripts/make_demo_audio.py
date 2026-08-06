@@ -59,7 +59,7 @@ the only test that the composer produces something physically PLAUSIBLE. The
 unit tests prove the arithmetic; only ears prove the result.
 
 ------------------------------------------------------------------------------
-THREE CONSTRUCTION RULES, EACH LOAD-BEARING
+FIVE CONSTRUCTION RULES, EACH LOAD-BEARING
 ------------------------------------------------------------------------------
 1. NO NUMBER IS TYPED BY HAND. Every WER, confidence, transcript and CI in the
    generated markdown is read or recomputed from `results/master.csv` at build
@@ -82,7 +82,18 @@ THREE CONSTRUCTION RULES, EACH LOAD-BEARING
    stay in the parent directory. The blind order is a FROZEN constant, not a
    shuffle, so it is reviewable and cannot drift between runs.
 
-4. REGENERABLE AUDIO AND UNRECOVERABLE RECORD ARE NOT THE SAME ARTIFACT, and
+4. THE ONE JUDGEMENT THAT IS NOT IN master.csv IS STORED AS AN OBSERVATION, NOT
+   AS A CONSTANT. Which pair to open the exercise on came from a LISTENER, and
+   it used to be spelled `"role": "primary" if i <= 2 else "backup"` — a bare
+   constant whose owner, date and evidence were nowhere. When a session moved
+   pair 1 to last and the documents were hand-corrected, the constant was not,
+   so `manifest.json` (the machine-readable answer key) contradicted both
+   human-readable answer sheets and `--force-docs` would have rebuilt the sheets
+   from the stale constant. The record now lives in `LISTENER_SESSIONS` and the
+   order, the roles and the prose are all derived from it. See the block above
+   that constant for why a different constant would not have been a fix.
+
+5. REGENERABLE AUDIO AND UNRECOVERABLE RECORD ARE NOT THE SAME ARTIFACT, and
    this script used to treat them as if they were. The wavs rebuild from
    `master.csv` and the asset library in seconds. The markdown does not: two of
    these documents now carry a pre-registered prediction, its verbatim listener
@@ -140,7 +151,13 @@ LABEL_B = "babble-dominated"
 
 # Clips where the model scores A and B EXACTLY equal AND non-zero, so it is
 # equally WRONG on both. Verified against master.csv; the test re-verifies.
-PAIR_CLIPS = ["u40", "u21", "u26"]               # 3rd is the backup
+#
+# This is CONSTRUCTION order, not play order. It fixes the pair NUMBERS and
+# through them every working filename (`pair2_A_reverb_u21.wav`) and every entry
+# in BLIND_ORDER, so it must not be reordered — doing so would silently repoint
+# a KEY.md that someone has already printed. Which pair to PLAY FIRST is a
+# separate, derived thing: see LISTENER_SESSIONS below.
+PAIR_CLIPS = ["u40", "u21", "u26"]
 
 # The payoff. SNR 20 dB — QUIET. Ten of forty clips come back empty.
 COND_PAYOFF = "rt60-0.7_snr-20_babble_opus-lowrate_roll-1"
@@ -163,6 +180,300 @@ BLIND_ORDER = [
     "pair1_B_babble_u40",
     "pair3_A_reverb_u26",
 ]
+
+
+# --------------------------------------------------------------------------
+# THE PLAY ORDER IS AN EMPIRICAL RESULT, SO IT IS STORED AS ONE
+#
+# Which pair to open the exercise on is a judgement about a LISTENER, not about
+# the grid. Every other number in this generator is read or recomputed from
+# `results/master.csv` (construction rule 1); this one cannot be, because no
+# artifact in this repo knows what a person said.
+#
+# It used to be spelled `"role": "primary" if i <= 2 else "backup"` — a bare
+# constant with the judgement it encoded recorded nowhere. When the 2026-08-05
+# listening session called pair 1 marginal ("both pretty bad") and moved it to
+# last, `KEY.md` and `DEMO_SCRIPT.md` were hand-corrected and the constant was
+# not. So `manifest.json` — the MACHINE-readable answer key — disagreed with
+# both human-readable answer sheets, and `--force-docs` would have regenerated
+# the sheets FROM the stale constant, reverting a correction that a listener's
+# actual response had earned. The guard protects the files; it cannot protect
+# their content while the template is still wrong.
+#
+# Swapping in a different bare constant would only reset that clock. So the
+# OBSERVATION is stored and the ordering is derived from it:
+#
+#     recorded listener call  ->  play order  ->  role  ->  the prose
+#
+# Four consequences worth having. A second session is appended rather than
+# argued about, and supersedes without deleting. `manifest.json` now carries the
+# provenance of its own ordering, so the answer key says on whose authority it
+# is in that order. `--force-docs` reproduces the correction instead of
+# reverting it. And if the record is ever emptied, every pair reads `untested`
+# and the order degrades to construction order — the honest answer, rather than
+# a stale opinion with no owner.
+#
+# What is deliberately NOT derived from this: the sealed prediction in
+# `PREREGISTERED_PREDICTION.md` still names pairs 1 and 2, because that is what
+# was written down before anyone listened. A pre-registration that silently
+# re-orders itself to match the result is not a record of anything.
+# --------------------------------------------------------------------------
+
+CONFIDENT, MARGINAL, UNTESTED = "confident", "marginal", "untested"
+
+# Play the pairs that drew a confident call first. `sorted` is stable, so ties
+# keep construction order and the result is a total order that cannot drift
+# between runs — the same reason BLIND_ORDER is frozen rather than shuffled.
+PLAY_RANK = {CONFIDENT: 0, MARGINAL: 1, UNTESTED: 2}
+
+LISTENER_SESSIONS = (
+    {
+        "date": "2026-08-05",
+        "n_listeners": 1,
+        "blind_to_condition": True,
+        "naive_to_hypothesis": False,          # they knew what the project claims
+        "record": "results/audio/demo/PREREGISTERED_PREDICTION.md - OUTCOME",
+        # What the sealed prediction claimed, kept here so the per-pair scoring
+        # in the OUTCOME section is DERIVED by comparing it against `harder_arm`
+        # rather than typed as a verdict somebody has to keep in sync.
+        "predicted_harder_arm": "B",
+        "predicted_pairs": ("u40", "u21"),
+        "verbatim": (
+            "bro 3 and 7 are both pretty bad but honestly think that 7 is "
+            "better, not 100% eveyeron would agree with my decision tho. 6 "
+            "better than 1, but by a little gap that everyone would agree with. "
+            "i think 4 better than 8, others would say the same p sure."
+        ),
+        # clip_id -> the call. `harder_arm` is the arm they ranked HARDER; the
+        # listener named the EASIER clip of each pair, so these are the flip of
+        # their own words and the OUTCOME section says so out loud.
+        #
+        # `confidence` and `non_marginal` are DIFFERENT axes and are kept apart
+        # on purpose. `confidence` is how sure the listener was that others
+        # would agree — it is what the play order is sorted on. `non_marginal`
+        # is whether the call clears the prediction's own bar, the word
+        # "clearly harder". Pair `u21` is confident and NOT non-marginal ("a
+        # little gap that everyone would agree with"): everyone agrees, about a
+        # small difference. Collapsing the two would let the sealed prediction
+        # be scored leniently, which is exactly the flaw its OUTCOME section
+        # was written to name.
+        "calls": {
+            "u40": {"confidence": MARGINAL, "harder_arm": "A",
+                    "non_marginal": False,
+                    "said": "both pretty bad ... not 100% eveyeron would agree"},
+            "u21": {"confidence": CONFIDENT, "harder_arm": "B",
+                    "non_marginal": False,
+                    "said": "a little gap that everyone would agree with"},
+            "u26": {"confidence": CONFIDENT, "harder_arm": "A",
+                    "non_marginal": True,
+                    "said": "p sure others would say the same"},
+        },
+        # An observation made AFTER the result was in view. Recorded, with that
+        # label attached, precisely so it can never be quoted as the mechanism —
+        # the transcripts it refers to are pulled from the master table at build
+        # time so the observation stays checkable.
+        "post_hoc": {
+            "clip_id": "u40",
+            "easier_arm": "B",
+            "observation":
+                "the clip the listener preferred is the one whose transcript "
+                "KEPT the proper noun, while the clip they found harder mangled "
+                "it",
+            "why_recorded":
+                "it is checkable, and entity survival is a real axis elsewhere "
+                "in this project (D2: proper nouns are the most-destroyed word "
+                "class, 0.646) — not because it explains anything here",
+        },
+    },
+)
+
+ORDINAL = {1: "first", 2: "second", 3: "third", 4: "fourth", 5: "fifth"}
+
+
+def _ordinal(n: int) -> str:
+    return ORDINAL.get(int(n), f"{int(n)}th")
+
+
+def _and_list(items: list[str]) -> str:
+    items = [str(i) for i in items]
+    if not items:
+        return ""
+    if len(items) == 1:
+        return items[0]
+    return f"{', '.join(items[:-1])} and {items[-1]}"
+
+
+def listener_call(clip_id: str) -> dict:
+    """The latest recorded call for one clip, or an `untested` stub.
+
+    Latest wins, so appending a second session supersedes the first without the
+    first being deleted — the same superseding-forward discipline the OUTCOME
+    section of the prediction uses.
+    """
+    out = {"confidence": UNTESTED, "harder_arm": None, "non_marginal": None,
+           "said": None, "session": None}
+    for s in LISTENER_SESSIONS:
+        c = (s.get("calls") or {}).get(clip_id)
+        if c:
+            out = {"confidence": c.get("confidence", UNTESTED),
+                   "harder_arm": c.get("harder_arm"),
+                   "non_marginal": c.get("non_marginal"),
+                   "said": c.get("said"),
+                   "session": s.get("date")}
+    return out
+
+
+def play_order(clips: list[str] | None = None) -> list[str]:
+    """Clip ids in the order to PLAY them: most-confident call first."""
+    cl = list(PAIR_CLIPS if clips is None else clips)
+    return sorted(cl, key=lambda c: PLAY_RANK.get(
+        listener_call(c)["confidence"], PLAY_RANK[UNTESTED]))
+
+
+def pair_roles(clips: list[str] | None = None) -> dict[str, dict]:
+    """clip_id -> the derived presentation fields. Nothing here is hardcoded.
+
+    `role` is the coarse machine-readable form (`primary` when a listener made a
+    confident call on that pair, `reserve` otherwise); `play_position` and
+    `play_note` are the ordering; the `listener_*` fields are the evidence, so a
+    consumer that reads `role` can always find out who decided it and when.
+    """
+    order = play_order(clips)
+    n = len(order)
+    out: dict[str, dict] = {}
+    for pos, clip in enumerate(order, start=1):
+        call = listener_call(clip)
+        primary = call["confidence"] == CONFIDENT
+        if primary:
+            note = f"primary — play {_ordinal(pos)}"
+        elif pos == n:
+            note = f"{_ordinal(pos)} choice — play only if they want another"
+        else:
+            note = f"reserve — play {_ordinal(pos)}"
+        out[clip] = {
+            "role": "primary" if primary else "reserve",
+            "play_position": pos,
+            "play_note": note,
+            "listener_confidence": call["confidence"],
+            "listener_non_marginal": call["non_marginal"],
+            "listener_said": call["said"],
+            "listener_harder_arm": call["harder_arm"],
+            "listener_session": call["session"],
+        }
+    return out
+
+
+def by_play_order(pairs: list[dict]) -> list[dict]:
+    """Manifest pair records, in the order the run-of-show plays them."""
+    return sorted(pairs, key=lambda p: p.get("play_position", p["pair"]))
+
+
+def prediction_scorecard(m: dict) -> dict | None:
+    """The sealed prediction scored against the recorded calls — all derived.
+
+    Returns None when no session on record carries a prediction, which is the
+    state a fresh clip set is in. The templates then omit the outcome rather
+    than asserting one, because a pre-registration reported as open when it was
+    never run and one reported as open when it FAILED must not look the same.
+    """
+    sess = None
+    for s in m.get("listener_sessions", []):
+        if s.get("predicted_harder_arm") and s.get("calls"):
+            sess = s
+    if sess is None:
+        return None
+    pred = sess["predicted_harder_arm"]
+    named = set(sess.get("predicted_pairs") or ())
+    rows = []
+    for p in m["pairs"]:
+        arm = p.get("listener_harder_arm")
+        rows.append({
+            "pair": p["pair"], "clip_id": p["clip_id"],
+            "named": p["clip_id"] in named,
+            "harder_arm": arm,
+            "direction_hit": None if arm is None else (arm == pred),
+            "non_marginal": p.get("listener_non_marginal"),
+            "said": p.get("listener_said"),
+            "wer_A": p["A"]["wer"], "wer_B": p["B"]["wer"],
+        })
+    scored = [r for r in rows if r["harder_arm"] is not None]
+    n_hit = sum(1 for r in scored if r["direction_hit"])
+    # Scored against the prediction's OWN sentence — "a confident, immediate,
+    # NON-MARGINAL call in both pairs" — so a marginal call is a miss even when
+    # the direction is right. The generous 1-of-N reading is reported too, and
+    # labelled generous, because reporting only the flattering one is the
+    # failure this document exists to describe.
+    strict_failures = [r for r in rows if r["named"]
+                       and not (r["direction_hit"] and r["non_marginal"])]
+    return {
+        "session": sess,
+        "predicted_harder_arm": pred,
+        "predicted_label": LABEL_B if pred == "B" else LABEL_A,
+        "rows": rows,
+        "n_pairs": len(rows),
+        "n_scored": len(scored),
+        "n_direction_hit": n_hit,
+        "n_named": sum(1 for r in rows if r["named"]),
+        "n_strict_failures": len(strict_failures),
+        "strict_failures": strict_failures,
+        "held": bool(scored) and n_hit == len(scored),
+        "verdict": (
+            f"HELD on direction — the predicted direction held in "
+            f"{n_hit} of {len(scored)} pairs"
+            if scored and n_hit == len(scored) else
+            f"FAILED on direction — the predicted direction held in "
+            f"{n_hit} of {len(scored)} pairs"),
+    }
+
+
+def _order_phrase(nums: list[int]) -> str:
+    if not nums:
+        return "(no pairs)"
+    if len(nums) == 1:
+        return f"pair {nums[0]}"
+    head = ", then ".join(f"pair {n}" for n in nums[:-1])
+    return f"{head}, pair {nums[-1]} {_ordinal(len(nums))}"
+
+
+def listener_ordering_note(m: dict) -> str:
+    """The paragraph that explains the play order, derived from the record.
+
+    Every branch here is reachable: no session at all (the record emptied, or a
+    fresh set of clips), all confident, or a mix. The no-session branch is the
+    important one — it says the ordering is arbitrary rather than implying a
+    judgement nobody made.
+    """
+    ordered = by_play_order(m["pairs"])
+    nums = [p["pair"] for p in ordered]
+    conf = [p["pair"] for p in ordered if p["listener_confidence"] == CONFIDENT]
+    soft = [p for p in ordered if p["listener_confidence"] != CONFIDENT
+            and p["listener_confidence"] != UNTESTED]
+    sess = [s for s in m.get("listener_sessions", []) if s.get("calls")]
+
+    if not conf and not soft:
+        return ("Play order is construction order — **no listening session is on "
+                "record for these clips**, so no pair is marked primary and the "
+                "ordering below carries no judgement. Add a session to "
+                "`LISTENER_SESSIONS` in `scripts/make_demo_audio.py` and the "
+                "order, the roles and this paragraph all follow from it.")
+
+    head = (f"Play order is **{_order_phrase(nums)}** — see `DEMO_SCRIPT.md` §2. "
+            f"All {'three' if len(nums) == 3 else len(nums)} carry identical "
+            f"evidential weight (the model scores every pair exactly equal); the "
+            f"ordering is about the listener.")
+    # "The one session run so far" is only true while there IS one. A second
+    # listener would otherwise be silently narrated away.
+    when = (f"The one session run so far ({sess[0]['date']})" if len(sess) == 1
+            else f"The {words(len(sess))} sessions on record")
+    if not soft:
+        return (f"{head} No pair drew a hedged call in the session record, so "
+                f"nothing is held back.")
+    hedged = _and_list([f"pair {p['pair']}" for p in soft])
+    said = soft[0]["listener_said"]
+    return (f"{head} {when} drew confident calls on "
+            f"{_and_list(['pair %d' % n for n in conf])} and a hedge on {hedged}"
+            + (f' ("{said}")' if said else "")
+            + f", so {hedged} is no longer opened on.")
 
 
 # --------------------------------------------------------------------------
@@ -352,11 +663,17 @@ def build_manifest(made: dict, rows: dict, stats: dict, assets) -> dict:
             "rir_key": r["rir_key"], "noise_key": r["noise_key"],
         }
 
+    # `role`, `play_position` and `play_note` are DERIVED from the recorded
+    # listener calls (see LISTENER_SESSIONS), never hardcoded. The
+    # `listener_*` fields travel with them so that a consumer reading `role`
+    # cannot quote it without also being handed the evidence behind it — the
+    # same redundancy-makes-a-silent-error-loud argument as SPEC C.5.
+    roles = pair_roles()
     pairs = []
     for i, clip in enumerate(PAIR_CLIPS, start=1):
         pairs.append({
             "pair": i, "clip_id": clip, "ref": refs[clip],
-            "role": "primary" if i <= 2 else "backup",
+            **roles[clip],
             "A": cell(COND_A, clip, f"pair{i}_A_reverb_{clip}"),
             "B": cell(COND_B, clip, f"pair{i}_B_babble_{clip}"),
         })
@@ -381,6 +698,22 @@ def build_manifest(made: dict, rows: dict, stats: dict, assets) -> dict:
         },
         "paired_result": stats,
         "pairs": pairs,
+        # The ordering, and the human record it is derived from. `manifest.json`
+        # is deliberately NOT guarded by write_doc — it is regenerable output,
+        # not an unrecoverable record — and it is only regenerable because the
+        # judgement it carries lives in the generator rather than only in prose.
+        "play_order": [p["pair"] for p in by_play_order(pairs)],
+        "play_order_derivation":
+            "Play order and each pair's `role` are DERIVED from the recorded "
+            "listener calls in `listener_sessions`: a pair that drew a "
+            "confident call is played first, ties keep construction order. "
+            "Empty that record and every pair reads `untested`, no pair is "
+            "primary, and the order falls back to construction order. "
+            "Hardcoding it is what let this file disagree with KEY.md and "
+            "DEMO_SCRIPT.md after the 2026-08-05 session.",
+        "listener_sessions": [
+            {k: (list(v) if isinstance(v, tuple) else v) for k, v in s.items()}
+            for s in LISTENER_SESSIONS],
         "payoff": {
             "clip_id": PAYOFF_CLIP,
             "ref": refs[PAYOFF_CLIP],
@@ -585,6 +918,28 @@ def room_name(rir_filename: str) -> str:
     return stem.replace("_", " ") or Path(rir_filename).stem
 
 
+_NUMBER_WORD = {1: "one", 2: "two", 3: "three", 4: "four", 5: "five",
+                6: "six", 7: "seven", 8: "eight", 9: "nine", 10: "ten"}
+
+
+def words(n: int) -> str:
+    """`3 -> 'three'`. Small counts read as digits look like measurements in a
+    document whose every digit IS one; spelled out, prose stays prose."""
+    return _NUMBER_WORD.get(int(n), str(int(n)))
+
+
+def para(text: str, width: int = 78) -> str:
+    """Re-wrap an interpolated paragraph. Same reason as `quote()`: the template
+    cannot know how wide a substituted number or a listener's quote will be."""
+    return "\n".join(textwrap.wrap(" ".join(text.split()), width=width))
+
+
+def bullet(text: str, width: int = 78) -> str:
+    """`para()` for a markdown list item, with the hanging indent."""
+    return "\n".join(textwrap.wrap(" ".join(text.split()), width=width,
+                                   initial_indent="- ", subsequent_indent="  "))
+
+
 def quote(text: str, width: int = 76) -> str:
     """
     Re-wrap an interpolated paragraph into a markdown blockquote.
@@ -604,11 +959,291 @@ def quote(text: str, width: int = 76) -> str:
     return "\n".join(out)
 
 
+ARM_LABEL = {"A": LABEL_A, "B": LABEL_B}
+
+
+def _prediction_outcome(m: dict, sc: dict, s: dict) -> str:
+    """The OUTCOME section, rendered from the recorded session.
+
+    Every cell of the scoring table is derived — the direction column is
+    `harder_arm == predicted_harder_arm`, not a ✅ somebody typed — so the table
+    cannot drift out of agreement with the record it scores. That is the same
+    argument as `gap = mean_conf - (1 - wer)` being stored alongside its inputs
+    (SPEC C.5): a derived field that can be recomputed is what makes a wrong one
+    loud.
+    """
+    sess = sc["session"]
+    by_clip = {p["clip_id"]: p for p in m["pairs"]}
+    pred = sc["predicted_harder_arm"]
+    n_miss = sc["n_scored"] - sc["n_direction_hit"]
+
+    rows, maps = [], []
+    for r in sc["rows"]:
+        p = by_clip[r["clip_id"]]
+        tag = ("(named)" if r["named"] else
+               "(backup, not named in the prediction)")
+        want = (f"`{p[pred]['blind'].removesuffix('.wav')}` = **{pred}** "
+                f"{ARM_LABEL[pred]}" if r["named"] else
+                f"— (pattern implies **{pred}** {ARM_LABEL[pred]})")
+        arm = r["harder_arm"]
+        got = (f"`{p[arm]['blind'].removesuffix('.wav')}` = **{arm}** "
+               f"{ARM_LABEL[arm]}" if arm else "— no call")
+        direction = ("✅ as predicted" if r["direction_hit"]
+                     else "❌ **OPPOSITE**" if arm else "—")
+        rows.append(
+            f"| {r['pair']} {tag} | `{r['clip_id']}` | {want} | {got} | "
+            f"{direction} | \"{r['said'] or ''}\" | "
+            f"{r['wer_A']:.3f} / {r['wer_B']:.3f} |")
+        for a in ("A", "B"):
+            maps.append(f"`{p[a]['blind'].removesuffix('.wav')}` = "
+                        f"`{Path(p[a]['file']).stem}`")
+
+    strict = sc["strict_failures"]
+    if strict:
+        why = "; ".join(
+            f"pair {r['pair']} on "
+            + ("**direction**" if not r["direction_hit"] else "**magnitude**")
+            for r in strict)
+        strict_line = bullet(
+            f"**Scored strictly against the prediction's own sentence** — \"a "
+            f"confident, immediate, **non-marginal** call in **both** pairs\" — "
+            f"it fails in {words(len(strict))} of the {words(sc['n_named'])} "
+            f"named pairs: {why}. A marginal call is a miss when the sentence "
+            f"says \"clearly harder\". The {sc['n_direction_hit']}-of-"
+            f"{sc['n_scored']} figure is the generous reading.")
+    else:
+        strict_line = bullet(
+            "Scored strictly against the prediction's own sentence — \"a "
+            "confident, immediate, non-marginal call in both pairs\" — every "
+            "named pair clears the bar.")
+
+    verdict_lines = "\n".join([
+        bullet(f"**The predicted direction held in {sc['n_direction_hit']} of "
+               f"{sc['n_scored']} pairs.** The listener found the "
+               f"**{ARM_LABEL['A' if pred == 'B' else 'B']}** arm harder in "
+               f"{words(n_miss)} of them."),
+        strict_line,
+        bullet(f"**The predicted mechanism is refuted at these settings.** The "
+               f"prediction rested on informational masking from competing "
+               f"speech overwhelming the precedence effect. At **DRR "
+               f"{m['conditions']['A']['drr_db']:+.2f} dB** it did not: heavy "
+               f"reverberation was judged harder than "
+               f"{num(m['conditions']['B']['snr_db'])} dB babble in "
+               f"{words(n_miss)} of {words(sc['n_scored'])} pairs. The mechanism "
+               f"may still hold at milder DRR — this says nothing about that — "
+               f"but it does not hold where it was predicted to."),
+    ])
+
+    arm_defs = para(
+        f"`A` = {LABEL_A} (`{m['conditions']['A']['name']}`, "
+        f"{room_name(m['conditions']['A']['room'])}, measured RT60 "
+        f"{m['conditions']['A']['rt60_measured']:.3f} s, **DRR "
+        f"{m['conditions']['A']['drr_db']:+.2f} dB**, babble at "
+        f"{num(m['conditions']['A']['snr_db'])} dB SNR — i.e. quiet). "
+        f"`B` = {LABEL_B} (`{m['conditions']['B']['name']}`, "
+        f"{room_name(m['conditions']['B']['room'])}, measured RT60 "
+        f"{m['conditions']['B']['rt60_measured']:.3f} s, **DRR "
+        f"{m['conditions']['B']['drr_db']:+.2f} dB**, babble at "
+        f"{num(m['conditions']['B']['snr_db'])} dB SNR — i.e. buried).")
+
+    survives = para(
+        f"**The listener had a stated preference in {words(sc['n_scored'])} of "
+        f"{words(sc['n_pairs'])} pairs, and the model scores each of those pairs "
+        f"exactly equal** — "
+        + ", ".join(f"{r['wer_A']:.3f}/{r['wer_B']:.3f}" for r in sc["rows"])
+        + " (read from `results/master.csv`, not from this file's history).")
+
+    measured = para(
+        f"**The measured half is untouched, as designed.** Recomputed from "
+        f"`results/master.csv` ({s['n_clips']} clips, {MODEL}): mean WER A "
+        f"**{s['mean_wer_A']:.6f}**, mean WER B **{s['mean_wer_B']:.6f}**, "
+        f"paired difference **{s['paired_diff_A_minus_B']:+.7f}**, 95 % CI "
+        f"**[{s['ci_lo']:+.7f}, {s['ci_hi']:+.7f}]** — "
+        f"{s['n_resamples']:,}-resample paired bootstrap over "
+        f"{s['resample_unit']}s, seed {s['seed']}, and it "
+        f"{'spans' if s['spans_zero'] else 'does NOT span'} zero. **Nothing the "
+        f"listener said moves this number**, which is the whole reason the two "
+        f"halves were labelled separately in the sealed text above.")
+
+    ph = sess.get("post_hoc") or {}
+    post_hoc = ""
+    if ph and ph.get("clip_id") in by_clip:
+        p = by_clip[ph["clip_id"]]
+        easy = ph.get("easier_arm", "B")
+        hard = "A" if easy == "B" else "B"
+        post_hoc = f"""
+## POST-HOC — a hypothesis, explicitly not a finding
+
+⚠️ **Generated after seeing the result. It is not evidence. Do not present it
+as an explanation.**
+
+{para(f"In pair {p['pair']}, {ph['observation']} — verified against "
+      f"`results/master.csv`:")}
+
+- reference: `{p['ref']}`
+- `{p[hard]['blind'].removesuffix('.wav')}` ({ARM_LABEL[hard]}, ranked HARDER):
+  `{p[hard]['transcript']}`
+- `{p[easy]['blind'].removesuffix('.wav')}` ({ARM_LABEL[easy]}, ranked easier):
+  `{p[easy]['transcript']}`
+
+{para(f"Both score WER {p['A']['wer']:.3f}. **The listener was judging audio, "
+      f"not transcripts, and never saw either transcript**, so any link between "
+      f"their preference and the entity outcome is speculation on n=1. It is "
+      f"recorded because {ph['why_recorded']}.")}
+"""
+
+    return f"""
+---
+
+# OUTCOME — tested {sess['date']}
+
+*The sealed record above — the prediction and its outcome rubric — is
+**unaltered**. The only additions above this line are the status banner and the
+suffix on the title, both purely additive, so that a reader cannot reach the
+prediction without meeting its verdict. Everything below is the result, and
+every cell of it is derived from the session recorded in `LISTENER_SESSIONS`
+(`scripts/make_demo_audio.py`) joined to `results/master.csv` — nothing here is
+typed, so it cannot drift out of agreement with the record it scores.*
+
+## The listener response, verbatim
+
+{para(f"{words(sess['n_listeners']).capitalize()} listener, one sitting. They "
+      f"were given `blind/BLIND_SHEET.md` and nothing else, and wrote their "
+      f"rankings before this file was opened. Quoted unedited, typos included, "
+      f"because a cleaned-up quote is a paraphrase:")}
+
+{quote(f'"{sess["verbatim"]}"')}
+
+"Better" here means *easier to understand* — the listener is naming the easier
+clip of each pair, so the **other** clip is the one they ranked harder.
+
+## Per-pair scoring
+
+{arm_defs}
+
+| pair | clip | predicted harder | listener ranked harder | direction | listener's own words on strength | model WER (A / B) |
+|---|---|---|---|---|---|---|
+{chr(10).join(rows)}
+
+Blind-name mappings, from `KEY.md` / `manifest.json:blind_map`:
+{' · '.join(maps)}.
+
+## Verdict: **{sc['verdict']}**
+
+{verdict_lines}
+
+## What survives — stated precisely, with nothing added
+
+{survives}
+
+So this claim stands:
+
+> **A human and the model disagree about which clip is worse.**
+
+And this one does **not**:
+
+> ~~And here is why: the precedence effect makes reverb cheap for humans and
+> informational masking makes competing speech expensive.~~
+
+The demo was rebuilt around the surviving claim. `DEMO_SCRIPT.md` is
+**direction-agnostic**: the interviewer ranks first, then learns the model has
+no preference. That works whichever way anyone hears it, and it is stronger for
+not depending on a direction chosen in advance.
+
+{measured}
+
+## The flaw in this document — worth more than the prediction was
+
+The sealed **"What each outcome means"** section listed exactly two outcomes:
+
+- listener ranks them **unequal** → prediction holds;
+- listener ranks them **equal** → prediction fails.
+
+**It never considered "unequal, but backwards."** That is a real design flaw,
+not a technicality, and it has a concrete consequence:
+
+{quote(f"**Under the rubric as written, this result scores as a PASS.** The "
+       f"listener did rank every pair unequal. Meanwhile the prediction "
+       f"*sentence* — which named a direction — was wrong in {words(n_miss)} "
+       f"pairs out of {words(sc['n_scored'])}.")}
+
+A rubric whose outcomes do not span what can actually be observed is a rubric
+that cannot fail, and a pre-registration that cannot fail is decoration. The gap
+between the sentence and the rubric is precisely the gap that lets someone score
+a miss as a hit — including in perfectly good faith, months later, from a file
+that looks rigorous.
+
+**Rule adopted from this, for any future pre-registration in this repo:**
+
+1. **Enumerate outcomes over the full observable space**, not over the two the
+   author has in mind. Here that is at minimum: *predicted direction* /
+   *opposite direction* / *no preference* / *inconsistent across pairs* — and
+   the last is what actually happened.
+2. **The decision rule must be fixed in advance and must be able to fail.**
+   Compare SPEC section 5's `rt60 x snr_db` registration, which fixed a numeric
+   threshold, a CI condition and a rank check before any data existed — and was
+   confirmed by clearing them, not by being re-read leniently.
+3. **Score the prediction's sentence, not a looser paraphrase of it.** If the
+   sentence says "non-marginal", a marginal call is a miss.
+
+This entry is the deliverable. A pre-registration that failed and is written
+down is worth more than one that "held" because nobody wrote down what holding
+meant.
+{post_hoc}
+## Provenance of this section
+
+Listener response: transcribed verbatim from the session and stored in
+`LISTENER_SESSIONS` in `scripts/make_demo_audio.py`, which is also where the
+per-pair calls live — so this section is regenerated from the record rather than
+retyped beside it, and a regeneration reproduces the outcome instead of erasing
+it. Blind mappings: `manifest.json:blind_map`. WERs, transcripts, confidences
+and the paired bootstrap: recomputed from `results/master.csv` at build time.
+No number in this section was copied from a progress log — SPEC C.7 records what
+that costs.
+"""
+
+
 def write_prediction(m: dict, *, force_docs: bool = False) -> str:
     s = m["paired_result"]
-    p1, p2 = m["pairs"][0], m["pairs"][1]
-    txt = f"""# Pre-registered prediction — SEALED
+    sc = prediction_scorecard(m)
 
+    # The two pairs the prediction NAMED — read from the record, not from the
+    # play order. The sealed text must reproduce what was written down before
+    # anyone listened; a pre-registration that re-orders itself to match the
+    # result is not a record of a prediction.
+    by_clip = {p["clip_id"]: p for p in m["pairs"]}
+    if sc:
+        named = [by_clip[c] for c in sc["session"]["predicted_pairs"] if c in by_clip]
+    else:
+        named = []
+    if len(named) < 2:
+        named = m["pairs"][:2]
+    p1, p2 = named[0], named[1]
+
+    title = "# Pre-registered prediction — SEALED"
+    banner = ""
+    if sc:
+        n_miss = sc["n_scored"] - sc["n_direction_hit"]
+        harder_label = sc["predicted_label"]
+        other_label = LABEL_A if sc["predicted_harder_arm"] == "B" else LABEL_B
+        title = ("# Pre-registered prediction — SEALED · "
+                 + ("**TESTED · HELD**" if sc["held"] else "**TESTED · FAILED**"))
+        banner = "\n" + quote(
+            f"⚠️ **STATUS {sc['session']['date']} — THIS PREDICTION HAS BEEN "
+            f"TESTED.** Verdict: **{sc['verdict']}.** The listener found the "
+            f"*{other_label}* arm harder in {words(n_miss)} of "
+            f"{words(sc['n_scored'])} pairs; the prediction said the "
+            f"*{harder_label}* arm would be harder.\n\n"
+            f"**The sealed text below is unchanged and is not to be edited** — "
+            f"it is the record of what was committed before anyone listened. "
+            f"The result is appended in **OUTCOME** at the end of this file. "
+            f"Superseding forward, never backward. Read OUTCOME before quoting "
+            f"anything above it.") + "\n"
+
+    outcome = _prediction_outcome(m, sc, s) if sc else ""
+
+    txt = f"""{title}
+{banner}
 Do not show this, or say it aloud, until the listener has ranked the clips.
 Announcing a prediction before someone judges is a demand characteristic; this
 project's whole subject is not fooling yourself with a number you wanted.
@@ -624,7 +1259,7 @@ Written before any listener heard anything. The blind names are frozen in
 > pairs.
 >
 > The model scores the two clips within each of those pairs **EXACTLY equal**
-> (pair 1: {p1['A']['wer']:.3f} vs {p1['B']['wer']:.3f}; pair 2:
+> (pair {p1['pair']}: {p1['A']['wer']:.3f} vs {p1['B']['wer']:.3f}; pair {p2['pair']}:
 > {p2['A']['wer']:.3f} vs {p2['B']['wer']:.3f}), and across all
 > {s['n_clips']} clips the paired difference is {s['paired_diff_A_minus_B']:+.4f} WER,
 > 95% CI [{s['ci_lo']:+.4f}, {s['ci_hi']:+.4f}] — spanning zero.
@@ -639,7 +1274,7 @@ Written before any listener heard anything. The blind names are frozen in
 
 The prediction is about a human. The confidence interval is about the model.
 Only one of those two things is a measurement.
-"""
+{outcome}"""
     write_doc(DEMO_DIR / "PREREGISTERED_PREDICTION.md", txt, force_docs=force_docs)
     return txt
 
@@ -700,9 +1335,17 @@ def write_key(m: dict, *, force_docs: bool = False) -> str:
         "## Per-clip facts (all from `results/master.csv`)",
         "",
     ]
+    # Wrapped after interpolation for the same reason `quote()` exists: the
+    # pair numbers and the listener's own words have unpredictable width.
+    lines += textwrap.wrap(listener_ordering_note(m), width=78)
+    lines.append("")
+    # Sections stay in PAIR-NUMBER order — the numbers are what the blind sheet
+    # and the filenames use — and each one carries its play position. Reordering
+    # the sections would make `pair2_A_reverb_u21.wav` the first heading and
+    # every reference to "pair 1" ambiguous.
     for p in m["pairs"]:
         lines += [
-            f"### Pair {p['pair']} — `{p['clip_id']}` ({p['role']})",
+            f"### Pair {p['pair']} — `{p['clip_id']}` ({p['play_note']})",
             "",
             f"- reference: `{p['ref']}`",
             f"- **A** {p['A']['blind']} — WER **{p['A']['wer']:.3f}**, "
@@ -755,9 +1398,13 @@ def pair_listing(p: dict) -> list[str]:
 
 def write_blind_sheet(m: dict, *, force_docs: bool = False) -> str:
     pay = m["payoff"]
+    # Rows in PLAY order, keeping the pair NUMBERS as labels. A listener works a
+    # sheet top to bottom, so listing pair 1 first while the run-of-show opens on
+    # pair 2 quietly hands back the ordering the listening session earned. The
+    # numbers stay put because they are what `DEMO_SCRIPT.md` and `KEY.md` name.
     rows = "\n".join(
         f"| {p['pair']} | `{a}` and `{b}` |"
-        for p in m["pairs"] for a, b in [pair_listing(p)])
+        for p in by_play_order(m["pairs"]) for a, b in [pair_listing(p)])
     first, second = sorted([pay["clean_blind"], pay["deadzone_blind"]])
     txt = f"""# Listening sheet
 
@@ -786,12 +1433,182 @@ Write your ranking down before we discuss any of it.
     return txt
 
 
+def _play_line(ordered: list[dict]) -> str:
+    """The one bolded instruction in section 2, built from the derived order."""
+    primaries = [p for p in ordered if p["role"] == "primary"]
+    reserves = [p for p in ordered if p["role"] != "primary"]
+    if not primaries:
+        return ("**No listening session is on record for these clips, so play "
+                "them in any order — nothing below encodes a judgement about "
+                "which pair lands hardest.**")
+    lbl = lambda p: f"pair {p['pair']} (`{p['clip_id']}`)"      # noqa: E731
+    if len(primaries) == 1:
+        lead = f"{lbl(primaries[0])} first"
+    else:
+        lead = (f"{lbl(primaries[0])} first, then "
+                + ", then ".join(lbl(p) for p in primaries[1:]))
+    tail = ""
+    if reserves:
+        rs = _and_list([lbl(p) for p in reserves])
+        rs = rs[0].upper() + rs[1:]
+        tail = (f" {rs} is the {_ordinal(reserves[0]['play_position'])} if they "
+                f"want one." if len(reserves) == 1 else
+                f" {rs} are held back unless they want more.")
+    return f"**Play {lead}.{tail}**"
+
+
 def write_demo_script(m: dict, *, force_docs: bool = False) -> str:
     s = m["paired_result"]
     A, B = m["conditions"]["A"], m["conditions"]["B"]
-    p1, p2, p3 = m["pairs"]
     pay = m["payoff"]
     verdict = "spans zero" if s["spans_zero"] else "does NOT span zero"
+
+    # Everything about ORDER comes from the derived fields, never from the
+    # position of a pair in m["pairs"] — that is construction order, and reading
+    # it as play order is the defect this section was rewritten to remove.
+    ordered = by_play_order(m["pairs"])
+    sc = prediction_scorecard(m)
+    n_pairs = len(m["pairs"])
+    ties = " · ".join(f"pair {p['pair']}: {p['A']['wer']:.3f} / {p['B']['wer']:.3f}"
+                      for p in m["pairs"])
+    wer_rows = "\n".join(
+        f"| {p['pair']} | `{p['clip_id']}` | **{p['A']['wer']:.3f}** "
+        f"| **{p['B']['wer']:.3f}** |" for p in ordered)
+    transcripts = "\n".join(
+        f"- `{p['clip_id']}` reference: `{p['ref']}`\n"
+        f"  - reverb: `{p['A']['transcript']}`\n"
+        f"  - babble: `{p['B']['transcript']}`" for p in ordered)
+
+    conf = [p["pair"] for p in ordered if p["listener_confidence"] == CONFIDENT]
+    soft = [p for p in ordered if p["listener_confidence"] == MARGINAL]
+    conf_txt = _and_list(["pair %d" % n for n in conf])
+    soft_txt = _and_list(["pair %d" % p["pair"] for p in soft])
+    if conf and soft:
+        rationale = (
+            f"The ordering is about the *listener*, not the data: in the one "
+            f"session run so far, {conf_txt} drew confident calls, while "
+            f"{soft_txt} drew the least confident one "
+            f"(\"{soft[0]['listener_said']}\"). Opening on the pair most likely "
+            f"to produce a hedge wastes the strongest moment of the segment.")
+    elif conf:
+        rationale = ("No pair drew a hedged call in the session record, so "
+                     "nothing is held back.")
+    else:
+        rationale = ("No listening session is on record for these clips, so the "
+                     "order carries no judgement — do not present it as one.")
+    rank_para = para(
+        f"All {words(n_pairs)} carry identical evidential weight — the model "
+        f"scores every pair **exactly** equal ({ties}). {rationale}")
+
+    if sc:
+        n_miss = sc["n_scored"] - sc["n_direction_hit"]
+        revised = quote(
+            f"⚠️ **REVISED after the prediction in "
+            f"`PREREGISTERED_PREDICTION.md` was tested on "
+            f"{sc['session']['date']} and FAILED (direction held in "
+            f"{sc['n_direction_hit']} of {sc['n_scored']} pairs).** This segment "
+            f"is **direction-agnostic**: the listener ranks, then learns the "
+            f"model has no preference. That works whichever way anyone hears "
+            f"it. The earlier version led with the pair that drew the least "
+            f"confident call and asserted a precedence-effect / "
+            f"informational-masking mechanism that the listening pass "
+            f"**refuted** — both are gone.\n\n"
+            f"The revision lives in the generator template "
+            f"(`scripts/make_demo_audio.py`), not only in this file, so a "
+            f"regeneration reproduces it instead of reverting it. The play "
+            f"order and each pair's role are derived from the recorded listener "
+            f"calls; they are not hardcoded.")
+        outcome_block = f"""Now open `PREREGISTERED_PREDICTION.md` and show the OUTCOME section. Deliver
+this rather than skipping it — it is the strongest 20 seconds in the segment:
+
+{quote(f'''
+"I did pre-register which way I thought a listener would go: that the
+{sc['predicted_label']} clip would be the harder one. The listener I ran this on
+before you went the *other* way in {n_miss} of the {sc['n_scored']} pairs. So the
+direction is not established, and rather than quietly re-score it, the miss is
+written under the sealed text with the verdict on it.
+
+The rubric I wrote had exactly two outcomes — 'they rank them unequal' and
+'they rank them equal.' It never considered 'unequal, but backwards.' Under my
+own rubric this scores as a **pass**, because they did rank them unequal. That
+is a rubric that cannot fail, and this project is entirely about not fooling
+yourself with a number you wanted.
+
+What survived is the half that never depended on the direction: a stated human
+preference in {sc['n_scored']} pairs out of {n_pairs} — one of them hedged — and
+a model with none."
+''')}
+
+### Do NOT repair the story on stage
+
+The tempting move, the moment someone says they found the reverberant clip
+harder, is to reach for the DRR number: *"of course — that room is at
+{A['drr_db']:+.2f} dB DRR."* **Do not deliver that as the explanation.** It is
+post-hoc: the human-side prediction was made in the opposite direction and lost,
+DRR is simply the first number to hand that fits the result now in view, and
+n=1 cannot adjudicate between the two stories. Presenting it as the mechanism is
+exactly the move the failed prediction should have made you distrust.
+
+If you want to raise it at all, raise it labelled:
+
+{quote('''
+"Something I'd want to test — and to be clear, this is a hypothesis I formed
+*after* seeing the result, not a finding — is whether a listener's ranking
+tracks direct-to-reverberant ratio rather than RT60, the way the model's errors
+do. That is a proper listening study, and I haven't run it."
+''')}
+
+### If they ask why you kept a failed prediction in the repo
+
+{quote('''
+"Because a pre-registration whose result isn't recorded is worse than none —
+anyone who finds it later assumes it was never run, or assumes it held. It cost
+me a mechanism I liked and bought a better finding: the flaw was in my outcome
+table, not in the listener."
+''')}
+"""
+        zero_note = (
+            para(f"**Do not make a new directional prediction on stage.** The "
+                 f"file already carries a tested outcome: it predicted *which* "
+                 f"clip a listener would find harder, and was wrong in "
+                 f"{n_miss} of {sc['n_scored']} pairs. That failure is recorded "
+                 f"under the sealed text and you are going to show it in "
+                 f"section 4. The claim this segment rests on does not need a "
+                 f"direction, so do not stake one.")
+            + "\n\nThe only thing worth predicting out loud is the part that "
+              "replicated:\n\n"
+            + quote("\"I've written down what I expect to happen — that you'll "
+                    "have a preference in each pair. You'll see the file in a "
+                    "minute, including the part of it I got wrong.\""))
+        honest_extra = (
+            f"It is also **not replicated in direction.** I pre-registered "
+            f"which way a listener would go and got it wrong in {n_miss} of "
+            f"{sc['n_scored']} pairs. What repeated was only that there *was* a "
+            f"preference, in {words(sc['n_scored'])} pairs out of "
+            f"{words(n_pairs)} — and one of those was hedged.\n\n")
+        backwards_fallback = bullet(
+            f"**They rank the reverb clip harder** (i.e. the opposite of the "
+            f"sealed prediction — this is what the one listener so far did, in "
+            f"{n_miss} of {sc['n_scored']} pairs): **nothing changes.** Section "
+            f"4 does not depend on the direction. Say so, then show the recorded "
+            f"outcome: \"that's the direction I got wrong, and it's written "
+            f"down.\" Do **not** improvise a DRR explanation on the spot.") + "\n"
+    else:
+        revised = ("> ℹ️ **No listening session is on record for these clips.** "
+                   "The pre-registered prediction in "
+                   "`PREREGISTERED_PREDICTION.md` is OPEN — it has not been "
+                   "tested. Do not present it as though it had.")
+        outcome_block = para(
+            "The prediction in `PREREGISTERED_PREDICTION.md` has not been tested "
+            "against a listener yet, so there is no outcome to show. Open it "
+            "after they rank, read it as written, and record what happened in "
+            "`LISTENER_SESSIONS` in `scripts/make_demo_audio.py`, so the next "
+            "regeneration of this file carries the result.") + "\n"
+        zero_note = para(
+            "Open it after they have ranked, not before — announcing a "
+            "prediction first is a demand characteristic.")
+        honest_extra = ""
+        backwards_fallback = ""
 
     txt = f"""# DEMO_SCRIPT — the listening exercise (~3 minutes)
 
@@ -799,13 +1616,16 @@ Presenter's run-of-show. Everything here is offline: play wavs from
 `blind/`, read from this file. No network, no API key.
 
 **Hand over:** `blind/` only (8 wavs + `BLIND_SHEET.md`).
-**Keep back:** this file, `KEY.md`, `PREREGISTERED_PREDICTION.md`.
+**Keep back:** this file, `KEY.md`, `PREREGISTERED_PREDICTION.md`,
+`REGENERATION_HAZARD.md` (it names the conditions too).
 The working filenames in the parent directory say `reverb` and `babble`; a
 listener who sees them has been told the answer.
 
+{revised}
+
 ---
 
-## 0. Before they listen (10 s) — write the prediction down, do not say it
+## 0. Before they listen (10 s) — show the sealed file, do not say what is in it
 
 Open `PREREGISTERED_PREDICTION.md`, show that it exists, and **leave it closed**.
 Saying a prediction out loud before someone judges is a demand characteristic.
@@ -814,9 +1634,7 @@ pre-registered in SPEC section 5 before any real audio existed, and confirmed on
 the real grid at ST-S1 = 0.128 [0.091, 0.164]. Same discipline, three minutes
 instead of three weeks.
 
-One line to say out loud:
-
-> "I have written down what I think you'll say. You'll see it in a minute."
+{zero_note}
 
 ---
 
@@ -832,16 +1650,21 @@ Give them `blind/BLIND_SHEET.md`. Two rules only:
 
 ## 2. They listen and rank (60 s)
 
-Pairs 1 and 2 are the primary evidence — clips `{p1['clip_id']}` and
-`{p2['clip_id']}`, the two the model scores exactly equal. Pair 3
-(`{p3['clip_id']}`) is a backup if someone wants a third. Let them finish every
-ranking before you say anything at all.
+{_play_line(ordered)}
+
+{rank_para}
+
+**Do not steer, and do not react.** Let them finish every ranking before you
+say anything at all. It does not matter which way they go — section 4 is
+written so that any confident ranking lands, and so is the one they might not
+make (see Fallbacks).
 
 ---
 
 ## 3. The reveal (45 s)
 
-Open `PREREGISTERED_PREDICTION.md`. Then:
+Leave `PREREGISTERED_PREDICTION.md` closed for one more minute — it comes out
+in section 4. Reveal the conditions first:
 
 {quote(f'''
 "Those two clips are not the same degradation. One is a bad ROOM but quiet:
@@ -859,10 +1682,9 @@ else is moving between them."
 Then the numbers — read them exactly:
 
 {quote(f'''
-"On the clip you just heard, the model scored them **identically**: WER
-{p1['A']['wer']:.3f} and {p1['B']['wer']:.3f}. Not close — equal. And not equal
-because it got both right: it got both **wrong**, by the same amount, in
-different places.
+"On the pair you just heard, the model scored them **identically**. Not close —
+equal. And not equal because it got both right: it got both **wrong**, by the
+same amount, in different places.
 
 Across all {s['n_clips']} clips: the reverb condition means WER
 **{s['mean_wer_A']:.4f}**, the babble condition **{s['mean_wer_B']:.4f}**. The
@@ -872,43 +1694,51 @@ paired difference is **{s['paired_diff_A_minus_B']:+.4f}**, 95% CI
 Statistically indistinguishable."
 ''')}
 
-Show the transcripts if there's a screen — they make the point better than the
-scalar does, because the two conditions fail in different *shapes*:
+Per-pair WER, whichever ones you played, in play order (reverb arm / babble arm):
 
-- `{p1['clip_id']}` reference: `{p1['ref']}`
-  - reverb: `{p1['A']['transcript']}`
-  - babble: `{p1['B']['transcript']}`
-- `{p2['clip_id']}` reference: `{p2['ref']}`
-  - reverb: `{p2['A']['transcript']}`
-  - babble: `{p2['B']['transcript']}`
+| pair | clip | reverb arm | babble arm |
+|---|---|---|---|
+{wer_rows}
+
+Show the transcripts if there's a screen — they make the point better than the
+scalar does, because equal WER is arrived at by damaging different words:
+
+{transcripts}
+
+{para(f"⚠️ **Do not generalize an edit-type signature from these "
+      f"{words(n_pairs)} clips.** Here the reverb arm happens to substitute and "
+      f"the babble arm to delete, but that is {words(n_pairs)} clips and it runs "
+      f"**opposite** to the grid-level fingerprint, where `rt60 >= 0.7` drives "
+      f"**deletions** — see `results/fingerprints.txt`, which is the measured "
+      f"statement and this is not. Use the transcripts to show *that* the damage "
+      f"differs, not to claim *how* it differs.")}
 
 ---
 
-## 4. The mechanism (30 s)
+## 4. The disagreement, and the prediction I got wrong (40 s)
+
+**This section is deliberately direction-agnostic. It does not matter which
+clip they picked.**
 
 {quote('''
-"You found one of them clearly harder. You have two priors the model does not.
+"You had a preference. The model does not — it scores that pair equal, and
+across all the clips the difference is indistinguishable from zero.
 
-**The precedence effect.** Your auditory system fuses a direct sound with the
-reflections arriving in the first few tens of milliseconds and localizes to the
-direct one — plus you have a lifetime of adapting to rooms. Reverb is close to
-free for you.
-
-**Informational masking.** Competing speech does not merely cover the signal,
-it competes for the same linguistic machinery. That is brutal for you in a way
-that broadband noise at the same SNR is not.
-
-The model has neither prior. To it both of these are just damage, and the damage
-happens to be the same size."
+Notice what that argument does *not* rest on: which of the two you picked. Any
+confident human ranking of that pair is a ranking the model does not share."
 ''')}
 
-Tie it to the study's own reverb result if there is time:
+{outcome_block}
+### The model-side reverb result, which IS measured
+
+Keep this on the model side of the line and it stands on its own — it is a grid
+result, not an inference about the listener:
 
 {quote(f'''
-"And the model is not tracking RT60 either. Across the four reverb levels in the
+"The model is not tracking RT60 either. Across the four reverb levels in the
 grid, the Spearman correlation of measured RT60 with WER is **+0.800** — but
-with direct-to-reverberant ratio it is **-1.000**. The clip you just heard is
-the extreme case: {room_name(A['room'])}, DRR {A['drr_db']:+.2f} dB against
+with direct-to-reverberant ratio it is **-1.000**. The pair you just heard is
+the extreme case: {room_name(A['room'])} at DRR {A['drr_db']:+.2f} dB against
 {room_name(B['room'])} at {B['drr_db']:+.2f} dB. RT60 is the number every reverb
 benchmark is parameterised by, and it mislabels the acoustics that actually get
 delivered."
@@ -943,21 +1773,30 @@ watching confidence sees nothing at all."
 {quote(f'''
 "Two halves here, and they are not the same kind of thing.
 
-**The human half is n=1, unblinded to the task, one listener, one speaker, one
-accent. It is an intuition pump, not a measurement.** You knew you were being
-tested. I chose the three clips *because* the model tied on them. The clips are
-not level-matched, and with three pairs I cannot balance presentation order —
-one pair plays the reverb arm first, two play it second.
+**The human half is an intuition pump, not a measurement — and here is every
+reason it is not one.** It is **n=1**: one listener, one speaker, one accent, one
+sitting. They were blind to *which clip was which condition*, but **not naive to
+the hypothesis** — they knew what this project claims, which is the kind of thing
+that moves a judgement. The clips are **not level-matched** (they are
+byte-identical to what the model was scored on, and a cosmetic gain would break
+that). **Presentation order is not counterbalanced** — with {words(n_pairs)}
+pairs it cannot be; one pair plays the reverb arm first, the rest play it second.
+And I **selected these {words(n_pairs)} clips precisely because the model tied on
+them**, which is a defensible choice for a demonstration and an indefensible one
+for an estimate.
 
-**The measured half is the model-side paired result and its interval:**
-{s['paired_diff_A_minus_B']:+.4f} WER, CI [{s['ci_lo']:+.4f}, {s['ci_hi']:+.4f}],
-over all {s['n_clips']} clips, {s['n_resamples']:,} resamples. That half is not
-selected and not affected by anything you just said. It would read the same if
-you had ranked them the other way round, or refused to rank them at all.
+{honest_extra}**The measured half is the model-side paired result and its
+interval:** {s['paired_diff_A_minus_B']:+.4f} WER, CI
+[{s['ci_lo']:+.4f}, {s['ci_hi']:+.4f}], over all {s['n_clips']} clips,
+{s['n_resamples']:,} resamples, resampled over {s['resample_unit']}s, seed
+{s['seed']}. That half is not selected and not affected by anything you just
+said. It would read the same if you had ranked them the other way round — which
+is what actually happened last time — or refused to rank them at all.
 
-Doing the human side properly is a listening study: many listeners, randomized
-order, level-matched stimuli, a real intelligibility score. That is exactly the
-experiment this project does not have, and the limitations section says so."
+Doing the human side properly is a listening study: many listeners naive to the
+hypothesis, randomized and counterbalanced order, level-matched stimuli, a real
+intelligibility score. That is exactly the experiment this project does not have,
+and the limitations section says so."
 ''')}
 
 ---
@@ -979,9 +1818,17 @@ with headphones, you are measuring the wrong system."
 
 - **No speakers / bad room:** skip to section 3 and show the transcripts. The
   measured half needs no audio at all.
-- **They rank the pair EQUAL:** the prediction failed — say so plainly, it costs
-  nothing. The CI is unchanged, and "my n=1 intuition pump didn't fire" is a
-  cheaper thing to lose than credibility.
+{backwards_fallback}- **They rank the pair EQUAL, or say "I can't call it":** say plainly that the
+  human half didn't fire this time, which costs nothing. The measured half is
+  untouched. Then pivot to section 5 — the payoff clip needs no ranking at all:
+  a human can obviously still hear speech, and the model returned an empty
+  string.
+- **They rank confidently but inconsistently across pairs** (one each way): that
+  is the honest state of the human evidence and it is fine to say so. The
+  model-side claim is per-pair and holds in all {words(n_pairs)}.
+- **They ask what you predicted, before ranking:** don't tell them. Say "after
+  you've called it" — announcing it first is a demand characteristic, which is
+  the reason the file is sealed in the first place.
 - **They want to hear the factors separately:** `isolation/` is the ladder,
   `00_RAW_original` to `10_destroyed`, one factor at a time. See
   `WHAT_TO_LISTEN_FOR.md`.
@@ -989,10 +1836,19 @@ with headphones, you are measuring the wrong system."
 ## Provenance
 
 Every number above is read or recomputed from `results/master.csv` at build
-time by `scripts/make_demo_audio.py` — none is typed into this file. The wavs
-are bit-identical to what nova-3 transcribed: `apply_condition` is seeded from
-the condition name and the writer is the grid's own `write_degraded_wav`.
-Regenerate with:
+time by `scripts/make_demo_audio.py` — none is typed into this file.
+
+{para(f"The one thing in this document that does **not** come from the master "
+      f"table is the **play order**, and it cannot: it is a judgement about a "
+      f"listener. It is derived from the calls recorded in `LISTENER_SESSIONS` "
+      f"in that same script ("
+      + (f"session {sc['session']['date']}" if sc else "no session on record")
+      + "), so it has an owner and a date rather than being an ordering nobody "
+        "can account for. Change the record and this file changes with it.")}
+
+The wavs are bit-identical to what nova-3 transcribed: `apply_condition` is
+seeded from the condition name and the writer is the grid's own
+`write_degraded_wav`. Regenerate with:
 
     ./.venv/bin/python scripts/make_demo_audio.py --force
 

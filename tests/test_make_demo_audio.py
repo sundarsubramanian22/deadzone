@@ -52,6 +52,7 @@ import ast
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -74,6 +75,35 @@ OUTCOME_SENTINELS = {
                                     "FAILED on direction"),
     "DEMO_SCRIPT.md": ("The disagreement, and the prediction I got wrong",),
 }
+
+
+def _build_sandbox(root: Path, script_patches: list[tuple[str, str]] | None = None
+                   ) -> Path:
+    """A throwaway repo root holding a COPY of `results/audio/demo/`.
+
+    `scripts/` is symlinked when unpatched and copied when a mutation is asked
+    for, so the mutation lives only inside the sandbox and the real generator is
+    never edited by a test.
+    """
+    (root / "results" / "audio").mkdir(parents=True)
+    for name in ("data", "recording_manifest.csv", "deadzone"):
+        os.symlink(REPO / name, root / name)
+    if script_patches:
+        shutil.copytree(REPO / "scripts", root / "scripts")
+        src_path = root / "scripts" / "make_demo_audio.py"
+        src = src_path.read_text()
+        for old, new in script_patches:
+            assert old in src, (
+                f"the mutation anchor is gone from make_demo_audio.py, so this "
+                f"negative control is no longer reintroducing the defect it "
+                f"claims to — update it:\n{old}")
+            src = src.replace(old, new, 1)
+        src_path.write_text(src)
+    else:
+        os.symlink(REPO / "scripts", root / "scripts")
+    os.symlink(REPO / "results" / "master.csv", root / "results" / "master.csv")
+    shutil.copytree(DEMO, root / "results" / "audio" / "demo")
+    return root / "results" / "audio" / "demo"
 
 
 class TheGuard(unittest.TestCase):
@@ -364,6 +394,215 @@ class TheAuthoredRecord(unittest.TestCase):
                                 cwd=sb, capture_output=True, text=True, timeout=600)
             self.assertEqual(r2.returncode, 0, r2.stderr[-3000:])
             self.assertNotIn("REFUSING to overwrite", r2.stdout)
+
+
+class ThePlayOrderIsDerivedFromTheListenerRecord(unittest.TestCase):
+    """
+    The second regression of the same family, and it survived the first fix.
+
+    `write_doc` made the DOCUMENTS safe. It did nothing for the TEMPLATES. After
+    the 2026-08-05 session called pair 1 marginal and `KEY.md` / `DEMO_SCRIPT.md`
+    were hand-corrected to lead with pairs 2 and 3, the generator still carried
+    `"role": "primary" if i <= 2 else "backup"` and still printed "Pairs 1 and 2
+    are the primary evidence" — so `manifest.json`, the machine-readable answer
+    key, disagreed with both human-readable answer sheets, and `--force-docs`
+    would have rebuilt the sheets FROM the stale constant. The guard protects the
+    file; it cannot protect the content while the template is still wrong.
+
+    So the ordering is now derived from `LISTENER_SESSIONS`, and what is asserted
+    here is the DERIVATION, not the current answer: the expectation below is
+    recomputed from the record with a deliberately separate implementation, so a
+    future session that appends a listener moves the test's expectation with it
+    instead of breaking a hardcoded [2, 3, 1].
+    """
+
+    # The mutation that reinstates the pre-2026-08-06 behaviour EXACTLY: play
+    # order = construction order, and the first two pairs are primary regardless
+    # of what anyone said. Applied to a sandbox copy for the negative control.
+    OLD_HARDCODED_ROLE = [
+        ("    return sorted(cl, key=lambda c: PLAY_RANK.get(\n"
+         "        listener_call(c)[\"confidence\"], PLAY_RANK[UNTESTED]))",
+         "    return cl                      # OLD: construction order"),
+        ('        primary = call["confidence"] == CONFIDENT',
+         "        primary = pos <= 2         # OLD: 'primary' if i <= 2"),
+    ]
+
+    @classmethod
+    def setUpClass(cls):
+        if not DEMO.is_dir():
+            raise unittest.SkipTest(f"{DEMO} not present")
+
+    # --- the expectation, recomputed from the record -----------------------
+
+    @staticmethod
+    def expected_order() -> list[str]:
+        """Clip ids in play order, derived from `LISTENER_SESSIONS` here rather
+        than by calling `mda.play_order()` — a test that asks the code under test
+        what the answer is cannot fail."""
+        calls = {}
+        for s in mda.LISTENER_SESSIONS:
+            calls.update(s.get("calls") or {})
+        rank = {mda.CONFIDENT: 0, mda.MARGINAL: 1, mda.UNTESTED: 2}
+        return sorted(mda.PAIR_CLIPS,
+                      key=lambda c: rank[calls.get(c, {}).get("confidence",
+                                                              mda.UNTESTED)])
+
+    @staticmethod
+    def recorded_confidence(clip: str) -> str:
+        for s in reversed(mda.LISTENER_SESSIONS):
+            c = (s.get("calls") or {}).get(clip)
+            if c:
+                return c["confidence"]
+        return mda.UNTESTED
+
+    def assert_kit_agrees_with_the_record(self, demo: Path, *,
+                                          check_blind_sheet: bool = True):
+        """Every artifact in the kit tells the same story about which pair leads.
+
+        Raises AssertionError on any disagreement — which is what the negative
+        control below asserts it does.
+
+        `check_blind_sheet=False` is for the LIVE kit only. `blind/BLIND_SHEET.md`
+        on disk predates the play-order fix and is `authored` (no recorded hash),
+        so the generator will not touch it without `--force-docs` — and running
+        that against the live kit is precisely what the guard exists to prevent
+        being done casually. The row-order guarantee is therefore asserted where
+        it is actually a guarantee: on a fresh `--force-docs` regeneration.
+        """
+        want = self.expected_order()
+        m = json.loads((demo / "manifest.json").read_text(encoding="utf-8"))
+        by_clip = {p["clip_id"]: p for p in m["pairs"]}
+        num = {c: by_clip[c]["pair"] for c in want}
+
+        # 1. the machine-readable key
+        self.assertEqual(m["play_order"], [num[c] for c in want],
+                         "manifest.json play_order disagrees with the record")
+        for clip, p in by_clip.items():
+            conf = self.recorded_confidence(clip)
+            self.assertEqual(p["role"], "primary" if conf == mda.CONFIDENT
+                             else "reserve",
+                             f"{clip}: role does not follow its recorded call "
+                             f"({conf}) — it is hardcoded again")
+            self.assertEqual(p["listener_confidence"], conf)
+        self.assertEqual(self.recorded_confidence(want[0]), mda.CONFIDENT,
+                         "the exercise opens on a pair the listener hedged on")
+
+        # 2. the presenter's answer sheet
+        key = (demo / "KEY.md").read_text(encoding="utf-8")
+        for clip, p in by_clip.items():
+            self.assertIn(f"### Pair {p['pair']} — `{clip}` ({p['play_note']})",
+                          key, "KEY.md's per-pair annotation is not the derived "
+                               "play_note")
+        self.assertIn(f"pair {num[want[0]]}, then pair {num[want[1]]}", key,
+                      "KEY.md's stated play order disagrees with the record")
+
+        # 3. the run-of-show. Position within section 2, not mere presence: the
+        #    old template named every clip too, just in the wrong order.
+        script = (demo / "DEMO_SCRIPT.md").read_text(encoding="utf-8")
+        sec2 = script.split("## 2. They listen and rank")[1].split("\n## ")[0]
+        seen = [c for c in re.findall(r"u\d\d", sec2)]
+        self.assertEqual(seen[:len(want)], want,
+                         f"DEMO_SCRIPT section 2 presents the pairs as {seen} — "
+                         f"the record says {want}")
+
+        # 4. the listener's own sheet, which they work top to bottom
+        if check_blind_sheet:
+            sheet = (demo / "blind" / "BLIND_SHEET.md").read_text(encoding="utf-8")
+            rows = re.findall(r"^\| (\d) \| `blind", sheet, flags=re.M)
+            self.assertEqual([int(r) for r in rows], [num[c] for c in want],
+                             "BLIND_SHEET rows are not in play order, so a "
+                             "listener working down the page undoes the ordering")
+
+    # --- the live kit ------------------------------------------------------
+
+    def test_the_kit_on_disk_agrees_with_the_record(self):
+        self.assert_kit_agrees_with_the_record(DEMO, check_blind_sheet=False)
+
+    def test_emptying_the_record_degrades_to_construction_order(self):
+        """The degenerate input (SPEC E.5). With nothing recorded, the honest
+        answer is 'no judgement here', not a stale opinion with no owner."""
+        saved = mda.LISTENER_SESSIONS
+        try:
+            mda.LISTENER_SESSIONS = ()
+            self.assertEqual(mda.play_order(), list(mda.PAIR_CLIPS))
+            roles = mda.pair_roles()
+            self.assertEqual({r["role"] for r in roles.values()}, {"reserve"})
+            self.assertEqual({r["listener_confidence"] for r in roles.values()},
+                             {mda.UNTESTED})
+        finally:
+            mda.LISTENER_SESSIONS = saved
+        # Control: with the record restored, a pair IS primary again — so the
+        # `reserve` above is caused by the empty record, not by pair_roles()
+        # being unable to produce a primary at all.
+        self.assertIn("primary", {r["role"] for r in mda.pair_roles().values()})
+
+    # --- the regression, and its mutation control --------------------------
+
+    def _regenerate(self, patches=None) -> tuple[Path, subprocess.CompletedProcess]:
+        td = tempfile.mkdtemp(prefix="deadzone-playorder-")
+        self.addCleanup(shutil.rmtree, td, ignore_errors=True)
+        demo = _build_sandbox(Path(td), patches)
+        r = subprocess.run([PY, "scripts/make_demo_audio.py", "--force-docs"],
+                           cwd=td, capture_output=True, text=True, timeout=600)
+        self.assertEqual(r.returncode, 0, r.stdout[-3000:] + r.stderr[-3000:])
+        return demo, r
+
+    def test_force_docs_reproduces_the_correction_instead_of_reverting_it(self):
+        """
+        THE regression. `--force-docs` rebuilds every document from the
+        templates, which is exactly the path that would have restored guidance a
+        listener's response contradicts. Run against a COPY, never the live kit:
+        those files carry a verbatim listener response that derives from no
+        artifact, and a regeneration already destroyed that record once.
+        """
+        master = REPO / "results" / "master.csv"
+        if not master.is_file() or not (REPO / "data" / "recordings").is_dir():
+            self.skipTest("needs results/master.csv and data/ to run the generator")
+
+        demo, r = self._regenerate()
+        self.assertIn("OVERWRITING hand-edited", r.stdout,
+                      "--force-docs did not actually rewrite anything, so this "
+                      "proves nothing about what the templates produce")
+        self.assert_kit_agrees_with_the_record(demo)
+
+        # And the listener-outcome material is REPRODUCED, not merely tolerated:
+        # a template that dropped the failed prediction would leave the file
+        # reading as an OPEN one, which is worse than no record at all.
+        for name, sentinels in OUTCOME_SENTINELS.items():
+            text = (demo / name).read_text(encoding="utf-8")
+            for sentinel in sentinels:
+                self.assertIn(sentinel, text,
+                              f"--force-docs regenerated {name} without {sentinel!r}")
+        pred = (demo / "PREREGISTERED_PREDICTION.md").read_text(encoding="utf-8")
+        self.assertIn("bro 3 and 7 are both pretty bad", pred,
+                      "the verbatim listener response did not survive")
+        script = (demo / "DEMO_SCRIPT.md").read_text(encoding="utf-8")
+        for refuted in ("precedence effect", "informational masking"):
+            self.assertNotIn(
+                refuted, script,
+                f"--force-docs put the refuted {refuted!r} mechanism back into "
+                f"the run-of-show — REGENERATION_HAZARD.md names this as the "
+                f"post-regeneration check")
+
+    def test_negative_control_the_old_hardcoded_role_fails_this(self):
+        """
+        The mutation control. Restore the two lines that made the ordering a
+        bare constant — nothing else — and the assertions above must fail.
+        Without this the test could be passing on some incidental property of
+        the fixture rather than on the ordering actually being derived.
+        """
+        master = REPO / "results" / "master.csv"
+        if not master.is_file() or not (REPO / "data" / "recordings").is_dir():
+            self.skipTest("needs results/master.csv and data/ to run the generator")
+
+        demo, _ = self._regenerate(self.OLD_HARDCODED_ROLE)
+        m = json.loads((demo / "manifest.json").read_text(encoding="utf-8"))
+        self.assertEqual([p["role"] for p in m["pairs"]],
+                         ["primary", "primary", "reserve"],
+                         "the mutation did not reinstate the old hardcoded role, "
+                         "so this control is not testing what it claims")
+        with self.assertRaises(AssertionError):
+            self.assert_kit_agrees_with_the_record(demo)
 
 
 if __name__ == "__main__":
