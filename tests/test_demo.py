@@ -325,9 +325,25 @@ class Artifacts(unittest.TestCase):
         for target in ("help:", "test:", "demo-break:", "demo-al:", "dashboard:", "demo:"):
             self.assertIn(f"\n{target}", "\n" + mk, f"Makefile has no {target} target")
 
-    def test_readme_has_the_three_command_section(self):
+    def test_readme_tells_a_reader_how_to_run_the_demo(self):
+        """The README must carry the demo entry points, and say they run offline.
+
+        This used to assert one heading string ("Run the demo in three
+        commands"). That pinned the WORDING, not the property: rewriting the
+        section broke the test while the README still documented the demo
+        perfectly, and the only available fix was to restore a sentence for the
+        test's benefit. So the assertion is now the invariant a reader needs --
+        the commands themselves, plus the offline claim that is the whole point
+        of the kit -- and it stays true across any rewrite that keeps them.
+        """
         rd = (REPO / "README.md").read_text()
-        self.assertIn("Run the demo in three commands", rd)
+        for cmd in ("make demo", "make demo-check", "make test"):
+            self.assertIn(cmd, rd, f"README no longer documents `{cmd}`")
+        self.assertRegex(
+            rd, r"(?i)offline",
+            "README no longer says the demo runs offline -- that claim is the "
+            "reason the kit is built the way it is, and it is what a reader "
+            "checks before turning wifi off")
 
     def test_requirements_lock_exists_and_pins_versions(self):
         p = REPO / "requirements.lock.txt"

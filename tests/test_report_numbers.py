@@ -144,8 +144,22 @@ UNDERSTANDING = "report/UNDERSTANDING.md"
 # deliberately NOT pinned, and neither are the passages where it records a
 # disagreement with the write-up: that document exists partly to disagree, and a
 # pin there would delete the disagreement rather than check it.
+#
+# report/INTERVIEW_INTERNAL.md is here for the same reason as UNDERSTANDING.md,
+# with one twist that makes it MORE important rather than less: it is a private
+# document, so nobody but its author will ever read it, and an unread document
+# is where a stale number survives longest. It is also the only document in the
+# repo written to be READ ALOUD from — a figure that drifts here is spoken, not
+# published, and cannot be corrected by a later reader. Its cue cards and its
+# numbers card are pinned to the SAME artifact objects the write-up is pinned to,
+# so the script and the deliverable cannot disagree. Its own commentary (the
+# threshold-box persistence figures, the re-derived cell-wise bootstrap
+# comparison, the prose in the disagreement table) has no artifact and is
+# deliberately NOT pinned — that document exists partly to record disagreements,
+# and pinning them would delete them rather than check them.
 STATUS = "report/STATUS.md"
-DOCS = [WRITEUP, README, UNDERSTANDING, STATUS]
+INTERVIEW_INTERNAL = "report/INTERVIEW_INTERNAL.md"
+DOCS = [WRITEUP, README, UNDERSTANDING, STATUS, INTERVIEW_INTERNAL]
 
 # Tolerances, named by the decimal place the prose rounds to. A figure printed
 # to 3 dp is pinned to half a unit in the last place, so 0.8294 -> "0.829"
@@ -1439,12 +1453,50 @@ def checks_clean_baseline():
     ]
 
 
-def checks_readme():
-    """README.md — the summary document, pinned to the write-up's own artifacts.
+def _master_census():
+    """(total rows, failed rows, distinct clips, distinct conditions) in master.csv.
 
-    Only figures whose artifact the write-up already reads are pinned, and they
-    are read from the SAME objects, so a number that drifts in one document and
-    not the other fails here rather than being discovered by a reader.
+    Counted rather than read from a summary: the README's scale callouts are the
+    first numbers anyone sees, and a partial re-run that shortened the table is
+    exactly the drift SPEC J.5 records.
+    """
+    path = "results/master.csv"
+    if not os.path.exists(path):
+        raise MissingArtifact(path)
+    n = n_failed = 0
+    clips, conds = set(), set()
+    with open(path, newline="", encoding="utf-8") as fh:
+        for r in csv.DictReader(fh):
+            n += 1
+            if str(r["failed"]).strip().lower() in ("true", "1"):
+                n_failed += 1
+            clips.add(r["clip_id"])
+            conds.add(r["condition_name"])
+    return n, n_failed, len(clips), len(conds)
+
+
+def checks_readme():
+    """README.md — the external artifact, pinned to the same artifact objects.
+
+    A summary drifts *away from* its body in one direction: toward the stronger
+    claim. This document is the first thing an outsider reads and it carries the
+    headline, the three-arm table, the fingerprints and the appendix of things
+    that did not work — so every load-bearing figure in it is re-read from the
+    file that produced it, and the two documents cannot disagree without a
+    failure here.
+
+    THREE THINGS ARE PINNED THAT ARE NOT NUMBERS OF THE FIRST KIND, because they
+    are the claims a summary most wants to round off:
+
+      * the dead-zone COUNT is pinned alongside the THRESHOLD SWEEP that shows
+        the count is an operating point (13 / 2 / 0 across one notch), so a later
+        edit cannot keep the count and drop the fragility;
+      * the POPULATION of every three-arm figure (the 10-clip subset) is pinned
+        against `arm_census`, and nova-3's two dead-zone rates (1.14 % over 40
+        clips, 0.57 % over 10) are pinned SEPARATELY against their own artifacts;
+      * the ACTIVE-LEARNING result is pinned as the null it is — seeds reaching
+        target on both arms, plus the permutation control that killed its own
+        obvious fix.
     """
     if not os.path.exists(README):
         raise MissingArtifact(README)
@@ -1455,92 +1507,614 @@ def checks_readme():
     pm = m["per_model"]
     ma = "results/model_arms.json [per_model]"
     al = _read_json("results/al_savings.json")
-    _pm3, common, _clips = _three_arm_populations()
+    drr = _read_json("results/al_drr.json")["controls"]["control_a_permutation"]
+    s2r = _read_json("results/sim2real.json")["nova-3"]["headline"]
+    cal = {row["model"]: row for row in _read_json("results/calibration.json")["cross_arm"]}
+    blocked = {row["model"]: row
+               for row in _read_json("results/calibration.json")["blocked_arms"]}
+    fp = _read_json("results/fingerprints.json")["by_model"]["nova-3"]
+    delb = _read_json("results/calibration.json")["deletion_blindness"]
+    conf = _read_json("results/confidence_char.json")["by_model"]["nova-3"]
+    dzs = _read_json("results/dead_zone_sensitivity.json")["per_model"]["nova-3"]
+    man = _read_json("results/MANIFEST.json")
+    n_rows, n_failed, n_clips, n_conds = _master_census()
 
     n_mute = int(_grab(b, r"(\d+) conditions silent on EVERY clip"))
     n_cond = int(_grab(b, r"conditions: (\d+)"))
+    n_ref = float(delb["n_ref_words"])
+    ent = fp["entities"]["overall"]
+    cls = fp["inventory"]["by_class"]
+
+    # the threshold-sensitivity row the README quotes: wer_hi = 0.30 (the
+    # published operating point), read by INDEX INTO THE GRID rather than by
+    # position, so a re-sweep on a different box fails loudly instead of
+    # silently re-labelling three other cells.
+    wrow = dzs["wer_grid"].index(dzs["default"]["wer_hi"])
+    ccol = {v: i for i, v in enumerate(dzs["conf_grid"])}
+    surface = dzs["surface"][wrow]
 
     def C(key, patterns, expected, tol, source, where):
         return Check(key, patterns, expected, tol, source, where, doc=README)
 
     out = [
+        # ---- §3 scale callouts ------------------------------------------
+        C("README total scored rows",
+          [r"= \*\*([\d,]+) scored transcriptions\*\*",
+           r"<b>([\d,]+)</b><br/>scored rows",
+           r"results/master\.csv<br/>([\d,]+) rows"],
+          n_rows, EXACT, "results/master.csv [row count]", "§3 scale"),
+        C("README failed rows",
+          [r"<sub>(\d+) failures = \d\.\d+%</sub>"],
+          n_failed, EXACT, "results/master.csv [rows with failed=True]", "§3 scale"),
+        C("README utterances",
+          [r"<b>(\d+)</b><br/>utterances"],
+          n_clips, EXACT, "results/master.csv [distinct clip_id]", "§1 / §3"),
+        C("README conditions",
+          [r"<b>(\d+)</b><br/>conditions"],
+          n_conds, EXACT, "results/master.csv [distinct condition_name]", "§3 scale"),
+        C("README total API calls",
+          [r"<b>([\d,]+)</b><br/>API calls"],
+          float(man["cost"]["total_calls"]), EXACT,
+          "results/MANIFEST.json cost.total_calls", "§3 scale"),
+        C("README total spend",
+          [r"<b>\$([\d.]+)</b><br/>total spend"],
+          float(man["cost"]["usd_total_est"]), TOL2,
+          "results/MANIFEST.json cost.usd_total_est", "§3 scale"),
+        C("README clean-condition WER floor",
+          [r"clean-condition WER \*\*([\d.]+)%\*\*"],
+          100.0 * float(man["corpus"]["clean_wer_floor"]), TOL2,
+          "results/MANIFEST.json corpus.clean_wer_floor", "§3 scale"),
+
+        # ---- §4 the listening beat --------------------------------------
+        C("README A/B: drenched-but-quiet WER",
+          [r"SNR 20 dB \| \*\*([\d.]+)\*\* \|"],
+          _ab_pair()["mean_A"], TOL3,
+          "results/master.csv [rt60-1_snr-20_babble_none_roll-0, 40 clips]", "§4"),
+        C("README A/B: dry-but-buried WER",
+          [r"SNR 0 dB \| \*\*([\d.]+)\*\* \|"],
+          _ab_pair()["mean_B"], TOL3,
+          "results/master.csv [rt60-0.2_snr-0_babble_none_roll-0, 40 clips]", "§4"),
+        C("README A/B: paired difference",
+          [r"paired difference \*\*−([\d.]+)\*\*, 95% CI",
+           r"paired difference −([\d.]+) WER"],
+          abs(_ab_pair()["diff"]), TOL2,
+          "results/master.csv [A - B, paired over 40 clips]", "§4"),
+        C("README A/B: clips scoring identically",
+          [r"\*\*(\d+) of 40\*\* clips exactly equal",
+           r"(\d+) of 40 clips score identically"],
+          float(_ab_pair()["n_same"]), EXACT,
+          "results/master.csv [clips with zero paired difference]", "§4"),
+
+        # ---- §5 the headline, threshold-free first ----------------------
         C("README D1 spearman, paired",
-          [r"\*\*Spearman ρ = (−?-?[\d.]+)\*\*"],
+          [r"<b>ρ = (−?-?[\d.]+)</b>"],
           float(_grab(b, r"global spearman\(conf_pct, WER_spoke\) = (-?[\d.]+)")),
-          TOL3, cg + " global spearman(conf_pct, WER_spoke)", "headline result"),
+          TOL3, cg + " global spearman(conf_pct, WER_spoke)", "§5 headline"),
         C("README D1 spearman, all-clips",
-          [r"spoke on; (−?-?[\d.]+)\s+> against every clip"],
+          [r"\((−?-?[\d.]+) against every clip\)"],
           float(_grab(b, r"\[all-clips pairing: (-?[\d.]+)\]")),
-          TOL3, cg + " [all-clips pairing]", "headline result"),
+          TOL3, cg + " [all-clips pairing]", "§5 headline"),
         C("README D1 conditions that spoke (n)",
-          [r"n = (\d+) either way"], n_cond - n_mute, EXACT,
-          cg + " conditions - mute conditions", "headline result"),
+          [r"\*\*(\d+) of 176\*\* conditions that returned any words"],
+          n_cond - n_mute, EXACT,
+          cg + " conditions - mute conditions", "§5 headline"),
         C("README D1 overconfident share",
-          [r"overconfident in (\d+)% of conditions"],
+          [r"<b>(\d+)%</b><br/><sub>of conditions overconfident"],
           float(_grab(b, r"overconfident in (\d+)% of conditions")), TOL0,
-          cg + " overconfident in N% of conditions", "headline result"),
+          cg + " overconfident in N% of conditions", "§5 headline"),
+        C("README D1 overconfident count",
+          [r"of conditions overconfident<br/>(\d+) of 169"],
+          _n_overconfident_conditions(), EXACT,
+          "results/master.csv [conditions with a positive same-subset gap]",
+          "§5 headline"),
         C("README D1 mean gap",
-          [r"mean gap\s+> \*\*\+([\d.]+)\*\*"],
+          [r"<b>\+([\d.]+)</b><br/><sub>mean gap"],
           float(_grab(b, r"gap \(same subset\) mean \+?(-?[\d.]+)")), TOL3,
-          cg + " gap (same subset) mean", "headline result"),
+          cg + " gap (same subset) mean", "§5 headline"),
         C("README D1 dead-zone count",
-          [r"\*\*(\d+) of 176 \(\d\.\d+%\)\*\*", r"confidently wrong \((\d+)\)"],
+          [r"\*\*(\d+) of 176 \(\d\.\d+%\)\*\* conditions qualify",
+           r"\| \*\*dead zone\*\* \| \*\*(\d+)\*\* \|"],
           float(_grab(b, r"categories: (\d+) dead zone")), EXACT,
-          cg + " categories: N dead zone", "headline result"),
-        C("README D1 dead-zone rate %",
-          [r"\*\*\d+ of 176 \((\d\.\d+)%\)\*\*"],
+          cg + " categories: N dead zone", "§5 headline"),
+        C("README D1 dead-zone rate % (40 clips)",
+          [r"\*\*\d+ of 176 \((\d\.\d+)%\)\*\* conditions qualify",
+           r"dead-zone rate is \*\*([\d.]+)% \(\d+/176\)\*\* on 40 clips"],
           float(_grab(b, r"categories: \d+ dead zone \(([\d.]+)%\)")), TOL2,
-          cg + " categories: N dead zone (P%)", "headline result"),
+          cg + " categories: N dead zone (P%)", "§5 headline / §7 population"),
         C("README D1 silence-driven count",
-          [r"confident errors \((\d+)\)"],
+          [r"\| \*\*silence-driven\*\* \| \*\*(\d+)\*\* \|"],
           float(_grab(b, r"(\d+) silence-driven")), EXACT,
-          cg + " categories: N silence-driven", "headline result"),
+          cg + " categories: N silence-driven", "§5 categories"),
         C("README D1 mute-zone count",
-          [r"on any of the 40 clips \((\d+)\)"], n_mute, EXACT,
-          cg + " conditions silent on EVERY clip", "headline result"),
+          [r"\| \*\*mute zone\*\* \| \*\*(\d+)\*\* \|"], n_mute, EXACT,
+          cg + " conditions silent on EVERY clip", "§5 categories"),
         C("README headline dead zone: confidence",
-          [r"confidence \*\*([\d.]+)\*\* at \*\*WER"], float(dz["mean_conf"]), TOL3,
-          "results/dead_zones.csv [#1 dead_zone row].mean_conf", "headline result"),
+          [r"confidence \*\*([\d.]+)\*\* at WER"], float(dz["mean_conf"]), TOL3,
+          "results/dead_zones.csv [#1 dead_zone row].mean_conf", "§5 headline"),
         C("README headline dead zone: WER",
-          [r"at \*\*WER ([\d.]+)\*\*"], float(dz["wer_spoke"]), TOL3,
-          "results/dead_zones.csv [#1 dead_zone row].wer_spoke", "headline result"),
-        # the three drifts this group was added for: the README stated the AL
-        # layer as a win, "Whisper is the outlier" without its scoring condition,
-        # and a scope note that covered clips but not conditions.
-        C("README AL seeds reaching target, active",
-          [r"target was reached by (\d) of 8 active seeds"],
-          float(al["headline"]["n_seeds_reaching_target"]["active_boundary"]), EXACT,
-          "results/al_savings.json headline", "the lens, item 3"),
-        C("README AL seeds reaching target, random",
-          [r"against random's (\d)\s+of 8"],
-          float(al["headline"]["n_seeds_reaching_target"]["random"]), EXACT,
-          "results/al_savings.json headline", "the lens, item 3"),
-        C("README three-arm common conditions",
-          [r"Measured on the (\d+) conditions all three arms spoke on"],
-          float(len(common)), EXACT,
-          "results/master.csv [conditions all three arms spoke on]", "three arms"),
+          [r"at WER \*\*([\d.]+)\*\*, with"], float(dz["wer_spoke"]), TOL3,
+          "results/dead_zones.csv [#1 dead_zone row].wer_spoke", "§5 headline"),
+        C("README headline dead zone: clips silent",
+          [r"with \*\*(\d+) of 40\*\* clips silent"], float(dz["n_silent"]), EXACT,
+          "results/dead_zones.csv [#1 dead_zone row].n_silent", "§5 headline"),
+        C("README estimand defect: gap inflation, mean",
+          [r"inflation mean \*\*\+([\d.]+)\*\*"],
+          float(_grab(b, r"inflation mean \+([\d.]+),")), TOL3,
+          cg + " inflation mean", "§5 the defect"),
+        C("README estimand defect: gap inflation, max",
+          [r"max \*\*\+([\d.]+)\*\*"],
+          float(_grab(b, r"inflation mean \+[\d.]+, max \+([\d.]+)")), TOL3,
+          cg + " inflation max", "§5 the defect"),
+        C("README estimand defect: the retracted count",
+          [r"v1 reported \*\*(\d+)\*\* dead zones"],
+          float(_grab(b, r"pairing alone would have called (\d+) of them dead zones")),
+          EXACT, cg + " [the all-clips pairing would have called N]", "§5 the defect"),
+
+        # ---- §5 the confidence anchor, so 0.829 is interpretable --------
+        C("README clean-condition confidence",
+          [r"clean-condition mean \*\*([\d.]+)\*\*"],
+          float(conf["dynamic_range"]["clean_corner"]), TOL3,
+          "results/confidence_char.json [nova-3.dynamic_range.clean_corner]", "§5"),
+        C("README best-condition confidence",
+          [r"best condition \*\*([\d.]+)\*\*"],
+          float(conf["dynamic_range"]["highest_condition"]["value"]), TOL3,
+          "results/confidence_char.json [nova-3.dynamic_range.highest_condition]", "§5"),
+        C("README worst-condition confidence",
+          [r"worst condition that still speaks \*\*([\d.]+)\*\*"],
+          float(conf["dynamic_range"]["lowest_condition"]["value"]), TOL3,
+          "results/confidence_char.json [nova-3.dynamic_range.lowest_condition]", "§5"),
+        C("README aggregate AUROC",
+          [r"arithmetic mean AUROC \*\*([\d.]+)\*\*"],
+          float(conf["utterance_conf"]["auroc_word_mean"]), TOL3,
+          "results/confidence_char.json [nova-3.utterance_conf.auroc_word_mean]", "§5"),
+
+        # ---- §5 the threshold sweep: the count is an OPERATING POINT ----
+        C("README dead zones at conf-pct 0.50",
+          [r"\*\*(\d+)\*\* at conf-pct 0\.50"],
+          float(surface[ccol[0.5]]), EXACT,
+          "results/dead_zone_sensitivity.json [nova-3 surface, wer_hi 0.30]", "§5 sweep"),
+        C("README dead zones at conf-pct 0.60",
+          [r"\*\*(\d+)\*\* at 0\.60"],
+          float(surface[ccol[0.6]]), EXACT,
+          "results/dead_zone_sensitivity.json [nova-3 surface, wer_hi 0.30]", "§5 sweep"),
+        C("README dead zones at conf-pct 0.70",
+          [r"\*\*(\d+)\*\* at 0\.70"],
+          float(surface[ccol[0.7]]), EXACT,
+          "results/dead_zone_sensitivity.json [nova-3 surface, wer_hi 0.30]", "§5 sweep"),
+        C("README dead-zone count, box minimum",
+          [r"\*\*(\d+) to \d+\*\* across the whole box"],
+          float(dzs["count_stats"]["min"]), EXACT,
+          "results/dead_zone_sensitivity.json [nova-3 count_stats.min]", "§5 sweep"),
+        C("README dead-zone count, box maximum",
+          [r"\*\*\d+ to (\d+)\*\* across the whole box"],
+          float(dzs["count_stats"]["max"]), EXACT,
+          "results/dead_zone_sensitivity.json [nova-3 count_stats.max]", "§5 sweep"),
     ]
 
-    # The per-arm shapes, each on ITS OWN condition population — which is exactly
-    # what the old scope note papered over, so both the rho and its n are pinned.
-    sites = {"nova-3": (r"between Nova-3 \(\*\*(−?-?[\d.]+)\*\*\)",
-                        r"n = \*\*(\d+)\*\* for Nova-3"),
-             "elevenlabs-scribe": (r"shape \(ρ = \*\*(−?-?[\d.]+)\*\*\)",
-                                   r"\*\*(\d+)\*\* for Scribe"),
-             "whisper-base": (r"and Whisper \(\*\*(−?-?[\d.]+)\*\*\)",
-                              r"\*\*(\d+)\*\* for Whisper")}
-    for model, (rho_pat, n_pat) in sites.items():
+    # ---- §7 the three arms. EVERY ONE carries its population. -----------
+    out += [
+        C("README three-arm rows per model",
+          [r"all three arms ran — ([\d,]+) rows per arm"],
+          float(m["arm_census"]["n_common_cells"]), EXACT,
+          "results/model_arms.json arm_census.n_common_cells", "§7 population"),
+        C("README three-arm shared clips",
+          [r"ran a \*\*(\d+)-clip subset\*\*"],
+          float(m["arm_census"]["n_common_clips"]), EXACT,
+          "results/model_arms.json arm_census.n_common_clips", "§7 population"),
+        C("README nova-3 dead-zone count, 40-clip population",
+          [r"dead-zone rate is \*\*[\d.]+% \((\d+)/176\)\*\* on 40 clips"],
+          float(_grab(b, r"categories: (\d+) dead zone")), EXACT,
+          cg + " categories: N dead zone", "§7 population"),
+        C("README nova-3 dead-zone rate, 10-clip population",
+          [r"and \*\*([\d.]+)% \(\d+/176\)\*\* on 10",
+           r"\*\*nova-3\*\* \| \*\*([\d.]+)%\*\* \(\d+/176\)"],
+          100.0 * float(pm["nova-3"]["dead_zone_rate"]), TOL2,
+          ma + " nova-3.dead_zone_rate", "§7 population / table"),
+        C("README nova-3 dead-zone count, 10-clip population",
+          [r"and \*\*[\d.]+% \((\d+)/176\)\*\* on 10",
+           r"\*\*nova-3\*\* \| \*\*[\d.]+%\*\* \((\d+)/176\)"],
+          float(pm["nova-3"]["n_dead_zones"]), EXACT,
+          ma + " nova-3.n_dead_zones", "§7 population / table"),
+        C("README whisper dead-zone rate",
+          [r"\*\*whisper-base\*\* \| \*\*([\d.]+)%\*\* \(\d+/176\)",
+           r"dead-zone rate \*\*([\d.]+)%\*\* against nova-3's"],
+          100.0 * float(pm["whisper-base"]["dead_zone_rate"]), TOL2,
+          ma + " whisper-base.dead_zone_rate", "§7 table"),
+        C("README whisper dead-zone count",
+          [r"\*\*whisper-base\*\* \| \*\*[\d.]+%\*\* \((\d+)/176\)"],
+          float(pm["whisper-base"]["n_dead_zones"]), EXACT,
+          ma + " whisper-base.n_dead_zones", "§7 table"),
+        C("README scribe dead-zone rate (flagged not quotable)",
+          [r"\*\*elevenlabs-scribe\*\* \| ([\d.]+)% \(\d+/176\) ‡"],
+          100.0 * float(pm["elevenlabs-scribe"]["dead_zone_rate"]), TOL2,
+          ma + " elevenlabs-scribe.dead_zone_rate", "§7 table"),
+        C("README scribe dead-zone count (flagged not quotable)",
+          [r"\*\*elevenlabs-scribe\*\* \| [\d.]+% \((\d+)/176\) ‡"],
+          float(pm["elevenlabs-scribe"]["n_dead_zones"]), EXACT,
+          ma + " elevenlabs-scribe.n_dead_zones", "§7 table"),
+    ]
+
+    # per-arm shape + n, each on ITS OWN condition population, and silence
+    shape_sites = {
+        "nova-3": (r"\*\*nova-3\*\* \|[^\n|]*\| \*\*(−?-?[\d.]+)\*\* \(n = \d+\)",
+                   r"\*\*nova-3\*\* \|[^\n|]*\| \*\*−?-?[\d.]+\*\* \(n = (\d+)\)"),
+        "elevenlabs-scribe": (r"‡ \| (−?-?[\d.]+) \(n = \d+\)",
+                              r"‡ \| −?-?[\d.]+ \(n = (\d+)\)"),
+        "whisper-base": (r"\*\*whisper-base\*\* \|[^\n|]*\| \*\*(−?-?[\d.]+)\*\* \(n = \d+\)",
+                         r"\*\*whisper-base\*\* \|[^\n|]*\| \*\*−?-?[\d.]+\*\* \(n = (\d+)\)"),
+    }
+    for model, (rho_pat, n_pat) in shape_sites.items():
         if model not in pm:
             continue
         out += [
             C("README %s strict shape" % model, [rho_pat],
               float(pm[model]["shape"]["spearman"]), TOL3,
-              ma + " %s.shape.spearman" % model, "three arms"),
+              ma + " %s.shape.spearman" % model, "§7 table"),
             C("README %s shape n" % model, [n_pat],
               float(pm[model]["shape"]["n"]), EXACT,
-              ma + " %s.shape.n" % model, "three arms"),
+              ma + " %s.shape.n" % model, "§7 table"),
         ]
+
+    silence_sites = {
+        "nova-3": (r"\| ([\d.]+)% \| 12 \|", r"\| [\d.]+% \| (\d+) \|\n\| \*\*elevenlabs"),
+        "elevenlabs-scribe": (r"\*\*([\d.]+)%\*\* \| 2 \|",
+                              r"\*\*[\d.]+%\*\* \| (\d+) \|\n\| \*\*whisper"),
+        "whisper-base": (r"\| ([\d.]+)% \| 5 \|", r"\| [\d.]+% \| (\d+) \|\n\n‡"),
+    }
+    for model, (rate_pat, mute_pat) in silence_sites.items():
+        if model not in pm:
+            continue
+        out += [
+            C("README %s silent-row rate (10-clip)" % model, [rate_pat],
+              100.0 * float(pm[model]["silence"]["silent_rate"]), TOL1,
+              ma + " %s.silence.silent_rate" % model, "§7 table"),
+            C("README %s mute conditions (10-clip)" % model, [mute_pat],
+              float(pm[model]["n_mute_zones"]), EXACT,
+              ma + " %s.n_mute_zones" % model, "§7 table"),
+        ]
+
+    # The utterance-level AUROC column, and it is pinned for a REASON: it is the
+    # one statistic on which the two non-spine arms SWAP (Whisper 0.888 above
+    # Scribe 0.737, against Scribe leading on rho and dead-zone rate). That swap
+    # is what refuses a "commercial beats open" reading, so a later edit must not
+    # be able to drop it and keep the ordering.
+    cc = {row["model"]: row
+          for row in _read_json("results/confidence_char.json")["cross_arm"]}
+    auroc_sites = {
+        "nova-3": r"\*\*nova-3\*\* \|[^\n|]*\|[^\n|]*\| \*\*([\d.]+)\*\* \|",
+        "elevenlabs-scribe": r"‡ \|[^\n|]*\| ([\d.]+) \| [\d.]+ →",
+        "whisper-base": r"\*\*whisper-base\*\* \|[^\n|]*\|[^\n|]*\| ([\d.]+) \|",
+    }
+    for model, pat in auroc_sites.items():
+        if model not in cc:
+            continue
+        out.append(C("README %s utterance AUROC (mean aggregate)" % model, [pat],
+                     float(cc[model]["mean_auroc"]), TOL3,
+                     "results/confidence_char.json cross_arm[%s].mean_auroc" % model,
+                     "§7 table"))
+    if "elevenlabs-scribe" in cc and "nova-3" in cc:
+        out += [
+            C("README scribe words tied at the confidence ceiling",
+              [r"\*\*([\d.]+)%\*\* of its emitted words sit within 0\.001 of 1\.0"],
+              100.0 * float(cc["elevenlabs-scribe"]["frac_within_eps_of_one"]), TOL1,
+              "results/confidence_char.json cross_arm[elevenlabs-scribe]"
+              ".frac_within_eps_of_one", "§7 scribe"),
+            C("README nova-3 words tied at the confidence ceiling",
+              [r"\(nova-3: ([\d.]+)%\)"],
+              100.0 * float(cc["nova-3"]["frac_within_eps_of_one"]), TOL1,
+              "results/confidence_char.json cross_arm[nova-3].frac_within_eps_of_one",
+              "§7 scribe"),
+        ]
+
+    # calibration, per arm, from the cross-arm table (never the top-level keys,
+    # which are nova-3's alone and would silently mislabel a second arm)
+    ece_sites = {
+        "nova-3": r"\*\*nova-3\*\* \|[^\n|]*\|[^\n|]*\|[^\n|]*\| "
+                  r"\*\*([\d.]+) → ([\d.]+) → ([\d.]+)\*\*",
+        "elevenlabs-scribe": r"‡ \|[^\n|]*\|[^\n|]*\| ([\d.]+) → ([\d.]+) → ([\d.]+) \^",
+    }
+    # each row prints three ECEs in one cell, so the pattern is built with
+    # exactly ONE capturing group at a time — three groups would make
+    # `apply_check` read group(1) only and silently pin nothing for the other two
+    for model, pat in ece_sites.items():
+        if model not in cal:
+            continue
+        parts = pat.split("([\\d.]+)")
+        if len(parts) != 4:
+            raise MissingArtifact("the README ECE pattern for %r no longer has "
+                                  "three slots" % model)
+        for i, field in enumerate(("ece_raw", "ece_temperature", "ece_feature")):
+            rebuilt = "".join(
+                part + ("([\\d.]+)" if j == i else "[\\d.]+")
+                for j, part in enumerate(parts[:-1])) + parts[-1]
+            out.append(C("README %s %s" % (model, field), [rebuilt],
+                         float(cal[model][field]), TOL3,
+                         "results/calibration.json cross_arm[%s].%s" % (model, field),
+                         "§7 table"))
+    if "elevenlabs-scribe" in cal and "nova-3" in cal:
+        out += [
+            C("README scribe temperature",
+              [r"temperature \*\*T = ([\d.]+)\*\* vs nova-3's"],
+              float(cal["elevenlabs-scribe"]["temperature_T"]), TOL2,
+              "results/calibration.json cross_arm[elevenlabs-scribe].temperature_T", "§7"),
+            C("README nova-3 temperature",
+              [r"vs nova-3's \*\*T = ([\d.]+)\*\*"],
+              float(cal["nova-3"]["temperature_T"]), TOL2,
+              "results/calibration.json cross_arm[nova-3].temperature_T", "§7"),
+        ]
+    if "whisper-base" in blocked:
+        w = blocked["whisper-base"]
+        out += [
+            C("README whisper misaligned rows",
+              [r"(\d+) of 1,757 rows have a hypothesis-word count"],
+              float(w["n_misaligned_rows"]), EXACT,
+              "results/calibration.json blocked_arms[whisper-base].n_misaligned_rows",
+              "§7 whisper"),
+        ]
+
+    # the failure-mode contrast, and the hallucination exhibit
+    xm = {k: v["edit_signature_crossmodel"] for k, v in pm.items()}
+    hal = m["hallucination_by_model"]
+    ex = m["whisper_hallucination"]["examples"][0]
+    out += [
+        C("README nova-3 silent-rate advantage over scribe",
+          [r"\*\*([\d.]+)× less likely to go silent\*\*"],
+          float(pm["nova-3"]["silence"]["silent_rate"])
+          / float(pm["elevenlabs-scribe"]["silence"]["silent_rate"]), TOL1,
+          ma + " silent_rate ratio nova-3 / elevenlabs-scribe", "§7 scribe"),
+        C("README whisper normalized insertion rate",
+          [r"normalized insertions \*\*([\d.]+)\*\*"],
+          float(xm["whisper-base"]["ins"]), TOL3,
+          ma + " whisper-base.edit_signature_crossmodel.ins", "§7 whisper"),
+        C("README nova-3 normalized insertion rate",
+          [r"vs nova-3's \*\*([\d.]+)\*\* ="],
+          float(xm["nova-3"]["ins"]), TOL3,
+          ma + " nova-3.edit_signature_crossmodel.ins", "§7 whisper"),
+        C("README whisper/nova-3 insertion ratio",
+          [r"= \*\*([\d.]+)×\*\*"],
+          float(xm["whisper-base"]["ins"]) / float(xm["nova-3"]["ins"]), TOL1,
+          ma + " edit_signature_crossmodel ins ratio", "§7 whisper"),
+        C("README hallucination exhibit: reference words",
+          [r"(\d+) reference words  ->"], float(ex["n_ref"]), EXACT,
+          ma.replace("[per_model]", "[whisper_hallucination.examples[0]]") + " n_ref",
+          "§7 exhibit"),
+        C("README hallucination exhibit: hypothesis words",
+          [r"->  (\d+) hypothesis words"], float(ex["n_hyp"]), EXACT,
+          ma.replace("[per_model]", "[whisper_hallucination.examples[0]]") + " n_hyp",
+          "§7 exhibit"),
+        C("README whisper rows over 2x reference length",
+          [r"\*\*([\d.]+)%\*\* of rows exceed 2× the reference length"],
+          100.0 * float(hal["whisper-base"]["frac_rows_over_2x"]), TOL1,
+          "results/model_arms.json hallucination_by_model[whisper-base]", "§7 exhibit"),
+        C("README whisper p95 length ratio",
+          [r"p95 length ratio \*\*([\d.]+)\*\*"],
+          float(hal["whisper-base"]["p95_len_ratio"]), TOL2,
+          "results/model_arms.json hallucination_by_model[whisper-base]", "§7 exhibit"),
+        C("README nova-3 rows over 2x reference length",
+          [r"length ratio \*\*[\d.]+\*\*\) against nova-3's ([\d.]+)%"],
+          100.0 * float(hal["nova-3"]["frac_rows_over_2x"]), TOL1,
+          "results/model_arms.json hallucination_by_model[nova-3]", "§7 exhibit"),
+    ]
+
+    # the calibration discount, quoted as an operational instruction
+    st = _read_json("results/calibration.json")["statement"]
+    mm = re.search(r"Above rt60 = 0\.7[^.]*?~([\d.]+) to become a calibrated probability "
+                   r"\(([\d.]+) reported vs ([\d.]+) observed accuracy on (\d+) held-out words",
+                   st)
+    if mm is not None:
+        out += [
+            C("README rt60 confidence discount",
+              [r"discount reported confidence by ~([\d.]+)\*\*"],
+              float(mm.group(1)), TOL2, "results/calibration.json [statement]", "§7 nova-3"),
+            C("README rt60 reported confidence",
+              [r"\(([\d.]+) reported vs\. [\d.]+ observed"],
+              float(mm.group(2)), TOL2, "results/calibration.json [statement]", "§7 nova-3"),
+            C("README rt60 observed accuracy",
+              [r"\([\d.]+ reported vs\. ([\d.]+) observed"],
+              float(mm.group(3)), TOL2, "results/calibration.json [statement]", "§7 nova-3"),
+            C("README rt60 held-out words",
+              [r"observed on ([\d,]+) held-out words"],
+              float(mm.group(4)), EXACT, "results/calibration.json [statement]",
+              "§7 nova-3"),
+        ]
+
+    # ---- §8 fingerprints ------------------------------------------------
+    sig = {s["family"]: s for s in fp["signatures"]}
+    out += [
+        C("README reference words scored",
+          [r"nova-3, ([\d,]+) reference words"], n_ref, EXACT,
+          "results/calibration.json deletion_blindness.n_ref_words", "§8"),
+        C("README deletion rate",
+          [r"<b>deletions ([\d.]+)</b>"],
+          float(delb["deleted_fraction_of_reference"]), TOL3,
+          "results/calibration.json deletion_blindness.deleted_fraction_of_reference",
+          "§8"),
+        C("README substitution rate",
+          [r"substitutions ([\d.]+)</td>"],
+          float(delb["n_substitutions"]) / n_ref, TOL3,
+          "results/calibration.json deletion_blindness.n_substitutions / n_ref_words",
+          "§8"),
+        C("README insertion rate",
+          [r"insertions ([\d.]+)</td>"],
+          float(delb["n_insertions"]) / n_ref, TOL3,
+          "results/calibration.json deletion_blindness.n_insertions / n_ref_words",
+          "§8"),
+        C("README deletions as a share of all errors",
+          [r"blind to \*\*([\d.]+)% of all errors\*\*"],
+          100.0 * float(delb["deleted_fraction_of_errors"]), TOL1,
+          "results/calibration.json deletion_blindness.deleted_fraction_of_errors",
+          "§3 limits"),
+        C("README entity error rate",
+          [r"entity error rate \*\*([\d.]+)\*\*"],
+          float(ent["mean_entity_error_rate"]), TOL3,
+          "results/fingerprints.json [nova-3] entities.overall.mean_entity_error_rate",
+          "§8"),
+        C("README WER paired with the entity error rate",
+          [r"vs\. WER \*\*([\d.]+)\*\*"],
+          float(ent["mean_wer"]), TOL3,
+          "results/fingerprints.json [nova-3] entities.overall.mean_wer", "§8"),
+        C("README babble insertions that are foreign",
+          [r"\*\*(\d+)%\*\* are tokens absent from the reference"],
+          100.0 * float(fp["insertions"]["by_group"]["babble"]["foreign_frac"]), TOL0,
+          "results/fingerprints.json [nova-3] insertions.by_group.babble.foreign_frac",
+          "§8"),
+    ]
+    for label, klass in (("proper nouns", "proper_noun"),
+                         ("spelled letters", "spelled_letter"),
+                         ("content words", "content_word"),
+                         ("function words", "function_word"),
+                         ("digit words", "digit_word")):
+        out.append(C("README destroyed-word rate, %s" % label,
+                     [r"\| \*?\*?%s\*?\*? \| \*?\*?([\d.]+)" % label],
+                     float(cls[klass]["destruction_rate"]), TOL3,
+                     "results/fingerprints.json [nova-3] inventory.by_class.%s" % klass,
+                     "§8"))
+    # the deltas that carry the deletion-vs-substitution split, i.e. the row of
+    # the table that turns an error type into an engineering action
+    for family, anchor in (("snr_db", r"falling SNR \(≤ 5 dB\) \| \*\*deletion\*\* \| \*\*\+([\d.]+)\*\*"),
+                           ("mic_rolloff", r"mic rolloff \(1\.0\) \| \*\*deletion\*\* \| \*\*\+([\d.]+)\*\*"),
+                           ("rt60", r"reverb \(≥ 0\.7 s\) \| \*\*deletion\*\* \| \*\*\+([\d.]+)\*\*"),
+                           ("codec=g726", r"`g726`\*\* \| \*\*substitution\*\* \| \*\*\+([\d.]+)\*\*"),
+                           ("noise_type=road", r"road noise\*\* \| \*\*substitution\*\* \| \*\*\+([\d.]+)\*\*")):
+        if family not in sig:
+            raise MissingArtifact("fingerprints.json has no signature for %r" % family)
+        out.append(C("README fingerprint delta [%s]" % family, [anchor],
+                     abs(float(sig[family]["delta"])), TOL3,
+                     "results/fingerprints.json [nova-3] signatures[%s].delta" % family,
+                     "§8 table"))
+
+    # ---- §9 the comparability gate --------------------------------------
+    shift = m["normalization_shift"]
+    # the sign is part of the claim here — nova-3's shift is NEGATIVE and near
+    # zero (the control), the other two are positive — so the pattern captures
+    # it rather than assuming one direction
+    for model, anchor in (("nova-3", r"\| nova-3 \| \*\*([−+-]?[\d.]+)\*\*"),
+                          ("whisper-base", r"\| whisper-base \| \*\*([−+-]?[\d.]+)\*\*"),
+                          ("elevenlabs-scribe",
+                           r"\| elevenlabs-scribe \| \*\*([−+-]?[\d.]+)\*\*")):
+        if model not in shift:
+            continue
+        out.append(C("README normalization shift [%s]" % model, [anchor],
+                     float(shift[model]["mean_shift"]), TOL3,
+                     "results/model_arms.json normalization_shift[%s].mean_shift" % model,
+                     "§9"))
+
+    # ---- appendix: the two nulls and the sim2real offset ----------------
+    out += [
+        C("README AL evaluation budget",
+          [r"At a (\d+)-evaluation budget"],
+          float(al["n_total"]), EXACT, "results/al_savings.json n_total", "appendix (a)"),
+        C("README AL seeds reaching target, active",
+          [r"reached by \*\*(\d+) of 8 active seeds\*\*"],
+          float(al["headline"]["n_seeds_reaching_target"]["active_boundary"]), EXACT,
+          "results/al_savings.json headline.n_seeds_reaching_target.active_boundary",
+          "appendix (a)"),
+        C("README AL seeds reaching target, random",
+          [r"against random's \*\*(\d+) of 8\*\*"],
+          float(al["headline"]["n_seeds_reaching_target"]["random"]), EXACT,
+          "results/al_savings.json headline.n_seeds_reaching_target.random",
+          "appendix (a)"),
+        C("README AL seed count",
+          [r"all (\d+) seeds ran against a \*\*surrogate oracle\*\*"],
+          float(al["n_seeds"]), EXACT, "results/al_savings.json n_seeds",
+          "appendix (a)"),
+        C("README DRR permutation rank",
+          [r"ranks \*\*(\d+)th of 24\*\*"], float(drr["drr_rank_of_n"]), EXACT,
+          "results/al_drr.json controls.control_a_permutation.drr_rank_of_n",
+          "appendix (a)"),
+        C("README DRR permutation count",
+          [r"ranks \*\*\d+th of (\d+)\*\*"], float(drr["n_permutations"]), EXACT,
+          "results/al_drr.json controls.control_a_permutation.n_permutations",
+          "appendix (a)"),
+        C("README DRR permutation p",
+          [r"permutation p = \*\*([\d.]+)\*\*"], float(drr["permutation_p_value"]),
+          TOL2, "results/al_drr.json controls.control_a_permutation.permutation_p_value",
+          "appendix (a)"),
+        C("README D4 level gap",
+          [r"underestimates WER by ([\d.]+) points\*\*"],
+          abs(float(s2r["mean_gap"])) * 100.0, TOL1,
+          "results/sim2real.json [nova-3.headline].mean_gap", "appendix (c)"),
+        C("README D4 CI lo",
+          [r"95% CI \[−([\d.]+), −[\d.]+\]"],
+          abs(float(s2r["ci"][0])) * 100.0, TOL1,
+          "results/sim2real.json [nova-3.headline].ci", "appendix (c)"),
+        C("README D4 CI hi",
+          [r"95% CI \[−[\d.]+, −([\d.]+)\]"],
+          abs(float(s2r["ci"][1])) * 100.0, TOL1,
+          "results/sim2real.json [nova-3.headline].ci", "appendix (c)"),
+        C("README D4 rank correlation",
+          [r"Spearman \*\*ρ = ([\d.]+)\*\*"], float(s2r["spearman"]), TOL3,
+          "results/sim2real.json [nova-3.headline].spearman", "appendix (c)"),
+        C("README D4 real dead zones",
+          [r"— (\d+) real, \d+ found"], float(s2r["n_dead_zones_real"]), EXACT,
+          "results/sim2real.json [nova-3.headline].n_dead_zones_real", "appendix (c)"),
+        C("README D4 sim dead zones",
+          [r"— \d+ real, (\d+) found"], float(s2r["n_dead_zones_sim"]), EXACT,
+          "results/sim2real.json [nova-3.headline].n_dead_zones_sim", "appendix (c)"),
+        C("README D4 dead-zone Jaccard",
+          [r"dead-zone \*\*Jaccard ([\d.]+)\*\*"], float(s2r["dead_zone_jaccard"]),
+          EXACT, "results/sim2real.json [nova-3.headline].dead_zone_jaccard",
+          "appendix (c)"),
+    ]
+    ov = m["dead_zone_overlap"]["pairwise"]
+    out += [
+        C("README nova|whisper dead-zone Jaccard",
+          [r"whisper-base \(Jaccard ([\d.]+)\)"],
+          float(ov["nova-3|whisper-base"]["jaccard"]), EXACT,
+          "results/model_arms.json dead_zone_overlap.pairwise[nova-3|whisper-base]",
+          "appendix (c)"),
+        C("README scribe|whisper shared dead zones",
+          [r"share \*\*(\d+)\*\* \(Jaccard"],
+          float(ov["elevenlabs-scribe|whisper-base"]["n_shared"]), EXACT,
+          "results/model_arms.json dead_zone_overlap.pairwise"
+          "[elevenlabs-scribe|whisper-base].n_shared", "appendix (c)"),
+        C("README scribe|whisper dead-zone Jaccard",
+          [r"share \*\*\d+\*\* \(Jaccard \*\*([\d.]+)\*\*\)"],
+          float(ov["elevenlabs-scribe|whisper-base"]["jaccard"]), TOL3,
+          "results/model_arms.json dead_zone_overlap.pairwise"
+          "[elevenlabs-scribe|whisper-base].jaccard", "appendix (c)"),
+    ]
     return out
+
+
+_AB_CACHE = {}
+
+
+def _ab_pair():
+    """The two single-degradation conditions the listening demo turns on.
+
+    A = Shower RIR at SNR 20 dB (drenched but quiet); B = Restaurant RIR at
+    SNR 0 dB (dry but buried). Paired over the clips both ran — the same
+    same-population rule §6.1's correction turns on.
+    """
+    if _AB_CACHE:
+        return _AB_CACHE
+    rows = _master_nova(["clip_id", "condition_name", "wer"])
+    A = "rt60-1_snr-20_babble_none_roll-0"
+    B = "rt60-0.2_snr-0_babble_none_roll-0"
+    a = {r["clip_id"]: float(r["wer"]) for r in rows if r["condition_name"] == A}
+    b = {r["clip_id"]: float(r["wer"]) for r in rows if r["condition_name"] == B}
+    common = sorted(set(a) & set(b))
+    if len(common) < 10:
+        raise MissingArtifact("master.csv has no A/B pair for the listening demo")
+    diffs = [a[c] - b[c] for c in common]
+    _AB_CACHE.update({"mean_A": _mean(a[c] for c in common),
+                      "mean_B": _mean(b[c] for c in common),
+                      "diff": _mean(diffs),
+                      "n_same": sum(1 for d in diffs if d == 0.0),
+                      "n": len(common)})
+    return _AB_CACHE
+
+
+def _n_overconfident_conditions():
+    """Conditions whose same-subset gap is positive — the README's 154 of 169.
+
+    Recomputed with `confidence_gap.py`'s own formula (mean_conf minus clipped
+    delivered accuracy, over the clips that emitted words only) because the
+    artifact publishes the SHARE and not the count.
+    """
+    gaps = _clipped_gap_table("nova-3")
+    return float(sum(1 for v in gaps.values() if v > 0))
 
 
 def checks_understanding():
@@ -1677,11 +2251,182 @@ def checks_status():
     ]
 
 
+def _conf_char(model):
+    """`results/confidence_char.json` block for one arm.
+
+    NOTE the artifact carries bare `NaN` literals (an aggregate whose accuracy is
+    undefined on an empty bucket). Python's `json` accepts them; a strict parser
+    would not. Read with `_read_json` like everything else so the failure mode is
+    a MissingArtifact rather than a silent skip.
+    """
+    d = _read_json("results/confidence_char.json")
+    by = d.get("by_model") or {}
+    if model not in by:
+        raise MissingArtifact("confidence_char.json has no block for %r" % model)
+    return by[model]
+
+
+def checks_interview_internal():
+    """report/INTERVIEW_INTERNAL.md — the private interview script.
+
+    Scope (see the DOCS comment): every figure this document QUOTES ALOUD is
+    pinned to the artifact that produced it. Its own commentary — the threshold
+    persistence sweep, the re-derived cell-wise bootstrap comparison, and the
+    table of places where two documents disagree — is deliberately unpinned,
+    because that material exists to record a disagreement and a pin would delete
+    it rather than check it.
+
+    Two of these figures exist in NO other pinned document and are pinned here
+    for the first time: the clean-confidence anchor (0.962) and the aggregate
+    AUROC comparison (mean 0.944 vs min 0.877). They are the answer to "what is
+    the confidence score, actually", so they are exactly the figures that would
+    be spoken from memory if they drifted.
+    """
+    if not os.path.exists(INTERVIEW_INTERNAL):
+        raise MissingArtifact(INTERVIEW_INTERNAL)
+    b = _cg_block("nova-3")
+    cg = "results/confidence_gap.txt [nova-3 block]"
+    dz = _headline_dead_zone("nova-3")
+    cal = _read_json("results/calibration.json")["primary"]
+    s2r = _read_json("results/sim2real.json")["nova-3"]["headline"]
+    sob = _read_json("results/sobol.json")
+    gap = {g["factor"]: g for g in sob["interaction_gap"]}
+    ma = _read_json("results/model_arms.json")["per_model"]
+    cc = _conf_char("nova-3")
+    n_mute = int(_grab(b, r"(\d+) conditions silent on EVERY clip"))
+    n_cond = int(_grab(b, r"conditions: (\d+)"))
+
+    # the aggregate table's `min` row, read by name rather than by position
+    per_agg = {a["aggregate"]: a for a in cc["separation"]["per_aggregate"]}
+    if "min" not in per_agg:
+        raise MissingArtifact("confidence_char.json separation has no `min` aggregate")
+
+    # corpus-wide deletion rate: summed from the table, not read from a summary.
+    # `results/fingerprints.txt` reports PER-CONDITION composition, so the 0.351
+    # the script quotes has to be recomputed the way the document says it was.
+    rows = _master_nova(["n_ref", "n_del"])
+    del_rate = sum(int(float(r["n_del"])) for r in rows) / \
+        float(sum(int(float(r["n_ref"])) for r in rows))
+
+    xm = {k: v["edit_signature_crossmodel"] for k, v in ma.items()}
+
+    def C(key, patterns, expected, tol, source):
+        return Check(key, patterns, expected, tol, source, "INTERVIEW_INTERNAL.md",
+                     doc=INTERVIEW_INTERNAL)
+
+    return [
+        # --- §6 the headline, and §A/Q2's pivot to the threshold-free form ----
+        C("II D1 spearman, paired",
+          [r"paired ρ = \*\*(−?-?[\d.]+)\*\*"],
+          float(_grab(b, r"global spearman\(conf_pct, WER_spoke\) = (-?[\d.]+)")),
+          TOL3, cg + " global spearman(conf_pct, WER_spoke)"),
+        C("II D1 mean gap",
+          [r"mean gap \*\*\+([\d.]+)\*\*"],
+          float(_grab(b, r"gap \(same subset\) mean \+?(-?[\d.]+)")), TOL3,
+          cg + " gap (same subset) mean"),
+        C("II D1 conditions that spoke",
+          [r"overconfident in \*\*154 of (\d+)\*\*",
+           r"\*\*overconfident in 154 of (\d+)\*\*"],
+          n_cond - n_mute, EXACT, cg + " conditions - mute conditions"),
+        C("II D1 overconfident share",
+          [r"conditions — \*\*(\d+) %\*\*"],
+          float(_grab(b, r"overconfident in (\d+)% of conditions")), TOL0,
+          cg + " overconfident in N% of conditions"),
+        C("II D1 dead-zone count",
+          [r"\*\*(\d+) of 176 conditions\*\*"],
+          float(_grab(b, r"categories: (\d+) dead zone")), EXACT,
+          cg + " categories: N dead zone"),
+        # The rate is pinned WITH its population in the pattern. Quoting 1.14 %
+        # without "40 clips" is the project's signature bug (SPEC G, J.8), so the
+        # regex refuses to match a bare rate.
+        C("II D1 dead-zone rate, 40-clip population",
+          [r"\*\*(\d\.\d+) %\*\* \(2 of 176, 40 clips\)"],
+          float(_grab(b, r"categories: \d+ dead zone \(([\d.]+)%\)")), TOL2,
+          cg + " categories: N dead zone (P%)"),
+        C("II headline dead zone: confidence",
+          [r"mean word confidence \*\*([\d.]+)\*\* at WER \*\*[\d.]+\*\*"],
+          float(dz["mean_conf"]), TOL3,
+          "results/dead_zones.csv [#1 dead_zone row].mean_conf"),
+        C("II headline dead zone: WER",
+          [r"mean word confidence \*\*[\d.]+\*\* at WER \*\*([\d.]+)\*\*"],
+          float(dz["wer_spoke"]), TOL3,
+          "results/dead_zones.csv [#1 dead_zone row].wer_spoke"),
+
+        # --- §A/Q3: what the confidence score empirically IS -----------------
+        C("II clean-confidence anchor",
+          [r"clean corner of the grid reads \*\*([\d.]+)\*\*",
+           r"clean corner \*\*([\d.]+)\*\* \(WER"],
+          float(cc["dynamic_range"]["clean_corner"]), TOL3,
+          "results/confidence_char.json [nova-3].dynamic_range.clean_corner"),
+        C("II best aggregate AUROC",
+          [r"AUROC \*\*([\d.]+)\*\*"],
+          float(cc["separation"]["best_auroc"]), TOL3,
+          "results/confidence_char.json [nova-3].separation.best_auroc"),
+        C("II min-aggregate AUROC",
+          [r"min \*\*([\d.]+)\*\*"], float(per_agg["min"]["auroc"]), TOL3,
+          "results/confidence_char.json [nova-3].separation.per_aggregate[min].auroc"),
+        C("II ECE raw", [r"ECE \*\*([\d.]+)\*\* raw"],
+          float(cal["ece_raw"]["median"]), TOL3,
+          "results/calibration.json primary.ece_raw.median"),
+        C("II ECE feature-conditioned",
+          [r"\*\*([\d.]+)\*\* feature-conditioned"],
+          float(cal["ece_feature"]["median"]), TOL3,
+          "results/calibration.json primary.ece_feature.median"),
+
+        # --- §9 the fingerprint headline -------------------------------------
+        C("II corpus-wide deletion rate",
+          [r"Deletions are \*\*([\d.]+)\*\* of reference words",
+           r"- del \*\*([\d.]+)\*\* ·"],
+          del_rate, TOL3,
+          "results/master.csv sum(n_del)/sum(n_ref) over non-failed nova-3 rows"),
+
+        # --- §11 the pre-registration verdict --------------------------------
+        C("II ST-S1 gap, rt60", [r"\*\*ST − S1 = ([\d.]+)\*\*"],
+          float(gap["rt60"]["gap"]), TOL3,
+          "results/sobol.json interaction_gap[rt60]"),
+        C("II ST-S1 gap, snr_db",
+          [r"\*\*([\d.]+)\*\* for SNR", r"\*\*([\d.]+)\*\* for `snr_db`"],
+          float(gap["snr_db"]["gap"]), TOL3,
+          "results/sobol.json interaction_gap[snr_db]"),
+
+        # --- §2 / §C sim-vs-real ---------------------------------------------
+        C("II D4 level gap", [r"\*\*([\d.]+) points optimistic\*\*"],
+          abs(float(s2r["mean_gap"])) * 100.0, TOL1,
+          "results/sim2real.json [nova-3.headline] mean_gap"),
+        C("II D4 rank correlation", [r"rank correlation \*\*([\d.]+)\*\*"],
+          float(s2r["spearman"]), TOL3,
+          "results/sim2real.json [nova-3.headline] spearman"),
+
+        # --- §8 the three-arm section, every figure carrying its population ---
+        C("II L1 nova-3 dead-zone rate, 10-clip population",
+          [r"\*\*(\d\.\d+) %\*\* \(1 of 176, 10 clips\)"],
+          100.0 * float(ma["nova-3"]["dead_zone_rate"]), TOL2,
+          "results/model_arms.json per_model[nova-3].dead_zone_rate"),
+        C("II L1 whisper-base dead-zone rate, 10-clip population",
+          [r"\*\*(\d+\.\d+) %\*\* \(69 of 176, 10 clips\)"],
+          100.0 * float(ma["whisper-base"]["dead_zone_rate"]), TOL2,
+          "results/model_arms.json per_model[whisper-base].dead_zone_rate"),
+        C("II L1 nova-3 confidence-vs-WER shape",
+          [r"nova-3 ρ = \*\*(−?-?[\d.]+)\*\*"],
+          float(ma["nova-3"]["shape"]["spearman"]), TOL3,
+          "results/model_arms.json per_model[nova-3].shape.spearman"),
+        C("II L1 whisper-base confidence-vs-WER shape",
+          [r"whisper-base ρ = \*\*(−?-?[\d.]+)\*\*"],
+          float(ma["whisper-base"]["shape"]["spearman"]), TOL3,
+          "results/model_arms.json per_model[whisper-base].shape.spearman"),
+        C("II L1 whisper insertion rate over nova-3's",
+          [r"\*\*(\d+\.\d+)×\*\*"],
+          float(xm["whisper-base"]["ins"]) / float(xm["nova-3"]["ins"]), TOL1,
+          "results/model_arms.json per_model[*].edit_signature_crossmodel ins ratio"),
+    ]
+
+
 CHECK_GROUPS = [
     ("D1 headline", checks_d1_headline),
     ("STATUS doc", checks_status),
     ("README summary", checks_readme),
     ("UNDERSTANDING prep doc", checks_understanding),
+    ("INTERVIEW_INTERNAL script", checks_interview_internal),
     ("D1 dead-zone row", checks_dead_zone_row),
     ("D2 fingerprints", checks_fingerprints),
     ("D3a sensitivity", checks_sobol),
@@ -2024,6 +2769,17 @@ def test_the_pin_covers_every_report_document():
               # written to quote no figures at all, naming the artifact each
               # note depends on instead, so there is nothing in it to drift.
               "report/_demo_internal_notes.md",
+              # Research note on what each arm's confidence FIELD is, sourced to
+              # vendor docs/model cards/shipped source. Exempt on the SAME
+              # ground as the two above and no other: it is written to quote no
+              # `results/` figure at all -- every observation it explains is
+              # named ordinally with the artifact that carries the number -- so
+              # there is nothing in it to drift. The numerals it does contain
+              # are vendor facts (74 M params, 680 k hours) and shipped-source
+              # constants (whisper's compression_ratio_threshold=2.4), none of
+              # which this project measures. If a `results/` figure is ever
+              # pasted into it, delete this entry and give it checks instead.
+              "report/model_architecture_notes.md",
               }
     # report/UNDERSTANDING.md is NOT exempt — it is in DOCS with its headline
     # figures pinned (see `checks_understanding`), which is the point of this
