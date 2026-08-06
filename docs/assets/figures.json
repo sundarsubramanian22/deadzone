@@ -1,0 +1,234 @@
+{
+ "artifact": "docs/assets/figures.json",
+ "figures": {
+  "confidence-vs-error.svg": {
+   "conf_hi_raw": 0.8062573170178913,
+   "dead_zones": [
+    {
+     "condition_name": "rt60-0.45_snr-0_engine_g726_roll-0",
+     "gap": 0.13552752918133126,
+     "mean_conf": 0.829418221822024,
+     "wer_spoke": 0.30610930735930736
+    },
+    {
+     "condition_name": "rt60-0.2_snr-0_babble_opus-lowrate_roll-0.5",
+     "gap": 0.12619966790322645,
+     "mean_conf": 0.8071862738898324,
+     "wer_spoke": 0.319013394013394
+    }
+   ],
+   "mean_gap": 0.14688297266937703,
+   "n_clips": 40,
+   "n_conditions": 176,
+   "n_dead_zones": 2,
+   "n_gap_conditions": 169,
+   "n_mute": 7,
+   "n_overconfident": 154,
+   "n_points_plotted": 169,
+   "population": "nova-3, 40 clips, 176 conditions",
+   "spearman": -0.9795335885833624,
+   "spearman_n": 169,
+   "wer_hi": 0.3
+  },
+  "fingerprints.svg": {
+   "families": [
+    {
+     "del": 0.5265503144267348,
+     "dominant": "del",
+     "family": "snr_db",
+     "ins": 0.018685167420962875,
+     "label": "noise level",
+     "sub": 0.14452768349075165
+    },
+    {
+     "del": 0.5130704505997474,
+     "dominant": "del",
+     "family": "mic_rolloff",
+     "ins": 0.018620637175324674,
+     "label": "mic frequency response",
+     "sub": 0.13705722120761182
+    },
+    {
+     "del": 0.460562401613538,
+     "dominant": "del",
+     "family": "rt60",
+     "ins": 0.018005050505050503,
+     "label": "reverb",
+     "sub": 0.13174445346320346
+    },
+    {
+     "del": 0.4353722117003367,
+     "dominant": "del",
+     "family": "codec=opus-lowrate",
+     "ins": 0.014653886333573833,
+     "label": "channel / codec",
+     "sub": 0.10478721365440116
+    },
+    {
+     "del": 0.3673252051767677,
+     "dominant": "sub",
+     "family": "noise_type=road",
+     "ins": 0.02862401920995671,
+     "label": "noise character",
+     "sub": 0.1900679788961039
+    },
+    {
+     "del": 0.3658444188912939,
+     "dominant": "del",
+     "family": "noise_type=babble",
+     "ins": 0.018155538520121854,
+     "label": "noise character",
+     "sub": 0.12751893939393938
+    },
+    {
+     "del": 0.35970083085317456,
+     "dominant": "sub",
+     "family": "codec=g726",
+     "ins": 0.02594795612373737,
+     "label": "channel / codec",
+     "sub": 0.17518901346049784
+    },
+    {
+     "del": 0.2884161649981963,
+     "dominant": "del",
+     "family": "codec=none",
+     "ins": 0.01798598428481241,
+     "label": "channel / codec",
+     "sub": 0.12145596590909088
+    },
+    {
+     "del": 0.23865964330808082,
+     "dominant": "del",
+     "family": "noise_type=engine",
+     "ins": 0.027673554743867245,
+     "label": "noise character",
+     "sub": 0.16320312499999998
+    }
+   ],
+   "n_deletion_dominant": 7,
+   "n_families": 9,
+   "n_substitution_dominant": 2,
+   "overall": {
+    "del": 0.35086401202103684,
+    "ins": 0.019722013523666416,
+    "n_ref": 63888,
+    "n_rows": 7040,
+    "sub": 0.13590971700475832
+   },
+   "population": "nova-3, 40 clips, 176 conditions, 63888 reference words"
+  },
+  "model-comparison.svg": {
+   "arms": {
+    "elevenlabs-scribe": {
+     "dead_zone_rate": 0.03977272727272727,
+     "dead_zone_rate_drawn": false,
+     "n_conditions": 176,
+     "n_dead_zones": 7,
+     "n_mute": 2,
+     "spearman": -0.8196518347929059,
+     "spearman_n": 174,
+     "wer_comparable": false
+    },
+    "nova-3": {
+     "dead_zone_rate": 0.005681818181818182,
+     "dead_zone_rate_drawn": true,
+     "n_conditions": 176,
+     "n_dead_zones": 1,
+     "n_mute": 12,
+     "spearman": -0.9701855602788755,
+     "spearman_n": 164,
+     "wer_comparable": true
+    },
+    "whisper-base": {
+     "dead_zone_rate": 0.39204545454545453,
+     "dead_zone_rate_drawn": true,
+     "n_conditions": 176,
+     "n_dead_zones": 69,
+     "n_mute": 5,
+     "spearman": -0.5896191745459975,
+     "spearman_n": 171,
+     "wer_comparable": true
+    }
+   },
+   "census": {
+    "n_arms": 3,
+    "n_common_cells": 1757,
+    "n_common_clips": 10,
+    "n_common_conditions": 176
+   },
+   "population": "matched 10-clip intersection, 176 conditions, 1757 rows per arm",
+   "threshold_ordering": {
+    "baseline": "whisper-base",
+    "conf_pct_hi_grid": [
+     0.3,
+     0.4,
+     0.5,
+     0.6,
+     0.7,
+     0.8,
+     0.9
+    ],
+    "n_grid_points": 63,
+    "spine": "nova-3",
+    "spine_count_max": 62,
+    "spine_count_min": 0,
+    "spine_strictly_below_baseline_at": 63,
+    "wer_hi_grid": [
+     0.1,
+     0.15,
+     0.2,
+     0.25,
+     0.3,
+     0.35,
+     0.4,
+     0.45,
+     0.5
+    ]
+   }
+  },
+  "overconfidence.svg": {
+   "frac_overconfident": 0.9112426035502958,
+   "max_gap": 0.731842,
+   "mean_gap": 0.14688297266937703,
+   "mean_gap_all_clips_pairing": 0.2555998811264917,
+   "min_gap": -0.02949839004659094,
+   "n_gap_conditions": 169,
+   "n_not_overconfident": 15,
+   "n_overconfident": 154,
+   "population": "nova-3, 40 clips, 169 of 176 conditions"
+  },
+  "whisper-hallucination.svg": {
+   "clip_id": "u02",
+   "condition_name": "rt60-1_snr-5_babble_opus-lowrate_roll-1",
+   "len_ratio": 4.2727272727272725,
+   "mean_conf": 0.5189098355340513,
+   "model": "whisper-base",
+   "n_del": 0,
+   "n_hyp_tokens_crossmodel": 49,
+   "n_hyp_words": 47,
+   "n_ins": 36,
+   "n_match": 1,
+   "n_ref": 11,
+   "n_ref_tokens_crossmodel": 3,
+   "n_ref_words": 11,
+   "n_repeats": 7,
+   "n_sub": 10,
+   "phrase": "you have a file",
+   "population": "n = 1 row of results/master.csv \u2014 an exhibit, not a rate",
+   "reference": "call maria at four zero five nine one two seven seven",
+   "transcript": "I'm gonna go here and do a little bit of the work. You call her, you have a passport, you have a file. You have a file, you have a file, you have a file, you have a file, you have a file. You have a file.",
+   "wer": 4.181818181818182
+  }
+ },
+ "generator": "scripts/make_readme_figures.py",
+ "purpose": "Every number drawn in the five README figures, with the population it is over. tests/test_readme_figures.py re-derives each one from results/ and fails if a figure and its artifact disagree \u2014 prose and pictures are not covered by any other test in this repo (SPEC J.7).",
+ "sources": [
+  "results/master.csv",
+  "results/fingerprints.json",
+  "recording_manifest.csv"
+ ],
+ "thresholds": {
+  "conf_pct_hi": 0.6,
+  "wer_hi": 0.3
+ }
+}
