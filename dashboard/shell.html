@@ -10,122 +10,150 @@
 <div class="wrap">
 
   <header class="top">
-    <div>
-      <h1>Deadzone — the streaming-ASR silent-failure map</h1>
-      <p class="sub">Not "how much does the model break?" but <strong>does the model know it is
-      breaking?</strong> Every panel below reads the same master results table: one row per
-      (clip x condition x model), typed edits and per-word confidence included.</p>
+    <div class="id">
+      <span class="eyebrow">Controlled acoustic degradation &middot; measurement report</span>
+      <h1>Deadzone: where a streaming ASR model is <em>confident</em> and wrong</h1>
+      <p class="sub">Aggregate WER hides both <em>where</em> a model fails and <em>how</em>. The
+      question this instrument asks is narrower and more useful to a deployment:
+      <strong>does the model know it is breaking?</strong> Confidence is what decides whether a voice
+      agent commits to a transcript or asks the speaker to repeat, so a confidently wrong model is
+      more dangerous than one that knows it is struggling. Every panel below reads the same master
+      results table — one row per clip &times; condition &times; model, with typed edits and per-word
+      confidence.</p>
     </div>
     <div class="hdr-right">
       <span id="source-badge" class="badge">loading</span>
-      <div id="model-toggle" class="model-toggle" role="group" aria-label="model"></div>
+      <div id="model-toggle" class="model-toggle" role="group" aria-label="model arm"></div>
     </div>
   </header>
 
   <section class="panel hero">
     <div class="head">
-      <span class="num">PANEL 1 — HEADLINE</span>
-      <h2>Silent-failure map: where the model is confident and wrong</h2>
-      <p class="caption">One point per condition: mean word confidence (x) against measured WER (y).
-      The shaded box is the dead zone — high confidence AND high WER, i.e. the model committed to a
-      wrong transcript instead of asking the speaker to repeat.</p>
+      <span class="num">mean word confidence &times; WER</span>
+      <h2>The silent-failure map</h2>
+      <p class="caption">One point per acoustic condition: the model's own mean word confidence on
+      the horizontal axis against the WER we measured on the vertical. The dark field is the dead
+      zone — high confidence <em>and</em> high WER — the only region of this page rendered dark,
+      because it is the only region where the instrument found the model committing to a wrong
+      transcript. Hover, tab or click a point to load it into the readout above.</p>
     </div>
     <div class="body" id="panel-hero"></div>
   </section>
 
   <section class="panel">
     <div class="head">
-      <span class="num">PANEL 2 — FACTOR SPACE</span>
-      <h2>Reverb x noise: WER, with the confidence gap as a second encoding</h2>
-      <p class="caption">Cell fill is WER on the shared ramp; border weight is the
-      confidence–accuracy gap (thicker = the model claimed more accuracy than it delivered) and a
-      red border marks a dead zone. Faceted by noise type and codec, so the channel arm can be read
-      against the acoustic core.</p>
+      <span class="num">RT60 (s) &times; SNR (dB)</span>
+      <h2>Is it a region, or three unlucky cells?</h2>
+      <p class="caption">The same conditions laid out in the factor space. Cell fill is WER on the
+      shared ramp; border weight is the confidence–accuracy gap, so a thick border means the model
+      claimed more accuracy than it delivered; a red border marks a dead zone. Faceted by noise type
+      and codec, so the channel arm can be read against the acoustic core.</p>
     </div>
     <div class="body" id="panel-heatmap"></div>
   </section>
 
   <section class="panel">
     <div class="head">
-      <span class="num">PANEL 3 — MECHANISM</span>
-      <h2>Failure fingerprints: what kind of error each condition family produces</h2>
-      <p class="caption">Not how many errors — which kind. Each family's bar is its substitution /
-      deletion / insertion composition as a share of reference words, with the entity error rate
-      marked; each signature implies a specific fix, printed beside it.</p>
+      <span class="num">SUB / DEL / INS per reference word</span>
+      <h2>Failure fingerprints: not how many errors, which kind</h2>
+      <p class="caption">Each condition family gets an edit signature — its substitution, deletion
+      and insertion composition as a share of reference words — with the entity error rate marked
+      against it. The signatures matter because they imply different fixes: deletions mean the words
+      never reached the decoder and keyword boosting cannot help, substitutions mean it can. The
+      implied fix is printed beside every row.</p>
     </div>
     <div class="body" id="panel-fingerprints"></div>
   </section>
 
   <section class="panel">
     <div class="head">
-      <span class="num">PANEL 4 — ATTRIBUTION</span>
-      <h2>Variance-based sensitivity and the pre-registered interaction</h2>
-      <p class="caption">S1 is what a factor does alone, ST what it does in total; the ST−S1 gap is
-      the interaction evidence. The verdict on the pre-registered rt60 x snr_db expectation is stated
-      first — NOT CONFIRMED is a result and is shown with the same prominence as CONFIRMED.</p>
+      <span class="num">S1 &middot; ST &middot; ST&minus;S1 variance share</span>
+      <h2>What moves WER, and what only moves it in company</h2>
+      <p class="caption">S1 is what a factor does alone; ST is what it does in total; the ST&minus;S1
+      gap is the interaction evidence, shown with a bootstrap CI. The verdict on the pre-registered
+      rt60 &times; snr_db expectation is stated first and stated plainly — NOT CONFIRMED is a result
+      and is given exactly the same prominence as CONFIRMED.</p>
     </div>
     <div class="body" id="panel-sensitivity"></div>
   </section>
 
   <section class="panel">
     <div class="head">
-      <span class="num">PANEL 5 — PREDICTIVE</span>
-      <h2>Active learning: mapping the failure boundary in fewer evaluations</h2>
-      <p class="caption">Step the loop: the heat is the GP's predicted WER over the reverb x SNR
-      slice, and each new red point is the condition the acquisition function chose to spend an
-      oracle call on. Below, active vs random fidelity with a min–max band across seeds.</p>
+      <span class="num">oracle calls to map the boundary</span>
+      <h2>Can a surrogate find the failure boundary for less?</h2>
+      <p class="caption">Step the loop: the heat is the GP's predicted WER over the reverb &times;
+      SNR slice, and each new marked point is the condition the acquisition function chose to spend
+      an oracle call on. Below it, active against random at the same budget, with a band across
+      seeds rather than a single lucky run.</p>
     </div>
     <div class="body" id="panel-al"></div>
   </section>
 
   <section class="panel">
     <div class="head">
-      <span class="num">PANEL 6 — HONEST BOUNDARY</span>
-      <h2>Sim vs real: does the simulator rank conditions like the measured rooms?</h2>
-      <p class="caption">Each point is one condition run through a measured RIR (x) and its
-      RT60-matched synthetic twin (y). The level gap says how optimistic the simulator is; the rank
-      correlation says whether it still points at the same dangerous conditions.</p>
+      <span class="num">measured RIR &times; RT60-matched synthetic RIR</span>
+      <h2>The simulator, audited against the rooms it stands in for</h2>
+      <p class="caption">Each point is one condition run through a real measured impulse response
+      (horizontal) and through its RT60-matched synthetic twin (vertical). The level gap says how
+      optimistic the simulator is; the rank correlation says whether it still points at the same
+      dangerous conditions, which is the claim anyone building a sim-only testbed is relying on.</p>
     </div>
     <div class="body" id="panel-sim2real"></div>
   </section>
 
   <section class="panel">
     <div class="head">
-      <span class="num">PANEL 7 — SECOND ARM</span>
+      <span class="num">two arms, one grid</span>
       <h2>Do two models have the same dead zones?</h2>
       <p class="caption">A commercial streaming model against an open baseline. Confidence is
-      comparable <em>within</em> a model and never across two — Deepgram returns an acoustic
-      confidence, Whisper the decoder's token probability — so each arm is ranked against its own
-      distribution. This panel is outside the model toggle: it is the comparison itself.</p>
+      comparable <em>within</em> a model and never across two — one returns an acoustic confidence,
+      the other the decoder's token probability — so each arm is ranked against its own
+      distribution. This panel sits outside the model toggle: it <em>is</em> the comparison.</p>
     </div>
     <div class="body" id="panel-model-arms"></div>
   </section>
 
   <section class="panel">
     <div class="head">
-      <span class="num">PANEL 8 — DOES THE AGENT NOTICE?</span>
-      <h2>Paralinguistic features vs lexical accuracy: same rate, or decoupled?</h2>
+      <span class="num">f0 &middot; RMS drift &times; WER</span>
+      <h2>Would a prosody monitor notice the transcript had failed?</h2>
       <p class="caption">The only layer that reads audio rather than the results table. If the two
       streams decouple, a system watching prosody is blind to an ASR that has already failed — or
-      alarms on audio the ASR is still handling. Where a curve never leaves its floor, no threshold
-      is quoted: a crossing point read off a flat normalized curve is arithmetic without meaning.</p>
+      alarms on audio the ASR is still handling. Where a curve never leaves its floor no threshold
+      is quoted at all: a crossing point read off a flat normalised curve is arithmetic without a
+      measurement under it. This panel is also outside the model toggle.</p>
     </div>
     <div class="body" id="panel-decoupling"></div>
   </section>
 
   <footer class="foot">
-    <p><strong>How to read this honestly.</strong> This is a controlled instrument, not a field
-    benchmark: every input is real (measured RIRs, recorded noise, recorded speech) but the
-    assembly is synthetic, so the value is counterfactual isolation, not fidelity to any one
-    deployment. Behavioural factors are deliberately out of scope — accent, disfluency, speaking
-    rate, and above all the <em>Lombard effect</em>: in real noise people change how they speak, and
-    no acoustic simulator reproduces that. Panel 6 is where the simulation is asked to account for
-    itself.</p>
-    <p>The genre is well-trodden (WildASR; Speech Robustness Bench; "When Denoising Hinders").
-    What this adds is the lens: the confidence–accuracy gap as the headline, typed failure
-    fingerprints instead of a scalar, and an active-learning surrogate over the boundary.</p>
-    <ul id="build-notes" style="margin:8px 0 10px 18px; padding:0"></ul>
-    <p><code id="built-at"></code></p>
+    <div class="cols">
+      <div>
+        <h3>How to read this honestly</h3>
+        <p>This is a controlled instrument, not a field benchmark. Every input is real — measured
+        room impulse responses, recorded noise, recorded speech — but the assembly is synthetic, so
+        what it buys is <em>counterfactual isolation</em>, not fidelity to any one deployment: you
+        turn one knob and hold everything else still, which is the one thing field recordings cannot
+        give you.</p>
+        <p>Behavioural factors are deliberately out of scope: accent, code-switching, disfluency,
+        speaking rate, and above all the <em>Lombard effect</em> — in real noise people involuntarily
+        change how they speak, so noise does not merely mask the signal, it changes how the signal is
+        produced. No acoustic simulator reproduces a behaviour. That boundary is exactly where real
+        field recordings would earn their keep.</p>
+      </div>
+      <div>
+        <h3>Positioning</h3>
+        <p>The controlled-degradation-testbed genre is well trodden — WildASR, Speech Robustness
+        Bench, "When Denoising Hinders", the RIR-augmentation lineage. Nothing here claims novelty of
+        method. What this adds is the lens: the confidence–accuracy gap as the headline rather than a
+        scalar WER, typed failure fingerprints that imply specific fixes, an active-learning
+        surrogate over the failure boundary, and a commercial streaming model that exposes per-word
+        confidence where the literature mostly uses open models.</p>
+        <h3>Build</h3>
+        <ul id="build-notes"></ul>
+        <p><code id="built-at"></code></p>
+      </div>
+    </div>
   </footer>
 
 </div>
