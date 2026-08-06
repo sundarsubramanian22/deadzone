@@ -73,14 +73,24 @@ MODEL = "nova-3"
 # rt60-0.45_snr-0_engine_g726_roll-0 -- engine / g726 / flat mic.
 #
 # The slice was NOT moved to match it, and the reason is measured rather than
-# assumed. On the engine/g726/roll-0 plane the surrogate's predicted WER spans
-# -0.224 to 0.520 over the rt60 x SNR grid: it only grazes the 0.5 threshold in one
-# corner (1.7% of cells inside the draw band, against 6.8% here), and a large part
-# of the plane goes NEGATIVE, which is unphysical for a WER and reads as a broken
-# render on a projector. Moving the slice would trade a legible contour for a corner
-# artifact. So this plane is chosen for legibility of the MECHANISM -- straddle
-# acquisition concentrating on a contour -- and it is not a depiction of the
-# headline condition. demo_break.py is the demo that shows the headline condition.
+# assumed. Both planes were rendered over the same 34 x 11 rt60 x SNR grid, at
+# --seed 0, under both GP fits the demo actually draws (the oracle GP fitted to
+# the training conditions, and the trajectory GP fitted to the acquired points,
+# which is what the last frame shows). The engine/g726/roll-0 plane loses on both:
+#
+#     plane                       predicted-WER span   in draw band   below 0
+#     babble/opus-lowrate/roll-1  (this one)  0.10..1.10 / 0.28..1.10   0.1% / 9.1%    0% / 0%
+#     engine/g726/roll-0                     -0.22..0.52 / -0.03..0.46  0.0% / 0.0%    0.3% / 23.5%
+#
+# i.e. the headline condition's plane never crosses the 0.5 contour -- there is
+# nothing for the boundary band to draw -- and up to a quarter of it goes NEGATIVE,
+# which is unphysical for a WER and reads as a broken render on a projector.
+# Moving the slice would trade a legible contour for an empty one. So this plane is
+# chosen for legibility of the MECHANISM -- straddle acquisition concentrating on a
+# contour -- and it is NOT a depiction of the headline condition. demo_break.py is
+# the demo that shows the headline condition.
+# (Re-measure with: fit GPSurrogate on split["X_train"] / traj.X_raw and probe
+# slice_grid(34, 11) with SLICE_FIXED swapped for the alternative.)
 SLICE_FIXED = {"noise_type": "babble", "codec": "opus-lowrate", "mic_rolloff": 1.0}
 
 RAMP = " .:-=+*#%@"
@@ -306,8 +316,9 @@ def main(argv: list[str] | None = None) -> int:
             "  " + ink.dim("        reverb RT60 (s) →"),
             "",
             "  " + ink.red("█") + ink.dim(f" = predicted failure boundary (within "
-                                          f"{DRAW_BAND:g} of WER {DEFAULT_THRESHOLD:g})"
-                                          f"    shading = predicted WER"),
+                                          f"{DRAW_BAND:g} of WER {DEFAULT_THRESHOLD:g})"),
+            "  " + ink.dim(f"shading = predicted WER: blank/'{RAMP[1]}' = 0.0, "
+                           f"'{RAMP[-1]}' = 1.0 (clipped to [0,1])"),
             "  uncertainty on the boundary (mean GP sigma)  " + ink.cyan(f"{band_sigma:.4f}"),
             "  median |WER - threshold| of the picks        "
             + ink.green(f"{d_acq:.4f}") + ink.dim(f"   (uniform random: {d_rand:.4f})"),

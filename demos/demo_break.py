@@ -9,7 +9,9 @@ One recorded clip, two acoustic conditions:
 
 The whole project's premise is that the second case is the dangerous one. A model
 that knows it is struggling can ask the speaker to repeat. A model that is wrong
-at 0.85 confidence commits, and the downstream system has nothing to defend with.
+while still sounding sure of itself commits, and the downstream system has nothing
+to defend with. (No number is quoted here on purpose: the exemplar's real
+confidence is printed by the demo and is read from the measured grid.)
 
     ./.venv/bin/python demos/demo_break.py                 # offline (DEFAULT). No key, no network.
     ./.venv/bin/python demos/demo_break.py --no-audio      # same, without playback
@@ -194,16 +196,187 @@ def load_dead_zones() -> list[dict]:
     return rows
 
 
-def _count_conditions() -> int:
-    """How many conditions the grid actually measured -- the denominator for
-    'N of M conditions are dead zones'. Read, never hardcoded."""
+FACTOR_KEYS = ("rt60", "snr_db", "noise_type", "codec", "mic_rolloff")
+_NUMERIC_FACTORS = ("rt60", "snr_db", "mic_rolloff")
+
+
+def _grid_facts() -> dict:
+    """
+    The shape of the grid, READ from the measured table rather than asserted.
+
+      n_conditions  the denominator for "N of M conditions are dead zones".
+      levels        every value each factor actually took. This is what lets the
+                    narration say "the harshest SNR level this grid ran" instead
+                    of a literal like "0 dB" -- a literal is correct exactly until
+                    the analysis moves the exemplar, and then it is a contradiction
+                    printed next to the factor line that disagrees with it. That is
+                    not hypothetical: see `narrate_condition`.
+    """
     csv.field_size_limit(10**9)
-    names = set()
+    names: set[str] = set()
+    seen: dict[str, set[str]] = {k: set() for k in FACTOR_KEYS}
     with open(MASTER, newline="") as fh:
         for row in csv.DictReader(fh):
-            if row["model"] == MODEL:
-                names.add(row["condition_name"])
-    return len(names)
+            if row["model"] != MODEL:
+                continue
+            names.add(row["condition_name"])
+            for k in FACTOR_KEYS:
+                if row.get(k, "") != "":
+                    seen[k].add(row[k])
+    levels: dict[str, list] = {}
+    for k, vs in seen.items():
+        levels[k] = (sorted({float(v) for v in vs}) if k in _NUMERIC_FACTORS
+                     else sorted(vs))
+    return {"n_conditions": len(names), "levels": levels}
+
+
+def _global_correlation() -> dict:
+    """
+    The global confidence-vs-accuracy rank correlation, computed by the D1 layer
+    itself (`deadzone.analysis.confidence_gap`) rather than restated here.
+
+    It is `spearman(within-model confidence percentile, WER)` over the conditions
+    in which the model actually emitted words, with WER taken on **those same
+    clips** (`wer_spoke`). Both halves therefore describe one population. Pairing
+    a confidence averaged over the speaking clips against a WER averaged over all
+    of them is the estimand mismatch of SPEC Appendix G, which is what put a
+    non-dead-zone at the top of this demo in the first place; recomputing it here
+    by hand would be re-opening that door. Costs ~1 s and runs at `--prepare`
+    time, never on stage.
+    """
+    from deadzone.analysis import load_master_table
+    from deadzone.analysis.confidence_gap import overall_correlation, per_condition_table
+
+    cond_rows = per_condition_table(load_master_table(str(MASTER)), model=MODEL)
+    res = overall_correlation(cond_rows, wer_key="wer_spoke")
+    return {
+        "spearman": float(res["spearman_confpct_vs_wer"]),
+        "n_conditions": int(res["n"]),
+        "n_excluded_no_confidence": int(res["n_excluded_no_confidence"]),
+        "wer_key": res["wer_key"],
+        "verdict": res["verdict"],
+    }
+
+
+# --------------------------------------------------------------------------
+# the narration  (DERIVED from the condition, never a literal)
+# --------------------------------------------------------------------------
+#
+# The sentence this replaces was a literal. It read:
+#
+#     "Note the SNR: 20 dB is a QUIET room. This is reverb and channel, not
+#      loudness."
+#
+# and it was written for the exemplar that ranked #1 BEFORE the estimand
+# mismatch was found (SPEC Appendix G). When the corrected #1 turned out to be a
+# 0 dB engine cell, the literal stayed put and the demo began printing
+# "SNR 0 dB" and "20 dB is a QUIET room" four lines apart, on the slide the whole
+# project is built around. Nothing failed; it just said two things.
+#
+# So the narration is now computed from the condition being demoed and from the
+# levels the grid actually ran. It cannot contradict the factor line above it,
+# because it is derived from the same dict. Superlatives ("the harshest SNR level
+# this grid ran") are ranked against the measured level set rather than against a
+# remembered one, and they degrade to plain phrasing if the level set is absent.
+
+def _rank_label(value: float, levels: list, worst: str) -> str:
+    """
+    Where this level sits among the levels the grid actually ran.
+
+    `worst` says which end hurts: "low" for SNR (quiet noise is easy), "high" for
+    reverb and mic rolloff. Returns "" when the level set is unknown or has a
+    single level, because a superlative over one point is not a description.
+    """
+    try:
+        vals = sorted(float(v) for v in levels)
+    except (TypeError, ValueError):
+        return ""
+    if len(set(vals)) < 2 or value != value:
+        return ""
+    lo, hi = vals[0], vals[-1]
+    harsh, mild = (lo, hi) if worst == "low" else (hi, lo)
+    if abs(value - harsh) < 1e-9:
+        return "harshest"
+    if abs(value - mild) < 1e-9:
+        return "mildest"
+    return "mid-range"
+
+
+def _f_or_nan(cond: dict, key: str) -> float:
+    return _f(cond.get(key))
+
+
+def narrate_condition(cond: dict, levels: dict | None = None) -> str:
+    """
+    One derived sentence: which knobs are doing the damage in THIS cell, and
+    which are sitting at their benign setting. Pure function of `cond` (+ the
+    grid's level sets), so it cannot drift away from the condition on screen.
+    """
+    levels = levels or {}
+
+    def lv(key):
+        return levels.get(key) or []
+
+    damage: list[str] = []
+    spared: list[str] = []
+
+    # --- noise -------------------------------------------------------------
+    snr = _f_or_nan(cond, "snr_db")
+    noise = str(cond.get("noise_type") or "noise")
+    r = _rank_label(snr, lv("snr_db"), worst="low")
+    if r == "mildest":
+        spared.append(f"the {noise} noise is at the quietest SNR this grid ran")
+    elif r:
+        damage.append(f"{noise} noise at the {r} SNR this grid ran")
+    else:
+        damage.append(f"{noise} noise")
+
+    # --- reverb ------------------------------------------------------------
+    rt60 = _f_or_nan(cond, "rt60")
+    r = _rank_label(rt60, lv("rt60"), worst="high")
+    if r == "mildest":
+        spared.append("the room is the driest this grid ran")
+    elif r == "harshest":
+        damage.append("the most reverberant room this grid ran")
+    elif r:
+        damage.append("a mid-range room")
+    else:
+        damage.append("the room")
+
+    # --- codec -------------------------------------------------------------
+    codec = str(cond.get("codec") or "none")
+    if codec == "none":
+        spared.append("no codec is applied")
+    else:
+        damage.append(f"the {codec} narrowband codec")
+
+    # --- mic ---------------------------------------------------------------
+    roll = _f_or_nan(cond, "mic_rolloff")
+    r = _rank_label(roll, lv("mic_rolloff"), worst="high")
+    if roll == 0.0:
+        spared.append("the mic response is flat")
+    elif r == "harshest":
+        damage.append("the heaviest mic rolloff this grid ran")
+    elif r:
+        damage.append("a partial mic rolloff")
+    else:
+        damage.append("mic rolloff")
+
+    def join(parts: list[str]) -> str:
+        if len(parts) <= 1:
+            return "".join(parts)
+        return ", ".join(parts[:-1]) + " and " + parts[-1]
+
+    out = "Doing the damage: " + join(damage) + "."
+    if spared:
+        out += "  Left alone: " + join(spared) + "."
+    # The point the old literal was reaching for, now conditional on the data.
+    noise_spared = any("SNR" in s for s in spared)
+    if noise_spared and damage:
+        out += "  So this is the room and the channel, not loudness."
+    elif len(damage) == 1 and not noise_spared and "noise" in damage[0]:
+        out += "  So this is loudness alone."
+    return out
 
 
 def _row_facts(row: dict) -> dict:
@@ -343,9 +516,15 @@ def build_cache(condition_name: str = DEFAULT_CONDITION,
             for r in dz_rows
         ],
         "n_dead_zones": len(dz_rows),
-        "n_conditions": _count_conditions(),
         "clips": out_clips,
     }
+    grid = _grid_facts()
+    cache["n_conditions"] = grid["n_conditions"]
+    # every factor level the grid ran -- the narration ranks against this rather
+    # than against a remembered level set (see narrate_condition)
+    cache["grid_levels"] = grid["levels"]
+    # the closing claim, computed by the D1 layer rather than restated here
+    cache["correlation"] = _global_correlation()
     CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
     CACHE_PATH.write_text(json.dumps(cache, indent=1))
     if verbose:
@@ -467,6 +646,23 @@ def render_diff(edits: list, width: int, ink: Ink,
 
 def rule(width: int, ch: str = "─") -> str:
     return ch * width
+
+
+def _wrap(text: str, width: int) -> list[str]:
+    import textwrap
+    return textwrap.wrap(text, max(30, width)) or [""]
+
+
+def _paired_wer(cond: dict) -> float:
+    """
+    The WER that may legally be printed next to a mean confidence: the one over
+    the clips that produced words. `wer` in the same dict is the all-clips
+    corpus WER, and subtracting a confidence from it is the estimand mismatch
+    (SPEC Appendix G). Falls back to `wer` only when `wer_spoke` is absent, which
+    is an old cache, not a licence to mix populations.
+    """
+    w = _f(cond.get("wer_spoke"))
+    return w if w == w else _f(cond.get("wer"))
 
 
 def verdict_card(facts: dict, ink: Ink, width: int, danger: bool) -> list[str]:
@@ -637,6 +833,14 @@ def preflight(ink: Ink) -> int:
                 "the demo condition is a MEASURED dead zone")
             chk(cache["clips"][cache["default_clip"]]["deadzone"]["wer"] > 0.2,
                 "the default exemplar actually fails in it")
+            # the narration is derived from these two; without them the demo
+            # silently drops its closing claim and loses its superlatives
+            chk(bool(cache.get("grid_levels")),
+                "the grid's factor levels are cached (narration derives from them)",
+                "make demo-prep")
+            chk(_f((cache.get("correlation") or {}).get("spearman")) ==
+                _f((cache.get("correlation") or {}).get("spearman")),
+                "the global confidence-WER correlation is cached", "make demo-prep")
     chk(MASTER.is_file(), str(MASTER), "run the grid (SPEC A.R4)")
     chk(DEAD_ZONES.is_file(), str(DEAD_ZONES), "run analysis/confidence_gap.py")
     chk(Path("dashboard/deadzone.html").is_file(), "dashboard/deadzone.html",
@@ -692,13 +896,13 @@ def run(cache: dict, clip_id: str, ink: Ink, width: int, audio: bool,
 
     # ---- stage 2: the measured dead zone --------------------------------
     play(entry["audio_deadzone"], ink, audio)
+    note = narrate_condition(cond, cache.get("grid_levels"))
     show_stage(
         f"  [2]  DEAD ZONE #{cond['rank']}  —  {cond['name']}",
         f"       rt60 {cond['rt60']:g}s (measured {cond['rt60_measured']:.2f}s) · "
         f"SNR {cond['snr_db']:g} dB · {cond['noise_type']} · "
         f"{cond['codec']} · mic rolloff {cond['mic_rolloff']:g}\n"
-        f"       Note the SNR: 20 dB is a QUIET room. This is reverb and channel, "
-        f"not loudness.",
+        + "\n".join("       " + l for l in _wrap(note, width - 7)),
         dz, ink, width, danger=True)
 
     # ---- the punchline ---------------------------------------------------
@@ -721,50 +925,83 @@ def run(cache: dict, clip_id: str, ink: Ink, width: int, audio: bool,
     cols = diff_columns(dz["edits"])
     hyp_slots = [i for i, (op, _, _) in enumerate(cols) if op in ("match", "sub", "ins")]
     if wc and len(hyp_slots) == len(wc):
-        subs = [(cols[i][2], wc[k]) for k, i in enumerate(hyp_slots) if cols[i][0] == "sub"]
+        # SUBSTITUTIONS only, and named as such. The verdict card next to this
+        # line prints `ins 0` for the default exemplar, so calling a substitution
+        # an invention is a claim a presenter would immediately have to walk back.
+        # Both sides are shown: "heard X as Y" is checkable against the diff above.
+        subs = [(cols[i][1], cols[i][2], wc[k])
+                for k, i in enumerate(hyp_slots) if cols[i][0] == "sub"]
         if subs:
-            worst = max(subs, key=lambda t: t[1])
-            print('    It invented the word {} and reported {} confidence in it.'.format(
-                ink.red('"' + worst[0] + '"'), ink.red("{:.2f}".format(worst[1]))))
+            ref_w, hyp_w, c = max(subs, key=lambda t: t[2])
+            print('    It heard {} as {} and reported {} confidence in that word.'.format(
+                ink.yellow('"' + ref_w + '"'), ink.red('"' + hyp_w + '"'),
+                ink.red("{:.2f}".format(c))))
     print()
 
     # ---- it is not one unlucky clip --------------------------------------
     print(ink.dim(rule(width)))
     print(ink.bold("  AND IT IS NOT ONE UNLUCKY CLIP"))
     print()
-    print(f"    Averaged over all {cond['n_clips']} clips ({cond['n_ref_total']} reference "
-          f"words) in this same condition:")
+    # THE ESTIMAND IS NAMED, AND THE TWO HALVES ARE ON THE SAME CLIPS. `gap` is
+    # `mean_conf - (1 - wer_spoke)`, so the WER printed beside the confidence must
+    # be `wer_spoke` -- the WER over exactly the clips the confidence is averaged
+    # over. Printing the all-clips WER here instead is the SPEC Appendix G
+    # mismatch, and it is silent: for the default exemplar the two are equal, so
+    # a wrong pairing would look right on stage and only misfire once the
+    # exemplar moves to a cell with silent clips.
+    n_sil = int(cond.get("n_silent", 0) or 0)
+    n_spoke = cond["n_clips"] - n_sil
+    wer_paired = _paired_wer(cond)
+    if n_sil == 0:
+        print(f"    Averaged over all {cond['n_clips']} clips ({cond['n_ref_total']} "
+              f"reference words) in this same condition:")
+    else:
+        print(f"    Averaged over the {n_spoke} of {cond['n_clips']} clips this condition "
+              f"produced words on:")
     print("      mean confidence {}   WER {}   confidence-accuracy gap {}".format(
         ink.bold("{:.3f}".format(cond["mean_conf"])),
-        ink.bold("{:.3f}".format(cond["wer"])),
+        ink.bold("{:.3f}".format(wer_paired)),
         ink.bold("{:+.3f}".format(cond["gap"]))))
-    # The gap above is only meaningful because the two averages cover the SAME
-    # clips. Say so: a cell where some clips return an empty transcript has its
-    # confidence averaged over a strictly easier subset, and the difference is
-    # then missing clips rather than overconfidence.
-    n_sil = int(cond.get("n_silent", 0) or 0)
     if n_sil == 0:
         print(ink.dim("      (all {} clips produced a transcript, so the confidence and the "
                       "WER".format(cond["n_clips"])))
         print(ink.dim("       are averaged over the same clips -- the gap needs no asterisk.)"))
     else:
-        print(ink.dim("      ({} of {} clips returned an EMPTY transcript and carry no "
-                      "confidence;".format(n_sil, cond["n_clips"])))
-        print(ink.dim("       WER on the {} clips it spoke on is {:.3f}.)".format(
-            cond["n_clips"] - n_sil, cond.get("wer_spoke", float("nan")))))
+        print(ink.dim("      ({} of {} clips returned an EMPTY transcript and {} no "
+                      "confidence,".format(n_sil, cond["n_clips"],
+                                           "carries" if n_sil == 1 else "carry")))
+        print(ink.dim("       so they are out of both averages above. Over all {} clips the "
+                      "WER is {:.3f}.)".format(cond["n_clips"], cond["wer"])))
     print()
     print(f"    {cache['n_dead_zones']} conditions out of {cache.get('n_conditions', '?')} "
           f"cleared the dead-zone bar (high confidence AND high WER):")
     for i, z in enumerate(cache["dead_zones"], start=1):
         mark = ink.red("▸") if z["name"] == cond["name"] else " "
+        sil = int(z.get("n_silent", 0) or 0)
+        tail = "" if sil == 0 else ink.dim("  ({}/{} spoke)".format(z["n_clips"] - sil,
+                                                                   z["n_clips"]))
         print(f"      {mark} {i}. {pad(z['name'], 46)} conf {z['mean_conf']:.3f}  "
-              f"WER {z['wer']:.3f}")
+              f"WER {_paired_wer(z):.3f}{tail}")
+    print(ink.dim("      (conf and WER are both over the clips the model spoke on)"))
     print()
-    print(ink.dim("    Globally, spearman(confidence, WER) = -0.980: this model mostly DOES"))
-    print(ink.dim("    know when it is failing. That is what makes these {} dangerous -- a".format(
-        cache["n_dead_zones"])))
-    print(ink.dim("    system tuned on the model's average self-awareness will trust it"))
-    print(ink.dim("    exactly where it should not."))
+
+    # The closing claim, read from the cache the D1 layer filled in. If it is
+    # absent the demo says so rather than falling back to a remembered number --
+    # a stale constant printed with authority is worse than a missing line.
+    corr = cache.get("correlation") or {}
+    rho = _f(corr.get("spearman"))
+    if rho == rho:
+        print(ink.dim("    Across the {} conditions where {} emitted words, spearman(confidence"
+                      .format(corr.get("n_conditions", "?"), cache["model"])))
+        print(ink.dim("    percentile, WER on those same clips) = {:.3f}: this model mostly DOES"
+                      .format(rho)))
+        print(ink.dim("    know when it is failing. That is what makes these {} dangerous -- a"
+                      .format(cache["n_dead_zones"])))
+        print(ink.dim("    system tuned on the model's average self-awareness will trust it"))
+        print(ink.dim("    exactly where it should not."))
+    else:
+        print(ink.dim("    (global confidence-WER correlation not in this cache -- run "
+                      "`make demo-prep`)"))
     print()
     return 0
 

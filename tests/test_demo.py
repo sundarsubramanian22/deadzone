@@ -598,6 +598,225 @@ class DemoAudioSet(unittest.TestCase):
         self.assertIn("results/audio/demo", note.read_text())
 
 
+# ---------------------------------------------------------------------------
+# narration drift
+# ---------------------------------------------------------------------------
+#
+# THE DEFECT THIS EXISTS FOR. demo_break.py printed the exemplar's factor line
+# ("SNR 0 dB · engine · g726 · mic rolloff 0") and then, four lines later, a
+# hardcoded sentence reading "Note the SNR: 20 dB is a QUIET room. This is reverb
+# and channel, not loudness." The sentence was written for the exemplar that
+# ranked #1 before SPEC Appendix G's estimand mismatch was corrected; when the
+# corrected #1 turned out to be a 0 dB engine cell, the literal stayed. The demo
+# ran, exited 0, and contradicted itself on the most-watched slide of the
+# interview. No test could see it, because nothing crashed.
+#
+# So the checker below reads the narration block the demo actually prints and
+# asks whether every acoustic quantity IN it agrees with the condition it is
+# narrating. `test_the_checker_catches_the_sentence_that_shipped` is the negative
+# control: it feeds the real historical sentence to the same checker and requires
+# it to be flagged, so the test is pinned to the violation rather than to some
+# incidental property of today's clean output.
+
+# Values a narration is allowed to name, and the condition field each must equal.
+_CODEC_TOKENS = ("g726", "opus-lowrate", "amr")
+_NOISE_TOKENS = ("babble", "engine", "road")
+
+
+def narration_conflicts(text: str, cond: dict) -> list[str]:
+    """
+    Every acoustic literal in `text` that disagrees with `cond`. Empty == clean.
+
+    Deliberately checks VALUES, not phrasing: a narration is free to say whatever
+    it likes about the cell as long as the numbers and the factor names it puts on
+    screen are that cell's own.
+    """
+    bad = []
+    for m in re.finditer(r"(-?\d+(?:\.\d+)?)\s*dB\b", text):
+        got = float(m.group(1))
+        if abs(got - float(cond["snr_db"])) > 1e-9:
+            bad.append(f"names {got:g} dB, but the condition is "
+                       f"SNR {float(cond['snr_db']):g} dB")
+    for m in re.finditer(r"rt60[^0-9\-]{0,12}(\d+(?:\.\d+)?)", text, re.I):
+        got = float(m.group(1))
+        if not any(abs(got - float(cond[k])) < 5e-3
+                   for k in ("rt60", "rt60_measured") if cond.get(k) is not None):
+            bad.append(f"names rt60 {got:g}, but the condition is "
+                       f"rt60 {float(cond['rt60']):g}")
+    for tok in _CODEC_TOKENS:
+        if re.search(rf"\b{re.escape(tok)}\b", text) and tok != cond["codec"]:
+            bad.append(f"names codec {tok!r}, but the condition uses "
+                       f"{cond['codec']!r}")
+    for tok in _NOISE_TOKENS:
+        if re.search(rf"\b{tok}\b", text) and tok != cond["noise_type"]:
+            bad.append(f"names noise {tok!r}, but the condition uses "
+                       f"{cond['noise_type']!r}")
+    return bad
+
+
+def narration_block(stdout: str) -> str:
+    """
+    The stage-2 header + its narration, i.e. everything between the DEAD ZONE
+    heading and the rule that closes it. Scoped on purpose: further down the page
+    the demo prints the full dead-zone ranking, whose condition NAMES legitimately
+    contain other cells' factor values.
+    """
+    lines = stdout.splitlines()
+    start = next((i for i, l in enumerate(lines) if "DEAD ZONE #" in l), None)
+    assert start is not None, "no stage-2 header in the demo output"
+    end = next((j for j in range(start + 1, len(lines))
+                if lines[j].strip().startswith("─")), len(lines))
+    return "\n".join(lines[start:end])
+
+
+class NarrationTracksTheConditionOnScreen(unittest.TestCase):
+
+    @classmethod
+    def setUpClass(cls):
+        cache()
+        cls.r = run_demo("--offline", "--no-audio", "--pause", "0")
+        cls.cond = cache()["condition"]
+
+    def test_the_rendered_narration_agrees_with_the_demoed_condition(self):
+        block = narration_block(self.r.stdout)
+        self.assertGreater(len(block.splitlines()), 1,
+                           "the stage-2 header has no narration under it")
+        self.assertEqual(narration_conflicts(block, self.cond), [],
+                         f"the narration contradicts the condition it is "
+                         f"narrating:\n{block}")
+
+    def test_the_checker_catches_the_sentence_that_shipped(self):
+        """NEGATIVE CONTROL — the literal that actually regressed, verbatim."""
+        shipped = ("Note the SNR: 20 dB is a QUIET room. This is reverb and "
+                   "channel, not loudness.")
+        conflicts = narration_conflicts(shipped, self.cond)
+        self.assertTrue(conflicts,
+                        "the drift checker does not flag the exact sentence that "
+                        "shipped against the exact condition it shipped with — it "
+                        "would not have caught the regression it exists for")
+        self.assertTrue(any("dB" in c for c in conflicts), conflicts)
+
+    def test_the_checker_passes_the_narration_for_the_condition_it_was_written_for(self):
+        """
+        The control's control: the same shipped sentence is CLEAN against the old
+        exemplar. This pins the failure to the pairing (sentence x condition), not
+        to the sentence — otherwise the checker could be flagging any prose at all
+        and the test above would pass for the wrong reason.
+        """
+        old = {"rt60": 0.7, "rt60_measured": 0.68, "snr_db": 20.0,
+               "noise_type": "babble", "codec": "opus-lowrate", "mic_rolloff": 1.0}
+        shipped = ("Note the SNR: 20 dB is a QUIET room. This is reverb and "
+                   "channel, not loudness.")
+        self.assertEqual(narration_conflicts(shipped, old), [])
+
+    def test_narrate_condition_follows_the_condition_it_is_given(self):
+        """The generator is a pure function of the cell, on two opposite cells."""
+        levels = {"rt60": [0.2, 0.45, 0.7, 1.0], "snr_db": [0.0, 5.0, 10.0, 20.0],
+                  "mic_rolloff": [0.0, 0.5, 1.0], "codec": ["none", "g726"],
+                  "noise_type": ["babble", "engine"]}
+        loud = {"rt60": 0.45, "snr_db": 0.0, "noise_type": "engine",
+                "codec": "g726", "mic_rolloff": 0.0}
+        quiet = {"rt60": 1.0, "snr_db": 20.0, "noise_type": "babble",
+                 "codec": "none", "mic_rolloff": 1.0}
+        t_loud = demo_break.narrate_condition(loud, levels)
+        t_quiet = demo_break.narrate_condition(quiet, levels)
+        self.assertNotEqual(t_loud, t_quiet)
+        self.assertEqual(narration_conflicts(t_loud, loud), [])
+        self.assertEqual(narration_conflicts(t_quiet, quiet), [])
+        # and the two are not interchangeable: swapping them is a contradiction
+        self.assertTrue(narration_conflicts(t_loud, quiet)
+                        or narration_conflicts(t_quiet, loud),
+                        "the narration says the same thing about opposite cells, "
+                        "so it is not actually derived from them")
+        # the rhetorical point of the retired literal, now conditional on the data
+        self.assertIn("not loudness", t_quiet)
+        self.assertNotIn("not loudness", t_loud)
+
+    def test_narrate_condition_survives_a_missing_level_set(self):
+        """An older cache has no `grid_levels`; the demo must degrade, not crash."""
+        cell = {"rt60": 0.45, "snr_db": 0.0, "noise_type": "engine",
+                "codec": "g726", "mic_rolloff": 0.0}
+        for levels in (None, {}, {"snr_db": []}):
+            txt = demo_break.narrate_condition(cell, levels)
+            self.assertTrue(txt.strip())
+            self.assertEqual(narration_conflicts(txt, cell), [])
+
+    def test_the_closing_correlation_is_cached_not_recited(self):
+        """
+        The demo's last claim used to be the literal `-0.980`. It is now read from
+        `deadzone.analysis.confidence_gap`, on the paired estimand, and both the
+        value and its n must be on screen so a presenter can say what it is over.
+        """
+        corr = cache().get("correlation") or {}
+        self.assertEqual(corr.get("wer_key"), "wer_spoke",
+                         "the correlation is not on the paired estimand")
+        rho, n = float(corr["spearman"]), int(corr["n_conditions"])
+        self.assertLess(rho, -0.3)
+        out = self.r.stdout
+        self.assertIn(f"{rho:.3f}", out, "the correlation is not on screen")
+        self.assertIn(str(n), out, "the correlation's n is not on screen")
+        self.assertNotIn("-0.980", (REPO / "demos" / "demo_break.py").read_text(),
+                         "the correlation is a literal in the source again; it "
+                         "happens to be right today, which is exactly how the SNR "
+                         "sentence survived")
+
+    def test_the_closing_correlation_follows_the_cache_and_not_a_constant(self):
+        """
+        NEGATIVE CONTROL for the line above: feed a doctored correlation and
+        require the screen to change. Asserting only that `-0.980` is on screen
+        would pass identically whether the number is derived or recited.
+        """
+        import contextlib
+        import copy
+        import io
+        c = copy.deepcopy(cache())
+        c["correlation"]["spearman"] = -0.5
+        c["correlation"]["n_conditions"] = 7
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            demo_break.run(c, c["default_clip"], demo_break.Ink(False), 96,
+                           False, 0.0, False)
+        got = buf.getvalue()
+        self.assertIn("-0.500", got)
+        self.assertIn("Across the 7 conditions", got)
+        self.assertNotIn("-0.980", got)
+
+    def test_a_cache_without_a_correlation_says_so_instead_of_reciting_one(self):
+        import contextlib
+        import copy
+        import io
+        c = copy.deepcopy(cache())
+        c.pop("correlation", None)
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            demo_break.run(c, c["default_clip"], demo_break.Ink(False), 96,
+                           False, 0.0, False)
+        got = buf.getvalue()
+        self.assertIn("make demo-prep", got)
+        self.assertNotRegex(got, r"spearman.*-0\.\d",
+                            "a missing correlation must be reported, not "
+                            "back-filled from memory")
+
+    def test_the_aggregate_wer_is_paired_with_the_confidence(self):
+        """
+        SPEC Appendix G, in the demo's own summary: the WER printed beside a mean
+        confidence must be `wer_spoke`. For today's exemplar the two are equal, so
+        this cannot be caught by reading the screen — it is checked against the
+        cache, and against the identity that defines the gap.
+        """
+        c = self.cond
+        self.assertAlmostEqual(c["gap"],
+                               c["mean_conf"] - (1.0 - c["wer_spoke"]), places=9,
+                               msg="gap is not conf - (1 - wer_spoke); the demo "
+                                   "is quoting a mismatched pairing")
+        self.assertIn(f"{c['wer_spoke']:.3f}", self.r.stdout)
+        for z in cache()["dead_zones"]:
+            if z.get("n_silent"):
+                self.assertIn(f"{z['wer_spoke']:.3f}", self.r.stdout,
+                              f"{z['name']} is listed on the all-clips WER next "
+                              f"to a spoke-only confidence")
+
+
 class ActiveLearningDemo(unittest.TestCase):
 
     def test_demo_al_runs_offline_and_exits_zero(self):

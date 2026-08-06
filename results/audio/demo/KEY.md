@@ -40,7 +40,13 @@ this comparison is confounded by the channel factors.
 
 ## Per-clip facts (all from `results/master.csv`)
 
-### Pair 1 — `u40` (primary)
+Play order is **pair 2, then pair 3, pair 1 third** — see `DEMO_SCRIPT.md` §2.
+All three carry identical evidential weight (the model scores every pair exactly
+equal); the ordering is about the listener. The one session run so far drew
+confident calls on pairs 2 and 3 and a hedge on pair 1 ("both pretty bad"), so
+pair 1 is no longer opened on.
+
+### Pair 1 — `u40` (third choice — play only if they want another)
 
 - reference: `ask yamamoto to sign page twelve before we file`
 - **A** blind_03.wav — WER **0.333**, mean conf 0.805
@@ -48,7 +54,7 @@ this comparison is confounded by the channel factors.
 - **B** blind_07.wav — WER **0.333**, mean conf 0.807
   - hyp: `ask yamamoto to sign page twelve in world five`
 
-### Pair 2 — `u21` (primary)
+### Pair 2 — `u21` (primary — play first)
 
 - reference: `forward the file to accounting and legal by monday`
 - **A** blind_06.wav — WER **0.222**, mean conf 0.879
@@ -56,7 +62,7 @@ this comparison is confounded by the channel factors.
 - **B** blind_01.wav — WER **0.222**, mean conf 0.854
   - hyp: `forward the file to accounting and legal`
 
-### Pair 3 — `u26` (backup)
+### Pair 3 — `u26` (primary — play second)
 
 - reference: `text me the address for the kowalski wedding`
 - **A** blind_08.wav — WER **0.250**, mean conf 0.864
