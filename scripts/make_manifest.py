@@ -282,6 +282,27 @@ def build() -> dict:
                 "exposes_word_confidence": "derived, not native -- see "
                                            "_parse_whisper_result in audio_pipeline.py",
             },
+            # The third arm was MISSING from this block until 2026-08-06, while
+            # its rows, its cost and its call count were all counted correctly
+            # elsewhere in this same file. That is SPEC J.6's defect -- a
+            # hardcoded pair where the data has three -- sitting in the one
+            # artifact a reader opens specifically to find out what was run.
+            # A two-arm manifest describing a three-arm experiment is not
+            # incomplete, it is wrong, and it is wrong in the reassuring
+            # direction: nothing about it looks unfinished.
+            "batch_commercial_peer": {
+                "provider": "elevenlabs",
+                "literal": "scribe_v2",
+                "api": "pre-recorded (POST /v1/speech-to-text)",
+                "exposes_word_confidence": True,
+                "confidence_scale": ("per-word `logprob` (log-probability, <= 0), "
+                                     "exp()'d to a probability by the adapter"),
+                "caveat": ("RANK-ONLY. Orthography is non-deterministic across "
+                           "byte-identical calls, so its offset is variance, not "
+                           "bias, and cannot be normalized away. Excluded from "
+                           "cross-model WER in code (model_compare raises); "
+                           "admitted to rank statistics only. See SPEC I.5."),
+            },
         },
         "environment": {
             "python": sys.version.split()[0],

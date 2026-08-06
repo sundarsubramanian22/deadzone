@@ -1,13 +1,13 @@
 {
-  "generated_utc": "2026-08-06T06:42:15+00:00",
+  "generated_utc": "2026-08-06T11:04:46+00:00",
   "git": {
-    "sha": "0d7d8f57c3e053e82a65168bfe23829d9f17869b",
+    "sha": "c601cf9c290d7579b4b7ab5868cc48caf6dd816f",
     "branch": "main",
-    "dirty": false,
-    "describe": "0d7d8f5"
+    "dirty": true,
+    "describe": "grid-v1-33-gc601cf9"
   },
   "models": {
-    "streaming_commercial": {
+    "batch_commercial": {
       "provider": "deepgram",
       "literal": "nova-3",
       "api": "pre-recorded (listen.v1.media.transcribe_file)",
@@ -18,6 +18,14 @@
       "provider": "openai-whisper (local)",
       "literal": "base",
       "exposes_word_confidence": "derived, not native -- see _parse_whisper_result in audio_pipeline.py"
+    },
+    "batch_commercial_peer": {
+      "provider": "elevenlabs",
+      "literal": "scribe_v2",
+      "api": "pre-recorded (POST /v1/speech-to-text)",
+      "exposes_word_confidence": true,
+      "confidence_scale": "per-word `logprob` (log-probability, <= 0), exp()'d to a probability by the adapter",
+      "caveat": "RANK-ONLY. Orthography is non-deterministic across byte-identical calls, so its offset is variance, not bias, and cannot be normalized away. Excluded from cross-model WER in code (model_compare raises); admitted to rank statistics only. See SPEC I.5."
     }
   },
   "environment": {
