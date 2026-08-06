@@ -1,5 +1,29 @@
 # 🛑 REGENERATION HAZARD — read before running `scripts/make_demo_audio.py`
 
+> ## ✅ FIXED 2026-08-06 (`aea58e2`) — the guard described below is now IMPLEMENTED
+>
+> `make_demo_audio.py` now **refuses** to overwrite an authored document whose
+> content hash does not match what it last wrote, and the "what to do" checklist
+> further down is enforced by `tests/test_make_demo_audio.py` (16 tests,
+> mutation-checked twice) rather than left to whoever remembers to read this.
+> `--force` no longer unlocks documents; `--force-docs` does, and it copies each
+> file to `<name>.superseded-<UTC>.md` first.
+>
+> **Two things this file got right and one it could not have known.**
+> Right: the hazard was real, and the record it protects derives from no
+> artifact. Right: naming a file the generator does not know about is what let
+> the warning survive to be acted on. Could not have known: **the trigger was
+> `tests/test_demo.py:398`, which invoked the generator with `--force` against
+> the live tree on every `make test`.** A passing test suite was the delivery
+> mechanism — so "just don't run the generator" was never sufficient advice.
+>
+> Kept, not deleted. The hazard is fixed for *this* generator;
+> `scripts/make_audio_sets.py` still rewrites
+> `results/audio/listen/WHAT_TO_LISTEN_FOR.md` unconditionally, and that is
+> listening instructions sitting in the directory where a listening pass
+> happens — the likeliest file in the repo for a human to annotate. The reading
+> below is the argument for fixing that one too.
+
 **Written 2026-08-05. This file is NOT generated** — `make_demo_audio.py` does
 not know it exists, which is the only reason it can be trusted to survive.
 
