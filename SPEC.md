@@ -2266,6 +2266,16 @@ having for a number this load-bearing.
   half-width 0.0360 vs 0.0143). The code computes the tighter interval and
   deliberately declines to use it. Conservative in the only direction that
   matters for a pre-registered test. No branch can omit the verdict.
+  > ⚠️ **The two figures in this bullet are SUPERSEDED and were never persisted
+  > when written; they now are.** `decompose` stores `s1_st_bootstrap_corr` and
+  > `gap_conf_ratio_quadrature_over_direct` per factor in `results/sobol.json`.
+  > Measured: correlations **+0.843 / +0.871 / +0.854 / +0.646** for
+  > `rt60` / `snr_db` / `mic_rolloff` / `codec` — note this bullet lists `codec`
+  > **third**, so substituting positionally reassigns values to the wrong
+  > factors — and the width ratio is **not** a single "~2.5×": it is
+  > **2.49 / 2.70 / 2.10 / 1.27** in that factor order, i.e. an `rt60` statement
+  > that nearly vanishes for `codec`. The qualitative claim (positively
+  > correlated, quadrature conservative) stands. See `report/writeup.md` D.6(iii).
 
 **One defect found and fixed.** `load_factorial`'s hole check cannot see a
 **duplicate**: the fill loop assigns `W[clip, cell] = y`, so a second row for an
@@ -2290,6 +2300,13 @@ example.
    (0.0112) is mostly noise floor. **Does not threaten the verdict** — the margin
    over the pre-set 0.020 threshold is ~5×, and the conservative CI lower bound
    (0.0915) is 4.5× it.
+   > ⚠️ **Scope correction: both figures here are `rt60`-only.** 0.0915 is
+   > `rt60`'s quadrature lower bound (4.57× the threshold); `snr_db`'s is
+   > **0.0716 — 3.58×**, and that is the binding case across both registered
+   > factors and both CI forms. Quoting 4.5× without the factor name (as an
+   > earlier write-up draft did) makes an `rt60` clearance read as a universal
+   > one. All four bounds are persisted as `gap_ci_lo_direct` /
+   > `gap_ci_lo_quadrature` in `results/sobol.json`.
 2. **The decomposed response is the *unweighted* mean of per-clip WER**, not
    word-weighted pooled corpus WER. Both were computed: max per-cell difference
    0.0194, `V_total` 0.12658 vs 0.12586, S1/ST shift ≤0.0033, rankings identical,
@@ -2558,6 +2575,15 @@ simulation gap"* — a named artifact, never a result. Correct treatment.
 ---
 
 # Appendix D: ElevenLabs Scribe arm — the day-one gate (2026-08-05)
+
+> ⚠️ **SUPERSEDED 2026-08-06 by Appendix I — the arm is unblocked and RUN**
+> (1760 rows, 0 failures). Read D for the *predictions*, which all held: per-word
+> `logprob`, `scribe_v2`, the price, and the two traps the probe was built to
+> catch. Read **I** for what was measured, the scope decision, and the three
+> findings. D.1's diagnosis of the credential is also superseded — the value was
+> not a malformed API key but the dashboard's **Key ID**, which is not a
+> credential at all and could never have worked (I.1). D.4's "no genuinely
+> streaming arm" note still stands: the arm that ran is **batch**.
 
 ## D.1 GATE RESULT: BLOCKED on the key, zero spend
 
@@ -3336,3 +3362,269 @@ objection — *you gave the GP the wrong axis* — and an objection with an obvi
 answer that is never run is the cheapest way for a null to be quietly wrong. It
 cost 190,080 free oracle calls and roughly half an hour of wall clock to close it,
 and the negative control is the part that closed it.
+
+---
+
+# Appendix I: the ElevenLabs Scribe arm — and a commercial ASR that is not reproducible (2026-08-06)
+
+> **Supersedes Appendix D**, which recorded this arm as BLOCKED on an invalid key
+> and zero spend. It is unblocked and run: **1760 rows, 0 failures**. D's
+> *predictions* all held (per-word `logprob`, `scribe_v2`, the price), so it is
+> left intact as the record of a gate that confirmed rather than discovered — see
+> I.1 for what the credential problem actually was. Every number below was
+> recomputed from `results/master.csv` for this appendix rather than copied from a
+> run log (SPEC C.7's process note).
+
+## I.0 What landed
+
+`scribe_v2`, batch REST `POST /v1/speech-to-text`, the **10-clip AL subset ×
+176 conditions**, run 2026-08-06T06:03–06:06Z. Zero failures — the 3 failed cells
+in the 1757-row L1 intersection are Whisper's, not Scribe's. It returns per-word
+**`logprob`** (log-probability, ≤ 0), `exp()`-ed to a probability, so it is the
+**only arm besides nova-3 that carries per-word confidence** and therefore a full
+arm rather than a WER-only one. It ran the *same* 10 clips as Whisper, so the L1
+intersection did not shrink and no previously published two-arm number moved.
+
+## I.1 The gate: it was a Key **ID**, not an API key
+
+Appendix D.1 diagnosed the 400 correctly (`API key must start with 'sk_'`, the
+value 64 chars and not `sk_`-prefixed) but not the cause. The value in `.env` was
+the dashboard's **Key ID** — the row identifier, which the UI displays
+permanently — not the secret. The secret itself is revealable **only at creation**
+and that row's had never been captured. No amount of re-copying the visible field
+could ever have worked. Resolution: create a fresh key and copy at creation.
+
+Worth one line because the failure mode is the house one wearing vendor clothes:
+the dashboard shows *a* 64-character identifier next to the key, it is the only
+thing still copyable after creation, and it is not the credential. Nothing was
+spent before or after the diagnosis.
+
+## I.2 FINDING 1 — the orthography is non-deterministic
+
+**Four identical calls per clip** (same bytes, same model literal, same form
+fields): **5 of 6 entity-bearing clips returned more than one distinct
+transcript.**
+
+| clip | majority form (3/4) | minority form (1/4) | strict WER spread |
+|---|---|---|---|
+| `u06` | `A7X42` | `A seven X four two.` | **0.556** |
+| `u17` | `Q9J05.` | `Q nine J zero five.` | **0.556** |
+| `u33` | `one Z nine nine A W five.` | `1Z99AW5.` | **0.636** |
+| `u02` | (both forms observed in-grid) | `405-912-77` | **0.727** |
+
+`u33` flips the **opposite way** to `u06`/`u17` — word-form is its majority — so
+this is not one consistent policy being sampled, it is a genuinely unstable one.
+
+**Independent corroboration from the grid, at zero cost.** Across each clip's
+nine mildest cells (`rt60 ≤ 0.2`, `snr ≥ 20`), both forms appear for `u02`, `u06`,
+`u17` and `u33` — e.g. `u02` returns the spoken digit string 6×, `405-912-77` 2×,
+and once a hybrid `four zero five-nine one two-seven seven.`. The conditions
+differ, so this is not itself a determinism test; it is the reason to believe the
+probe rather than dismiss it as a fluke.
+
+**Why this is a FINDING and not a limitation.** Whisper's orthography offset is a
+**constant** (0.20–0.60, SPEC B.2 item 8): characterise once, subtract, done —
+which is exactly what `cross_model_norm.py` exists to do. Scribe's is **a per-call
+draw**, so no one-time characterisation removes it. Worse, it converts the two
+residuals that module documents as *fixed per arm and pinned by tests* into
+**run-to-run variance**: after normalization the two draws of `u02` and `u06` agree
+exactly (spread 0.000) while **`u17` still differs by 0.111** (the leading zero in
+`Q9J05`) and **`u33` by 0.182** (the letter run `AW`). Those two residuals were
+chosen to be *acceptable because they were constant*. They are no longer constant.
+
+**The practitioner claim, which does not depend on this vendor:** anyone
+benchmarking a commercial ASR with **one call per clip is measuring a coin flip**
+on entity-bearing utterances, and **repeat-call variance belongs in the harness**
+next to the acoustic conditions.
+
+### The grid-level shift is +0.064, NOT −0.358 — two populations, two sign conventions
+
+⚠️ **Both numbers are real and they are not the same quantity.** Recorded because
+they were nearly reconciled by "the sign is flipped," which would have been a C.7
+item 2 — a partial explanation that closes the question.
+
+| quantity | convention | population | value |
+|---|---|---|---|
+| `normalization_shift` (the L1 audit gate) | `strict − x-model` | **1757 grid rows** | **+0.0638** |
+| `probe_scribe_orthography.py`'s printed shift | `x-model − strict` | **6 clean entity clips** | **−0.358** |
+
+Reference points on the same gate: nova-3 **−0.0144** (≈ 0 as predicted — it is
+already word-form), whisper-base **+0.0901**. So on the grid Scribe's shift is
+*smaller* than Whisper's; the probe's is larger because clean entity-dense clips
+are where orthography is the *whole* error and the grid dilutes it with real
+acoustic damage. **Magnitude is not the finding — variance is.**
+
+## I.3 FINDING 2 — the n = 3 result, and it reverses under scoring
+
+Scoped on the **159 conditions all three arms spoke on** — the only population in
+which three arms can be ranked. Within-model confidence percentile vs `wer_spoke`,
+Spearman, 95 % CI from a 4000-replicate bootstrap **over conditions**.
+
+| scoring | nova-3 | Scribe | whisper | nova-3's lead over Scribe | Scribe's lead over whisper |
+|---|---|---|---|---|---|
+| **strict** (spine) | −0.971 | −0.768 | −0.694 | **+0.203 [0.115, 0.312]** SEPARABLE | +0.074 [−0.112, +0.267] not sep. |
+| **normalized** | −0.971 | **−0.936** | −0.709 | +0.035 [−0.002, +0.077] not sep. | **+0.227 [0.097, 0.376]** SEPARABLE |
+
+**The two scorings give OPPOSITE verdicts**, and Finding 1 is the mechanism: a
+per-call orthography draw enters condition-level WER as *noise*, and noise
+attenuates a rank correlation. Scribe's own-paired strict ρ moves **−0.820 →
+−0.948** under normalization (Δ **−0.128**) while nova-3 moves **0.0001** and
+whisper **0.013** — the arm whose orthography is unstable is the only one whose
+rank statistic moves.
+
+**Therefore the brief's framing does not survive, and this is the correction to
+carry forward.** *"Commercial models know when they're wrong is half true; Scribe
+sits far closer to nova-3 than to whisper"* was read off the **strict** numbers on
+**mixed populations**. Corrected: under the normalizer nova-3 and Scribe are **not
+separable** (and since residual orthography still attenuates Scribe, +0.035 is an
+**upper bound** on nova-3's lead), while under strict scoring the ranking flips.
+**Neither "nova-3 is meaningfully ahead of its commercial peer" nor "commercial
+models cluster" is supportable.** What survives with the CI clear of zero under
+*both* scorings is narrower than it is tempting to write: **nova-3 beats the open
+baseline** (+0.277 [0.171, 0.406] strict, +0.262 [0.157, 0.390] normalized) —
+*"both commercial arms beat the open baseline"* does **not**, because Scribe's
+lead over whisper is exactly the comparison that collapses under strict scoring.
+Also surviving both: Scribe is **overconfident in 174/174 conditions** strictly
+and 173/174 normalized (mean gap +0.276 and +0.210, against nova-3's +0.121 on the
+same conditions) — a *level* error, the kind L2 removes and a threshold does not.
+
+## I.4 FINDING 3 — the failure modes differ 5.5×, and this half is robust
+
+| arm | silent rows | rate | mute conditions |
+|---|---|---|---|
+| nova-3 | 431/1757 | **24.5 %** | **12** |
+| elevenlabs-scribe | 78/1757 | **4.4 %** | **2** |
+| whisper-base | 336/1757 | 19.1 % | 5 |
+
+**Under stress nova-3 goes quiet; Scribe keeps talking.** Ratio **5.5×**, mute
+count 6×. Alone among this appendix's numbers it is **immune to Finding 1** — an
+empty transcript is empty under any normalizer.
+
+Its consequence inverts the safety story. A deletion carries **no hypothesis token
+and therefore no confidence**, so nova-3's dominant failure is invisible to exactly
+the confidence-based early warning this project proposes, while Scribe's failures
+put words on the page where a monitor can see them. **Best-ranked confidence,
+least-monitorable failure mode.** This is B.4's deletion-blindness (deletions =
+35.1 % of reference words, 69.3 % of all errors) reached a second time, across
+vendors instead of within one arm.
+
+**It also qualifies I.3 mechanically.** nova-3's own-paired ρ is over **164**
+conditions after its **12** hardest were dropped for emitting nothing; Scribe's
+over **174** after **2**. A model that goes silent on its worst conditions is
+scored on an easier set — which is *why* I.3 is restricted to the common 159. Not
+two averages over different populations subtracted (Appendix G) but **two
+correlations over different populations ranked**: same family, one level up.
+
+> ⚠️ **Population trap, caught while writing this.** The table I was handed read
+> `nova-3 −0.9795 / 31.4 % / 7 mute` beside `scribe 4.4 % / 2` and
+> `whisper 19.1 % / 5`. The nova-3 row is the **40-clip D1** population; the other
+> two are the **10-clip L1** population. Matched, nova-3 is **24.5 % / 12 mute**,
+> so the headline ratio is **5.5×, not 7×**. Three arms in one table is exactly
+> where this creeps back in, because the spine has a corpus-wide number and the
+> new arms do not. **Every row of a multi-arm table must name one population.**
+
+## I.5 SCOPE DECISION: within-model **and rank-only**, which is stricter than it sounds
+
+Scribe joins the confidence-vs-WER shape and (in principle) L2 calibration; it is
+excluded from absolute cross-model WER. **"Within-model" is not on its own
+sufficient, and assuming it was would have shipped a wrong number:**
+
+- **`dead_zone_flags` is a within-model statistic that thresholds an ABSOLUTE
+  WER** (`wer_spoke >= 0.3` ∧ `conf_pct >= 0.6`), so it is *not* scale-free.
+  Scribe's dead-zone rate reads **7/176 (3.98 %) strict** and **0/176
+  normalized** — all seven fall from WER 0.30–0.43 to 0.08–0.14. They are
+  orthography, not confident error. **Not quotable.** (Whisper's 69 → 44 survive;
+  nova-3's 1 → 0 at the threshold boundary. No arm's dead-zone rate is
+  scale-free — nova-3's is nonetheless the right number for a *single-model*
+  claim, because its own shift is −0.014 ≈ 0 by construction.)
+- **Rank statistics survive** because the contamination enters as noise — but
+  **attenuated**, so Scribe's ρ is a *lower bound* on its true shape.
+
+The rule, stated so it transfers: **admit a contaminated arm to rank statistics,
+never to level statistics, and check whether a statistic you called "within-model"
+is secretly a level statistic.**
+
+One structural fact survives the mess and is worth keeping: Scribe's 7 strict dead
+zones were a **strict subset of whisper's 69** (pairwise Jaccard 0.101, 7 shared)
+and shared **none** with nova-3 (Jaccard 0.000) — the second *commercial* arm's
+silent-failure set overlapped the *open* model entirely and the commercial spine
+not at all. Another instance of **you cannot borrow someone else's dead-zone map**,
+and a direct strike against "commercial models cluster."
+
+## I.6 THE TRAP — an orthography artifact that looks exactly like a mechanism
+
+Strict edit composition invites the claim *"Scribe substitutes where nova-3
+deletes"*:
+
+| arm | scoring | sub | del | ins |
+|---|---|---|---|---|
+| elevenlabs-scribe | strict | 0.237 | **0.137** | 0.033 |
+| elevenlabs-scribe | normalized | 0.225 | **0.070** | 0.044 |
+| nova-3 | strict | 0.143 | **0.269** | 0.014 |
+| nova-3 | normalized | 0.149 | **0.270** | 0.021 |
+
+**Normalization HALVES Scribe's deletions (0.137 → 0.070) and moves nova-3's not
+at all (0.269 → 0.270).** That is the confound measured directly, not argued: half
+of Scribe's apparent deletions were `405-912-77` failing to line up with "four
+zero five". And the residuals that survive normalization are precisely the
+**non-deterministic** ones (I.2), so the normalized split is not stable either.
+
+**No edit-composition claim about Scribe is made.** `405-912-77` versus "four zero
+five" is a formatting difference; promoting it to *"this model destroys entities
+by substitution"* would be the project's signature failure mode committed in the
+project's write-up — a clean number, a plausible mechanism, and no error anywhere.
+
+## I.7 Two vendor defaults that would each have manufactured an acoustic effect
+
+Both found by probing, both fixed in the adapter before any row entered
+`master.csv`, both pinned by tests against **verbatim captured responses**.
+
+1. **`tag_audio_events` defaults ON.** A harshly degraded clip
+   (`results/audio/u02__rt60-1_snr-0_babble_g726_roll-1.wav`) then returns the
+   literal transcript **`[background noise]`**, carried by a single `audio_event`
+   token at logprob −0.0130. That is **two insertions of words nobody said**,
+   landing *only* in harsh cells — and it **destroys the empty-transcript signal
+   that Appendix G's `mute_zone` category is defined by**, which is the more
+   serious half: mute zones are the failure class a confidence monitor is
+   structurally blind to, and this default would have hidden them behind a
+   confident-looking two-word transcript. Off, the same file returns `""`.
+2. **Language detection defaults to auto, and it is not confident.**
+   `language_probability` read **0.468 on a CLEAN clip** (`u17`), and a noise-only
+   file returned the same tag in French — **`[bruit de fond]`**. An arm that
+   silently switches output language under degradation posts a wall of
+   substitutions that reads as an acoustic effect. `language_code="eng"` pinned —
+   also the *matched* choice, since nova-3 runs on its English default.
+
+A third of the same family is pinned with them: at
+`timestamps_granularity="character"` the `words[]` array holds **characters** under
+the same field names, so the headline per-word confidence would quietly become
+per-character. And `_prob_from_logprob` **raises** on a positive `logprob` rather
+than clipping, because clipping a vendor scale change to 1.0 would report a
+supremely confident model — "confidence went up" as a silent failure.
+
+## I.8 What must not be quoted
+
+- **−0.358 as "the arm's normalization shift"** — it is the 6-clip probe under the
+  opposite sign convention. The grid gate number is **+0.064** (I.2).
+- **A 7× silent-rate ratio** — that mixes populations; matched, it is **5.5×**
+  (I.4).
+- **Scribe's dead-zone rate**, in either form (I.5).
+- **Any Scribe edit-composition or entity-mechanism claim** (I.6).
+- **"nova-3 is meaningfully ahead of its commercial peer"** — not separable under
+  the normalizer, and the strict result that says otherwise is the contaminated
+  one (I.3).
+- **Any Scribe number as a fixed property of the model.** Every one is **one
+  draw** (I.2); the grid ran once per cell, so it carries that variance
+  unquantified.
+
+## I.9 The follow-up this earns
+
+**Persist the repeat-call probe.** The determinism evidence is currently a
+6-clip × 4-call measurement with **no artifact on disk** — the same weaker
+standing C.7 warns about, and the write-up says so where it quotes it. A
+`--repeat N` flag on `scripts/probe_scribe_orthography.py` writing
+`results/scribe_repeat.json` would move Finding 1 from an audit result to an
+artifact-backed one, and running it against **all three arms** would settle
+whether non-determinism is this vendor's or the category's. Cost is negligible
+(24 calls ≈ $0.005 on Scribe). **Until it exists, the scope of the claim is
+"measured on one arm, unmeasured on the others."**

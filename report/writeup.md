@@ -1,7 +1,11 @@
-# Deadzone: mapping where a streaming ASR model fails *silently*
+# Deadzone: mapping where a streaming-capable ASR model fails *silently*
 
 A controlled-degradation study of Deepgram Nova-3 across 176 acoustic conditions, with
-the confidence–accuracy gap as the headline measurement.
+the confidence–accuracy gap as the headline measurement. Nova-3 is a streaming-capable
+commercial model and it is studied here for the per-word confidence that makes the
+silent-failure question askable — but **every row was measured through its batch
+(pre-recorded) endpoint**, so what is mapped is acoustic robustness, not streaming
+behaviour (limitation 17).
 
 *Sundar Subramanian · grid run 2026-08-05 · `run-20260805T070146Z-6a77c4`*
 
@@ -32,7 +36,12 @@ Sobol decomposition is *exact* rather than sampled — also gives typed failure 
 damage is monotone in **direct-to-reverberant ratio, not RT60** (ρ = −1.000 vs +0.800), and a
 **null** on active learning reported as a null. And a dead-zone map does not transfer: simulated
 RIRs rank conditions well (ρ = 0.873) yet recover **none** of the real dead zones, and neither
-does a second model family (both Jaccard 0.00).
+does a second model family (both Jaccard 0.00). A **second commercial arm** (ElevenLabs
+`scribe_v2`, 1760 rows, per-word confidence) was added to ask whether self-knowledge is a
+commercial-model property — and returned a prior result: **its orthography is not deterministic**,
+four identical calls giving up to 0.727 WER of spread on the same audio, which reverses the
+model comparison depending on how it is scored and makes single-call benchmarking of a commercial
+ASR unsound on entity-bearing speech (§6.7).
 
 ---
 
@@ -63,9 +72,10 @@ and **CHiME**; **Scheibler et al. 2018 (pyroomacoustics)**; and **Carlini & Wagn
 **The delta is modest and specific — a lens, not a method:** the confidence–accuracy gap per
 condition rather than WER per condition; typed fingerprints naming which *class* of reference
 word dies, so each condition implies a fix; an active-learning surrogate, which here returns a
-null (§6.5); and a **commercial streaming model that exposes per-word confidence**, where the
-literature overwhelmingly uses Whisper, Conformer and wav2vec — none of which expose one, so the
-question is unanswerable on them.
+null (§6.5); and a **commercial streaming-capable model that exposes per-word confidence**,
+where the literature overwhelmingly uses Whisper, Conformer and wav2vec — none of which expose
+one, so the question is unanswerable on them. The confidence is what earns the arm its place;
+the measurements themselves are batch (limitation 17).
 
 ---
 
@@ -93,10 +103,27 @@ and normalizes both sides identically, since such offsets otherwise land in ever
 indistinguishable from a dead zone; and `apply_rir` must trim the direct-path delay *and*
 renormalize over the input's **active region** — my first version used whole-file RMS, which the
 reverb tail inflates, de-calibrating every downstream SNR **by an amount that grew with RT60**
-(A). **Four later defects share that shape** (B; §6.7; A.5, found by auditing this project's own
+(A). **Four later defects share that shape** (B; §6.8; A.5, found by auditing this project's own
 analysis code; and the §6.1 estimand mismatch, the most consequential). All are named rather than
 quietly fixed, because the shape — a computation that succeeds on meaningless input and emits a
 clean number — is the point.
+
+**Two vendor defaults that had to be switched off, both found by probing rather than by reading
+docs.** Adding the ElevenLabs arm (§6.7) meant auditing its request the way the Deepgram adapter's
+`smart_format`/`punctuate`/`numerals=False` was audited, and two defaults would each have
+manufactured an acoustic effect. (1) **`tag_audio_events` defaults ON**, and a harshly degraded
+clip then returns the literal transcript `[background noise]` carried by a single `audio_event`
+token — two insertions of words nobody said, landing *only* in the harsh cells the study is about,
+and destroying the empty-transcript signal that §6.1's **mute-zone** category is defined by. With
+the flag off the same file returns `""`. (2) **Language detection defaults to auto**, and it is not
+confident: `language_probability` read **0.468 on a clean clip**, and a noise-only file returned
+the same tag in French (`[bruit de fond]`). An arm that silently switches output language under
+degradation posts a wall of substitutions that reads exactly like an acoustic effect, so
+`language_code` is pinned to English — matching the Deepgram arm's default rather than introducing
+a second difference. Both are pinned by tests against verbatim captured responses, and a third
+default of the same family is pinned with them: at `timestamps_granularity="character"` the
+`words[]` array holds *characters* under the same field names, so the headline per-word confidence
+would silently become per-character.
 
 ---
 
@@ -183,12 +210,31 @@ fix is target-speaker extraction (D.3b).
 **Exact Sobol indices** (144-cell factorial, 5760 transcriptions; ±95 % clip-bootstrap
 half-widths):
 
-| factor | S1 | ST | ST − S1 | 95 % CI on the gap | sig |
+| factor | S1 | ST | ST − S1 | 95 % CI on the gap (**quadrature**) | sig |
 |---|---|---|---|---|---|
 | `snr_db` | 0.391 ± 0.031 | 0.503 ± 0.027 | **0.112** | [0.072, 0.152] | YES |
 | `rt60` | 0.347 ± 0.024 | 0.474 ± 0.027 | **0.128** | [0.091, 0.164] | YES |
 | `mic_rolloff` | 0.099 ± 0.013 | 0.183 ± 0.020 | 0.084 | [0.060, 0.107] | YES |
 | `codec` | 0.023 ± 0.003 | 0.065 ± 0.009 | 0.042 | [0.032, 0.052] | YES |
+
+**Which interval this is, because two are computed and they differ.** Every gap CI quoted in this
+section — table and pre-registration blockquote alike — is the **quadrature** form: the S1 and ST
+bootstrap half-widths added in quadrature, which assumes they are independent. They are not, so
+this interval is **wider than the direct bootstrap CI on the gap** — but *not uniformly*, so the
+widening is quoted per factor rather than as one number: **2.49× for `rt60`, 2.70× for `snr_db`,
+2.10× for `mic_rolloff` and only 1.27× for `codec`**. The direct interval is computed
+alongside it and persisted as `gap_conf_direct` / `gap_ci_lo_direct` / `gap_ci_hi_direct` in
+`results/sobol.json` — and is what `results/sensitivity_report.txt` prints under its
+`gap 95% CI` column. A reader diffing the two artifacts against this table will therefore see, for
+`rt60`, quadrature [0.091, 0.164] here against direct [0.1173, 0.1456] there; both are correct and
+they are different estimators of the same gap. The wider one is quoted deliberately: it is the
+conservative choice for a pre-registered test, and the verdict survives it. **The binding case is
+`snr_db` under the quadrature interval, whose lower bound clears the pre-set 0.020 threshold by
+3.58×**; the other three combinations clear it by more (`snr_db` direct 5.06×, `rt60` quadrature
+4.57×, `rt60` direct 5.87×). The two registered factors differ, so the margin is stated as the
+weakest of the four rather than as one figure — 4.5× is `rt60`'s quadrature clearance alone and
+does not hold for `snr_db`. All four bounds are persisted per factor in `results/sobol.json`
+(`gap_ci_lo_direct`, `gap_ci_lo_quadrature`). D.6(iii) has the derivation.
 
 First-order terms carry 0.860 of the variance, second-order 0.067; the **ST − S1 gap is the
 primary interaction evidence**, S2 direction only (D.6).
@@ -199,9 +245,11 @@ primary interaction evidence**, S2 direction only (D.6).
 > `rt60 × snr_db` was pre-registered as a genuine two-way interaction (SPEC §5, committed
 > **`d8ddd4f`, 2026-07-27**, before any audio existed), under a rule fixed in advance: confirmed
 > **iff** both gaps exceed 0.020 with the 95 % CI entirely above it **and** the pair ranks first
-> in S2. Measured **0.128 [0.091, 0.164]** and **0.112 [0.072, 0.152]**, with
-> S2(`rt60`, `snr_db`) = **0.034 ± 0.006, rank 1/6** — **CONFIRMED**, ~5× clear. Reverb and
-> noise compound.
+> in S2. Measured **0.128 [0.091, 0.164]** and **0.112 [0.072, 0.152]** (quadrature CIs, the
+> conservative form — see above), with
+> S2(`rt60`, `snr_db`) = **0.034 ± 0.006, rank 1/6** — **CONFIRMED**. The weakest of the four
+> factor × interval-form combinations still clears the threshold by **3.58×** (`snr_db`,
+> quadrature). Reverb and noise compound.
 
 **The best mechanistic finding: the damage is monotone in DRR, not RT60.** The `rt60` marginal
 is **non-monotonic** — 0.2026 → 0.6359 → 0.4495 → 0.7581, a dip at 0.7 of depth **0.1864
@@ -279,10 +327,11 @@ acquisition function** (D.8b).
 ### 6.6 L1 — multi-model comparison
 
 **Scope first.** The Whisper arm ran on the 10-clip AL subset, so L1 uses the **n = 1757 rows per
-model** both arms ran — which is why nova-3's dead-zone rate reads **0.57 % (1/176)** here but
-**1.14 % (2/176)** in §6.1. The arms also disagree about number *orthography*, an offset
-indistinguishable from an acoustic effect, so **both** were re-scored through one published
-normalizer (C).
+model** every arm ran — which is why nova-3's dead-zone rate reads **0.57 % (1/176)** here but
+**1.14 % (2/176)** in §6.1. A third arm (§6.7) joined on the *same* 10 clips, so it did not narrow
+that intersection and every number below is unchanged by its arrival. The arms also disagree about
+number *orthography*, an offset indistinguishable from an acoustic effect, so **both** were
+re-scored through one published normalizer (C).
 
 **The finding is not that Whisper is worse — it is that Whisper is worse *at knowing* it is
 worse.** Within-model confidence-vs-WER shape (percentiles only; scales are not comparable across
@@ -314,7 +363,102 @@ is why Whisper's WER exceeds 1.0 in 8 of the 17. At the extreme, in the grid's h
 returned a row of **decorative Unicode glyphs — not language at all — at confidence 0.926**
 (n = 1, an illustration of the mode's limit, not a rate; D.9).
 
-### 6.7 L3 — paralinguistic vs lexical: the monitor alarms *early*
+### 6.7 L1b — the second commercial arm, and an orthography that is not deterministic
+
+**The arm.** ElevenLabs **`scribe_v2`**, batch REST (`POST /v1/speech-to-text`), **1760 rows, 0
+failures**, the same 10-clip subset × 176 conditions as Whisper. It is the only arm besides nova-3
+that returns **per-word confidence** — a `logprob` in [−∞, 0], `exp()`-ed to a probability — so it
+is a full confidence-bearing arm rather than a WER-only one, and it is what turns L1's question
+from *commercial vs open* into **is nova-3's self-knowledge a property of commercial models or a
+property of nova-3?**
+
+**Finding 1 — the orthography is non-deterministic.** Four identical calls per clip — same bytes,
+same model literal, same form fields — returned **more than one distinct transcript on 5 of 6
+entity-bearing clips**: `u06` came back as `A7X42` three times and `A seven X four two.` once,
+`u17` as `Q9J05` three times and `Q nine J zero five.` once, and `u33` flips the **opposite** way
+(word-form three times, `1Z99AW5` once), so it is not one consistent policy. The grid corroborates
+it independently — across each clip's nine mildest cells (`rt60` 0.2, SNR 20 dB, every
+codec × rolloff) both forms appear for `u02`, `u06`, `u17` and `u33`, `u02`'s including a hybrid
+`four zero five-nine one two-seven seven.`. **What a flip
+costs, scored strictly and computed here rather than reported: 0.727 WER for `u02`**
+(`405-912-77` against the spoken digit string, 11 reference words), 0.636 for `u33`, 0.556 for
+`u06` and `u17` — with **zero** recognition difference between the two forms in every case.
+*Provenance, because it differs within this paragraph:* the repeat-call
+counts come from a **6-clip × 4-call probe that is not persisted to any artifact** — the same
+weaker standing D.6(ii) flags for the bias estimate, said rather than left to be found — whereas
+the grid corroboration and every WER above are recomputed from `results/master.csv`. The grid
+itself was run **once per cell**, like the other arms, so it carries this variance unquantified.
+
+**This is different in kind from Whisper's offset, and that is the finding.** Whisper's
+orthography costs a *constant* 0.20–0.60 (C): characterise it once, apply the published
+normalizer, done. Scribe's is **a per-call draw**, so it cannot be characterised once and
+subtracted. It also converts the two residuals `cross_model_norm.py` documents as fixed and pinned
+by tests — the leading zero in `Q9J05`, the letter run `AW` — into **run-to-run variance**: after
+normalization the two draws of `u02` and `u06` agree exactly (spread 0.000) while `u17` still
+differs by **0.111** and `u33` by **0.182**, and which draw you got was a coin flip. The claim
+generalises past this vendor: **a benchmark that makes one call per clip is measuring a coin flip
+on entity-bearing utterances**, and repeat-call variance belongs in any such harness alongside the
+acoustic conditions.
+
+**Finding 2 — the n = 3 result, which reverses depending on how it is scored.** Read on the 159
+conditions **all three arms spoke on** — the only population in which three arms can be ranked
+(§6.1's lesson applied to correlations rather than to gaps) — within-model confidence-vs-WER
+Spearman, with 95 % CIs from a 4000-replicate bootstrap over conditions:
+
+| scoring | nova-3 | Scribe | Whisper | nova-3's lead over Scribe | Scribe's lead over Whisper |
+|---|---|---|---|---|---|
+| **strict** (spine scorer) | −0.971 | −0.768 | −0.694 | **+0.203 [0.115, 0.312]** — separable | +0.074 [−0.112, +0.267] — **not** separable |
+| **normalized** (C) | −0.971 | −0.936 | −0.709 | +0.035 [−0.002, +0.077] — **not** separable | **+0.227 [0.097, 0.376]** — separable |
+
+**The two scorings give opposite verdicts, and Finding 1 is why.** Strictly scored, Scribe is
+separable from nova-3 and indistinguishable from the open baseline; normalized, it is
+indistinguishable from nova-3 and separable from the baseline. The difference is orthography, and
+because that orthography is a per-call draw it enters the condition-level WER as *noise*, which
+attenuates a rank correlation. Since the normalizer leaves residual variance (above), **−0.936 is
+an attenuated estimate and nova-3's remaining +0.035 is an upper bound on its true lead** — and
+that interval clears zero only just, at −0.002. So the honest reading is the modest one: **"commercial models know
+when they are wrong" is not supported as a class claim, and it is not even *readable* until
+orthography is fixed** — a benchmark that skipped the normalization audit would have published a
+confident and backwards answer.
+
+What *is* supported under **both** scorings with the CI clear of zero is narrower than it is
+tempting to write: **nova-3 beats the open baseline** (+0.277 [0.171, 0.406] strict, +0.262
+[0.157, 0.390] normalized) — but *"both commercial arms beat the open baseline"* is **not**, because
+Scribe's lead over Whisper is the one that collapses under strict scoring. What also survives both
+is that Scribe is **overconfident essentially everywhere**: its gap `mean_conf − (1 − WER)` is
+positive in **174 of 174** conditions strictly and 173 of 174 normalized, mean **+0.276** and
+**+0.210**, against nova-3's **+0.121** on the same conditions. That is a *level* error of the kind
+§6.4's calibrator removes and a fixed threshold does not.
+
+**Finding 3 — the failure modes differ 5.5×, and this half is robust.** On the matched subset
+nova-3 returns an **empty transcript on 24.5 %** of clip-rows (431/1757) and goes fully **mute on
+12** conditions; Scribe on **4.4 %** (78/1757) and **2**. (Corpus-wide, over all 40 clips, nova-3's
+silent rate is 31.4 % and its mute count 7 — §6.1's population, not this one.) **Under stress
+nova-3 goes quiet and Scribe keeps talking**, and unlike everything above this survives Finding 1
+untouched: an empty transcript is empty under any normalizer. Its consequence inverts the safety
+story. A deletion carries **no hypothesis token and therefore no confidence**, so nova-3's dominant
+failure is invisible to exactly the confidence-based early warning this project proposes, while
+Scribe's failures put words on the page where a monitor can see them. This is §6.4's
+deletion-blindness — deletions are 35.1 % of reference words and 69.3 % of all errors — arrived at
+a second time, across vendors instead of within one. It also qualifies Finding 2 mechanically:
+**nova-3's ρ is computed over 164 conditions after its 12 hardest were dropped for emitting
+nothing, Scribe's over 174 after 2**, so a model that goes silent on its worst conditions is scored
+on an easier set. That is precisely why the table above is restricted to the common 159.
+
+**Two things this arm does not license.** Its **dead-zone rate is not quotable**: 7 of 176 (3.98 %)
+under strict scoring, **0 of 176 under the normalizer** — all seven fall from WER 0.30–0.43 to
+0.08–0.14 and are orthography, not confident error. (Whisper's 69 survive as 44; the flag is a
+threshold on an absolute WER, so *no* arm's dead-zone rate is scale-free.) One structural fact
+survives and is worth keeping: those seven were a **strict subset of Whisper's 69** and shared
+**none** with nova-3 — the second commercial arm's silent-failure set overlapped the *open* model
+entirely and the commercial spine not at all. Nor is its **edit composition** claimable. It looks
+substitution-heavy (strict sub 0.237 / del 0.137 against nova-3's 0.143 / 0.269), but normalization
+**halves** Scribe's deletions (0.137 → 0.070) while moving nova-3's not at all (0.269 → 0.270),
+which is the confound measured directly; and the residuals that survive are the non-deterministic
+ones, so the normalized split is not stable either. An orthography artifact must not be promoted
+into a mechanism (limitation 19).
+
+### 6.8 L3 — paralinguistic vs lexical: the monitor alarms *early*
 
 An agent monitoring its own audio health with cheap features assumes they track lexical accuracy.
 Six single-factor sweeps say they do not. **Two return a DECOUPLED verdict and both point the
@@ -326,7 +470,7 @@ conservative, not blind. The other four hit a lexical floor or yield no supporta
 **a power limitation and not a finding of stability** — and refusing to quote a threshold there
 is another instance of the shape §4 names (E).
 
-### 6.8 L4 — voice-agent layer: NOT BUILT
+### 6.9 L4 — voice-agent layer: NOT BUILT
 
 **The live voice agent was scoped out and not built** — no STT → LLM → TTS loop, no turn-taking
 measurement on real audio (limitation 13).
@@ -397,6 +541,35 @@ L1 independently surfaces as nova-3's sole dead zone on that subset (§6.6).
     which is bounded by a four-room reverb axis (D.8b) — and the ST − S1 gaps carry a small
     upward finite-clip bias (D.6).
 16. **The L3 sweeps are n = 5 clips**, and four of six gave no quotable threshold.
+17. **Every arm ran in BATCH mode, not streaming** — Deepgram through the pre-recorded
+    endpoint `listen.v1.media.transcribe_file`, never `listen.live`; ElevenLabs through
+    `POST /v1/speech-to-text` and not `scribe_v2_realtime`; Whisper locally with
+    full-file lookahead. A streaming decoder commits under a latency budget with truncated
+    right context, so **these results characterise the model's acoustic robustness, not its
+    streaming behaviour**, and the dead-zone map should not be read as a live-agent map.
+    The arms were audited for a *mode difference between them* and came back clean — both
+    are batch — which matters because a mismatch would have been self-serving rather than
+    obvious: it would have pushed WER up on utterance-final words and on exactly the
+    `proper_noun` / `spelled_letter` classes §6.2 attributes to the codec, flattened the
+    confidence-vs-WER relation and raised the dead-zone rate, i.e. **manufactured this
+    project's own thesis rather than contradicting it**. That is the hardest kind of
+    confound to notice, so it was checked rather than assumed (§10).
+18. **One arm's output is not reproducible call-to-call** — `scribe_v2` returned more than one
+    distinct transcript for 5 of 6 entity-bearing clips on identical audio, worth up to 0.727
+    strict WER (§6.7). Every Scribe number in this document is therefore **one draw**, not a
+    fixed property of the model, and the repeat-call spread was measured on 6 clips × 4 calls
+    rather than across the grid — the grid itself was run once per cell like the other arms, so
+    it carries that variance unquantified. A rerun would move its WER, and I do not know by how
+    much per condition. Whether the same holds for the other two vendors was **not** tested; the
+    honest scope is "measured on one arm, unmeasured on the others," not "unique to this one."
+19. **Scribe is a within-model, rank-only arm** — admitted to the confidence-vs-WER shape and, in
+    principle, to L2 calibration, and excluded from absolute cross-model WER. The reason is
+    sharper than "its orthography differs": a *level* quantity built on its WER is not
+    reproducible (18), and that includes the dead-zone flag, which thresholds an absolute WER and
+    is therefore **not** protected by being computed within-model — its 7 strict dead zones
+    become 0 under the normalizer (§6.7). Rank statistics survive because the contamination
+    enters as noise, but they are **attenuated**, so its ρ is a lower bound on its true shape.
+    The fitted calibrator reported in §6.4 is nova-3's; no Scribe calibrator was fit.
 
 ---
 
@@ -410,9 +583,18 @@ measure more rooms, not a better reverb coordinate.** Re-parameterising the axis
 obvious fix for §6.5's null and it has now been tested and refuted (D.8b) — with only four
 distinct RIRs the axis is four points, so a relabelling cannot help. What would help is a grid
 whose reverb axis is *sampled* rather than snapped: a dozen or more rooms chosen to tile DRR
-evenly, which would also retire limitation 6. **Third, the agent layer as designed but not
-built:** replay-mode injection of degraded WAV bytes into a streaming socket, never
-speaker-to-mic playback, scored against the `task_specs.json` slots.
+evenly, which would also retire limitation 6. **Third, measure a genuinely streaming arm**, which
+would retire limitation 17 — the one gap between what this document maps and what the title
+implies. It is now the *shortest* remaining step rather than an aspiration: the batch
+`scribe_v2` arm is built and run (§6.7), and `scribe_v2_realtime` exposes the **same per-word
+`logprob` over a websocket**, so the confidence signal the whole silent-failure lens depends on
+survives the move to streaming and the comparison would be batch-vs-streaming *within one vendor*
+— the only form of it that is not confounded by model family. No streaming row has been measured
+and no streaming result is claimed. **Pair it with the repeat-call variance harness limitation 18
+asks for**, since the same 4-calls-per-clip protocol that exposed the non-determinism is what
+would tell you whether a streaming arm's extra variance is the decoder or the vendor. **Fourth, the agent layer as designed but not built:** replay-mode injection of
+degraded WAV bytes into a streaming socket, never speaker-to-mic playback, scored against the
+`task_specs.json` slots.
 
 **And what field data would earn.** Everything in limitation 1, the Lombard effect above all:
 this rig tells you what a room does to a fixed signal, not what it does to a *person*. The right
@@ -425,8 +607,12 @@ level up.
 ## 10. Reproducibility
 
 **The experiment freeze is `results/MANIFEST.json`**; this section defers to it (Appendix F).
-Headline: **10,906 Deepgram calls ≈ 745 min of audio ≈ $3.20**, the main grid 7040 calls in
-394 s. Whisper runs locally at zero cost; every row caches append-only.
+Headline, taking the manifest's own split between the billed and the local arm: **11,086 Deepgram
+calls ≈ 757.5 min of audio ≈ $3.26** at the $0.0043/min rate quoted 2026-08-04 — 7220 on the
+real-RIR arm and 3866 on the simulated one. Counting the local Whisper arm as well the experiment
+is **12,846 calls ≈ 877.8 min**, and still **$3.26**, because Whisper runs on this machine at zero
+marginal cost — its price is wall clock, not money. The main grid is 7040 calls in 394 s; every
+row caches append-only.
 
 ```
 ./.venv/bin/python tests/test_pipeline.py            # the three trap functions, offline
@@ -439,8 +625,17 @@ Headline: **10,906 Deepgram calls ≈ 745 min of audio ≈ $3.20**, the main gri
 ./.venv/bin/python scripts/run_al_drr.py             # D.8b, offline and seeded, 0 API calls
 ```
 
-One gap, stated rather than glossed: the working tree was **dirty** when the manifest was
-written, so the recorded SHA identifies the commit the run started from, not an exact tree.
+The manifest is the authority for the freeze, not this section: it records the generating commit
+SHA, the tree-clean flag and the UTC timestamp, and those are deliberately not restated here so
+this section cannot drift against it.
+
+One real gap, stated rather than glossed: **the stored rows carry no per-row endpoint
+provenance.** `master.csv` and `cache.jsonl` record the registry key `"nova-3"` — not the vendor
+literal, not the API method — so the fact that every row was transcribed through the pre-recorded
+endpoint (limitation 17) is established by *inference*: a single `run_id` covers all 7040 Deepgram
+rows, the manifest's `api` field names the method, and `git log -S` shows the `transcribe_file`
+call line unchanged since `4d64f2a` (2026-07-27). That is convincing but it is not a field. An arm
+that mixed endpoints would not be distinguishable in this table, and the fix is a column.
 
 ---
 
@@ -779,18 +974,42 @@ point estimate) is **+0.0041** for both `rt60` and `snr_db`, and a 20-clip split
 gives gaps 0.1312 / 0.1156 against the full-sample 0.1275 / 0.1120 — consistent with
 a ~1/n bias of that size. Bias-corrected gaps are ≈ **0.124** (`rt60`) and ≈ **0.108**
 (`snr_db`), and the order-4 variance share (0.0112) is mostly noise floor rather than
-real four-way structure. The pre-registration verdict is unaffected: the margin over
-the pre-set 0.020 threshold is ~5×, and the conservative CI lower bound 0.0915 is
-4.5× it.
+real four-way structure. The pre-registration verdict is unaffected, and the margins are
+given **per factor** because the two registered factors are not equally clear of the
+threshold: the bias-corrected gaps clear the pre-set 0.020 by ≈ 6.2× (`rt60`) and ≈ 5.4×
+(`snr_db`), and the conservative quadrature lower bounds — the weakest form quoted
+anywhere in this document — clear it by **4.57×** (`rt60`, bound 0.0915) and **3.58×**
+(`snr_db`, bound 0.0716).
 
-*(iii) The published gap CI is conservative by ~2.5×.* It is built by adding the S1
-and ST confidence half-widths in quadrature, which assumes independence. They are not
-independent — bootstrap correlation **+0.86 (`rt60`), +0.88 (`snr_db`), +0.86
-(`mic_rolloff`), +0.68 (`codec`)** — so their difference is far better determined than
-quadrature implies: the direct CI on the `rt60` gap has half-width **0.0143** against
-quadrature's **0.0360**. The code computes the tighter interval and deliberately does
-not use it for the verdict, which is conservative in the only direction that matters
-for a pre-registered test.
+*Provenance, because it differs within this paragraph.* The full-sample gaps
+(0.1275 / 0.1120) and the order-4 share are read from `results/sobol.json`. The
+**bias estimate and the split-half gaps are not persisted in any artifact** — they come
+from a one-off audit run (SPEC C.4) and are quoted here as an audit result rather than
+as an artifact-backed figure. They are reproducible from `master.csv` but nothing on
+disk pins them, which is a weaker standing than every other number in this appendix and
+is said rather than left to be discovered.
+
+*(iii) The published gap CI is conservative by 1.3–2.7× depending on factor.* It is
+built by adding the S1 and ST confidence half-widths in quadrature, which assumes
+independence. They are not independent — the clip bootstrap puts their correlation at
+**+0.843 (`rt60`), +0.871 (`snr_db`), +0.854 (`mic_rolloff`), +0.646 (`codec`)**,
+persisted per factor by `decompose` as `s1_st_bootstrap_corr` — so their difference is
+far better determined than quadrature implies: the direct CI on the `rt60` gap has
+half-width **0.01447** against quadrature's **0.03604**, a ratio of 2.49. **That ratio is
+an `rt60` number and does not generalize**: it runs 2.49 / 2.70 / 2.10 / 1.27 across
+`rt60` / `snr_db` / `mic_rolloff` / `codec`, so for `codec` the two intervals nearly
+coincide. The code computes the tighter interval,
+persists it as `gap_conf_direct` in `results/sobol.json`, and deliberately does not use
+it for the verdict — conservative in the only direction that matters for a
+pre-registered test. §6.3's table and blockquote quote the quadrature form; the direct
+form is what `results/sensitivity_report.txt` prints, which is why the two artifacts
+show different intervals for the same gap. *(Both CI forms, the correlations and the
+width ratios are now persisted per factor in `results/sobol.json` —
+`gap_ci_{lo,hi}_{direct,quadrature}`, `s1_st_bootstrap_corr`,
+`gap_conf_ratio_quadrature_over_direct` — so unlike (ii) nothing here is quoted from an
+unpersisted audit. An earlier draft carried +0.86 / +0.88 / +0.86 / +0.68 and a flat
+"~2.5× wider" from such an audit; both were close on `rt60` and wrong elsewhere, and the
+persisted values are the ones shown.)*
 
 *(iv) Sobol indices are relative to a distribution over the inputs.* These are with
 respect to the **uniform distribution over the realized design levels**, not uniform
@@ -831,14 +1050,21 @@ not.
 **D.8 Active-learning target curve in full** (`results/al_savings.txt`), so the
 headline row cannot be cherry-picked. Median evals-to-target across 8 seeds:
 
+All **12** rows the artifact contains, none omitted — a table claiming completeness has to be
+complete or the claim is worth nothing:
+
 | target | active | random | reached (act/rand of 8) |
 |---|---|---|---|
 | 0.144 | inf | inf | 0 / 1 |
+| 0.151 | inf | inf | 1 / 2 |
 | 0.159 | inf | inf | 2 / 2 |
 | 0.167 | inf | 32 | 3 / 5 |
+| 0.174 | inf | 21 | 3 / 6 |
 | 0.182 | inf | 21 | 3 / 7 |
+| 0.190 | inf | 21 | 4 / 7 |
 | 0.198 | inf | 16 | 4 / 8 |
 | 0.205 | 36 | 15 | 6 / 8 |
+| 0.213 | 34 | 15 | 7 / 8 |
 | 0.221 | 34 | 15 | 7 / 8 |
 | 0.228 | 20 | 15 | 8 / 8 |
 
@@ -1166,7 +1392,7 @@ clips, 4 per type, 300 s each, two environments per type; SHA-256 per file in
 
 | artifact | contents |
 |---|---|
-| `results/MANIFEST.json` | the experiment freeze (§10); generated 2026-08-05T17:24:08Z at git `a6ece0c` |
+| `results/MANIFEST.json` | the experiment freeze (§10). It records the generating commit SHA, the tree-clean flag and the UTC generation timestamp; those values live in the file and are deliberately **not** duplicated here, so this table cannot go stale against a regenerated manifest |
 | `results/master.csv` | 176 conditions × 40 clips × nova-3 = 7040 rows, 0 failures; plus the 10-clip whisper-base arm |
 | `results/clean_baseline.csv` | 40 raw clips, WER 1.65 % |
 | `results/dead_zones.csv` | **87 rows across both models**, `category` in column one (`dead_zone` / `silence_driven` / `mute_zone`), carrying both pairings per condition — `mean_conf`, `wer_spoke`, `wer_all_clips`, `gap_spoke`, `gap_all_clips`, `gap_inflation`, `n_silent` (§6.1, D.1) |
@@ -1178,12 +1404,12 @@ clips, 4 per type, 300 s each, two environments per type; SHA-256 per file in
 | `results/al_drr.{json,txt}` | the DRR re-run that tests the null's own obvious fix: 44 coordinate systems, the 24-permutation control, the acquisition-concentration check, 0 API calls (§6.5, D.8b) |
 | `results/model_arms.{json,txt}` | L1 normalization audit, per-model dead zones, divergence regions, hallucination examples (§6.6, D.9) |
 | `results/sim2real.{json,txt}` | the paired measured-vs-simulated arm (§7); n_pairs 176 on the 10 clips common to both arms (`"clips_matched": false`, `"n_clips": 10` recorded explicitly), 5280 real rows dropped by the restriction and 0 sim, failures excluded (real 0/7040, sim 6/1760). The clip restriction is **enforced in code and pinned by a test** whose planted structure makes the unmatched arithmetic flip the *sign* of the gap (matched +0.10 vs unmatched −0.0714) |
-| `results/l3_decoupling.{json,txt}` | the six paralinguistic sweeps and the degeneracy guard (§6.7, Appendix E) |
+| `results/l3_decoupling.{json,txt}` | the six paralinguistic sweeps and the degeneracy guard (§6.8, Appendix E) |
 | `results/smoke_join1.csv` | JOIN-1 gate rows (3 clips × gates A/B/C) |
 | `results/audio/demo/` | the paired reverb-vs-babble clips behind §6.3's corollary, plus `manifest.json` with both conditions' DRR/C50 and the paired bootstrap (D.12) |
 | `results_sim/master_sim.csv` | the simulated-RIR arm, in a **separate** cache dir — the cache key is `(clip_id, condition_name, model)` and does not encode which RIR library produced the row, so a shared cache would report a sim2real gap of exactly zero |
-| `report/measurements.md` | capture-chain measurements recorded at record time |
-| `requirements.lock.txt` | pinned environment, committed alongside the manifest; `grid-v1` tags the SHA §10 names |
+| `report/measurements.md` | the running measurement log: capture-chain facts recorded at record time (room-tone floor, in-clip inherent SNR, the delivered-SNR ceiling), the clean-WER floor adjudication, the 13-call pre-grid probe that rebalanced the design, and per-layer results as they landed — including the **retracted** pre-correction D1 numbers, kept under a supersession banner rather than deleted (§6.1) |
+| `requirements.lock.txt` | pinned environment, committed alongside the manifest. The freeze record is the manifest's `git.sha`, **not** a tag: `grid-v1` is reserved for that commit and is placed only once the write-up, the dashboard and the `results/` artifacts agree on the corrected §6.1 numbers, so that a tag never ratifies a state where the three disagree |
 
 ## Appendix G — Grid construction and the JOIN-1 gate
 
@@ -1193,7 +1419,7 @@ clips, 4 per type, 300 s each, two environments per type; SHA-256 per file in
 WER ran **0.18 – 0.46 at every SNR** — the damage is an *interaction*. That result
 reallocated the design from a wide SNR sweep to a complete factorial crossing reverb,
 codec and rolloff with SNR, and it recurs independently in the L3 benign-edge sweeps
-(§6.7). It changed where we *sample*, never what we *predicted*: the `rt60 × snr_db`
+(§6.8). It changed where we *sample*, never what we *predicted*: the `rt60 × snr_db`
 pre-registration (§6.3) predates it by weeks, at commit `d8ddd4f`.
 
 **The JOIN-1 validation gate (§5)**, passed **9/9** on clips `u02`, `u17`, `u36` before
@@ -1277,5 +1503,5 @@ Expanded from §3. Nothing in the method here is novel; this is the genre it sit
   novel framing.
 - Speech-enhancement evaluation work showing that ASR rankings and perceptual-quality
   rankings disagree, and ASR-based intelligibility prediction showing low human/machine
-  correlation — the same gap §6.7 measures between paralinguistic features and lexical
+  correlation — the same gap §6.8 measures between paralinguistic features and lexical
   accuracy.
