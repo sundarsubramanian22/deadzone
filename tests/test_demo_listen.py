@@ -260,24 +260,39 @@ class TheBeatRuns(unittest.TestCase):
     def setUpClass(cls):
         cls.man = manifest()
         cls.r = run_listen("--replay")
+        cls.full = run_listen("--replay", "--full")
 
-    def test_replay_exits_zero_and_delivers_every_movement(self):
+    def test_replay_exits_zero_and_delivers_the_default_beat(self):
         self.assertEqual(self.r.returncode, 0, self.r.stderr[-3000:])
         out = self.r.stdout
-        for needed in ("which one is harder to understand?",
+        for needed in (dl.CHOICE_QUESTION.lower(),
                        dl.REVEAL_BANNER.lower(),
-                       "identical.  not close — equal.",
-                       "the measured half",
+                       "identical.  not close — equal."):
+            self.assertIn(needed, out.lower(), f"missing beat: {needed!r}")
+
+    def test_full_still_delivers_every_movement(self):
+        """
+        The trailing movements are opt-in now, not gone. `--full` is the old
+        behaviour, and this is the assertion that keeps it that way.
+        """
+        self.assertEqual(self.full.returncode, 0, self.full.stderr[-3000:])
+        out = self.full.stdout.lower()
+        for needed in ("the measured half",
                        "spans zero",
                        "the prediction i got wrong",
                        "intuition pump, not data",
                        "the question that started this"):
-            self.assertIn(needed, out.lower(), f"missing beat: {needed!r}")
+            self.assertIn(needed, out, f"--full lost a movement: {needed!r}")
 
     def test_replay_never_prompts(self):
         """A rehearsal that stops for input is not a rehearsal you can run alone."""
-        self.assertNotIn("[1] clip 1 is harder", self.r.stdout)
-        self.assertNotIn("[c] clear", self.r.stdout)
+        # Asserted against the CONSTANTS rather than against copies of them. The
+        # old version pinned the literal "[c] clear", which the reworded menu no
+        # longer contains — so it would have kept passing while checking nothing.
+        self.assertNotIn(dl.CHOICE_MENU, self.full.stdout)
+        self.assertNotIn(dl.CONFIDENCE_MENU, self.full.stdout)
+        self.assertNotIn(dl.CHOICE_QUESTION, self.full.stdout)
+        self.assertNotIn(dl.CONFIDENCE_QUESTION, self.full.stdout)
         # The holds included: printing "press enter when you are ready" and then
         # not waiting is the script lying about its own controls.
         self.assertNotIn(dl.READY_PROMPT, self.r.stdout)
@@ -306,13 +321,27 @@ class TheBeatRuns(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr[-2000:])
         self.assertIn("READY", r.stdout)
 
-    def test_the_third_pair_and_the_payoff_are_optional(self):
-        two = run_listen("--replay").stdout.count(dl.REVEAL_BANNER)
-        three = run_listen("--replay", "--pairs", "3").stdout.count(dl.REVEAL_BANNER)
-        bare = run_listen("--replay", "--no-payoff").stdout.count(dl.REVEAL_BANNER)
-        self.assertEqual(bare, dl.DEFAULT_N_PAIRS)
-        self.assertEqual(two, dl.DEFAULT_N_PAIRS + 1)      # + the payoff
-        self.assertEqual(three, 4)
+    def test_the_pair_count_and_the_payoff_pair_are_both_controllable(self):
+        """
+        One reveal banner per pair played. The payoff pair adds one MORE, so the
+        banner count is a direct read on which pairs actually ran.
+        """
+        n = dl.DEFAULT_N_PAIRS
+
+        def banners(*args):
+            return run_listen("--replay", *args).stdout.count(dl.REVEAL_BANNER)
+
+        # The default: exactly the pairs, and nothing after the last reveal.
+        self.assertEqual(banners(), n)
+        self.assertEqual(banners("--pairs", "3"), 3)
+        # Opt in to the payoff pair and it comes back.
+        self.assertEqual(banners("--payoff"), n + 1)
+        self.assertEqual(banners("--full"), n + 1)
+        self.assertEqual(banners("--full", "--pairs", "3"), 4)
+        # `--no-payoff` survives as the explicit negative and still wins after
+        # --full, so the two flags are a pair rather than a contradiction.
+        self.assertEqual(banners("--no-payoff"), n)
+        self.assertEqual(banners("--full", "--no-payoff"), n)
 
 
 class InputCannotHangOrCrash(unittest.TestCase):
@@ -333,7 +362,10 @@ class InputCannotHangOrCrash(unittest.TestCase):
             self.assertEqual(r.returncode, 0, r.stderr[-3000:])
             self.assertIn(dl.READY_PROMPT, r.stdout, "the hold never printed")
             self.assertIn("switching to the recorded session", r.stdout)
-            self.assertIn("the question that started this", r.stdout.lower())
+            # "the beat still resolves" now means it reaches the LAST reveal —
+            # the closing is opt-in, so it is no longer the end marker.
+            self.assertEqual(r.stdout.count(dl.REVEAL_BANNER), dl.DEFAULT_N_PAIRS,
+                             "EOF truncated the beat instead of resolving it")
             rec = json.loads(sorted(Path(d).glob("*.json"))[-1].read_text())
             self.assertEqual(rec["stopped_reason"], "eof")
             self.assertTrue(rec["stopped_early"])
@@ -389,7 +421,7 @@ class InputCannotHangOrCrash(unittest.TestCase):
         man = manifest()
         pairs = dl.ordered_pairs(man, dl.DEFAULT_N_PAIRS)
         with tempfile.TemporaryDirectory() as d:
-            r = run_listen("--sessions-dir", d,
+            r = run_listen("--payoff", "--sessions-dir", d,
                            stdin=READY + "1\nc\n" + NEXT + "s\n" + "y\n")
             self.assertEqual(r.returncode, 0, r.stderr[-3000:])
             rec = json.loads(sorted(Path(d).glob("*.json"))[-1].read_text())
@@ -421,7 +453,7 @@ class SessionRecord(unittest.TestCase):
     def test_it_is_well_formed_and_self_describing(self):
         with tempfile.TemporaryDirectory() as d:
             r = run_listen("--sessions-dir", d,
-                           stdin=READY + "1\nc\n" + NEXT + "2\nl\n" + "y\n")
+                           stdin=READY + "1\nc\n" + NEXT + "2\nl\n")
             self.assertEqual(r.returncode, 0, r.stderr[-3000:])
             files = sorted(Path(d).glob("*.json"))
             self.assertEqual(len(files), 1)
@@ -430,7 +462,7 @@ class SessionRecord(unittest.TestCase):
 
             for key in ("schema", "started_utc", "duration_s", "mode", "model",
                         "play_order", "responses", "measured", "caveats",
-                        "leaks_detected", "stopped_early"):
+                        "leaks_detected", "stopped_early", "movements"):
                 self.assertIn(key, rec)
             self.assertEqual(rec["schema"], dl.SESSION_SCHEMA)
             self.assertEqual(rec["leaks_detected"], [])
@@ -447,6 +479,14 @@ class SessionRecord(unittest.TestCase):
             joined = " ".join(rec["caveats"]).lower()
             self.assertIn("not data", joined)
             self.assertIn("not counterbalanced", joined)
+
+            # The record says which movements ran, so a default session and a
+            # session the presenter cut short are distinguishable afterwards.
+            self.assertEqual(rec["movements"]["pairs"], dl.DEFAULT_N_PAIRS)
+            for off in ("measured", "prediction", "payoff", "closing"):
+                self.assertFalse(rec["movements"][off],
+                                 f"{off} ran on a default beat")
+            self.assertIsNone(rec["payoff"])
 
     def test_a_rehearsal_is_not_recorded_as_a_listener(self):
         with tempfile.TemporaryDirectory() as d:
@@ -489,7 +529,7 @@ class NumbersAreMeasuredNotTyped(unittest.TestCase):
             raise unittest.SkipTest(f"{MASTER} missing")
         cls.man = manifest()
         cls.w = pair_wers_from_master()
-        cls.r = run_listen("--replay", "--pairs", "3")
+        cls.r = run_listen("--replay", "--full", "--pairs", "3")
 
     def test_every_demo_pair_is_an_exact_tie_in_master_csv(self):
         for pair in self.man["pairs"]:
@@ -578,7 +618,7 @@ class HonestFraming(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.man = manifest()
-        cls.out = run_listen("--replay").stdout
+        cls.out = run_listen("--replay", "--full").stdout
 
     def test_the_failed_prediction_is_reported_not_buried(self):
         low = self.out.lower()
@@ -737,7 +777,7 @@ class ThePauseBetweenPairs(unittest.TestCase):
         cls.pairs = dl.ordered_pairs(cls.man, dl.DEFAULT_N_PAIRS)
         with tempfile.TemporaryDirectory() as d:
             cls.r = run_listen("--sessions-dir", d,
-                               stdin=READY + "1\nc\n" + NEXT + "2\nc\n" + "y\n")
+                               stdin=READY + "1\nc\n" + NEXT + "2\nc\n")
 
     def test_the_pause_exists_and_sits_between_the_two_pairs(self):
         out = self.r.stdout
@@ -767,7 +807,7 @@ class ThePauseBetweenPairs(unittest.TestCase):
         second = [a["blind"] for _, a in dl.arms_in_play_order(self.pairs[1])]
         with tempfile.TemporaryDirectory() as d:
             r = run_listen("--sessions-dir", d,
-                           stdin=READY + "1\nc\n" + "r\n" + NEXT + "2\nc\n" + "y\n")
+                           stdin=READY + "1\nc\n" + "r\n" + NEXT + "2\nc\n")
             self.assertEqual(r.returncode, 0, r.stderr[-3000:])
             self.assertEqual(r.stdout.count(first[0]), 2,
                              "[r] at the pause did not replay the pair just heard")
@@ -786,9 +826,9 @@ class NoPresenterNotesOnScreen(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.replay = run_listen("--replay").stdout
+        cls.replay = run_listen("--replay", "--full").stdout
         with tempfile.TemporaryDirectory() as d:
-            cls.live = run_listen("--sessions-dir", d, "--pairs", "3",
+            cls.live = run_listen("--full", "--sessions-dir", d, "--pairs", "3",
                                   stdin=READY + "1\nc\n" + NEXT + "s\n"
                                   + NEXT + "2\nt\n" + "y\n").stdout
 
@@ -836,7 +876,7 @@ class TheClosingIsTheQuestionNotAVerdict(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.man = manifest()
-        cls.out = run_listen("--replay").stdout
+        cls.out = run_listen("--replay", "--full").stdout
 
     def test_it_closes_on_the_question_and_the_tie(self):
         low = self.out.lower()
@@ -899,6 +939,321 @@ class TheClosingIsTheQuestionNotAVerdict(unittest.TestCase):
                              f"the origin story makes a claim about others: {banned!r}")
 
 
+class TheDefaultBeatEndsAtTheLastReveal(unittest.TestCase):
+    """
+    The beat stops when the listener has been shown the tie.
+
+    It used to run straight on, unprompted, into four more movements — including
+    a third pair that STARTED PLAYING AUDIO without asking anyone. That is the
+    same failure the preamble hold exists to prevent, moved to the other end of
+    the segment: sound arriving when the person at the keyboard believes they are
+    finished. The four are now opt-in, and nothing was deleted, so every check
+    below comes in two halves — absent by default, present under its own flag.
+    """
+
+    # marker -> the flag that must bring it back. The flag IS the control: an
+    # "it does not print" assertion is worth nothing unless the same matcher is
+    # shown finding the same string somewhere.
+    # Markers chosen to be UNIQUE to their section. "the measured half" is not:
+    # the closing quotes it too ("the measured half is the model-side
+    # interval"), so using it here would make --prediction look like it printed
+    # the measured section. That phrase is checked separately below, where its
+    # ambiguity does not matter because nothing at all should be printing.
+    MOVEMENTS = {
+        "not just the ones you heard": "--measured",
+        "the prediction i got wrong": "--prediction",
+        "one more — and it is a different question": "--payoff",
+        "the question that started this": "--closing",
+        "intuition pump, not data": "--closing",
+    }
+
+    LAST_REVEAL_LINE = "One number, the same for both."
+
+    @classmethod
+    def setUpClass(cls):
+        cls.man = manifest()
+        cls.bare = run_listen("--replay")
+        cls.full = run_listen("--replay", "--full")
+
+    @staticmethod
+    def _content_lines(out: str) -> list[str]:
+        """
+        stdout minus blank lines and the run's own operational footer.
+
+        `session recorded: …` / `(rehearsal — …)` are notes about the process,
+        not part of the beat, and they are printed by `main` rather than by the
+        beat itself.
+        """
+        skip = ("session recorded:", "(rehearsal —", "(could not write")
+        return [ln.rstrip() for ln in out.splitlines()
+                if ln.strip() and not ln.strip().startswith(skip)]
+
+    def test_the_default_run_prints_none_of_the_four_movements(self):
+        low = self.bare.stdout.lower()
+        self.assertEqual(self.bare.returncode, 0, self.bare.stderr[-3000:])
+        for marker in self.MOVEMENTS:
+            self.assertNotIn(marker, low,
+                             f"the default beat ran on into {marker!r}")
+        # The section headings themselves, including the one too ambiguous to
+        # use as a per-flag marker above.
+        for heading in ("the measured half", "the prediction i got wrong",
+                        "n = 1", "the question that started this"):
+            self.assertNotIn(heading, low)
+
+    def test_negative_control_full_prints_all_four(self):
+        """Without this the assertion above passes for a matcher that can never
+        match — the movements could have been deleted rather than gated."""
+        low = self.full.stdout.lower()
+        for marker in self.MOVEMENTS:
+            self.assertIn(marker, low, f"--full lost {marker!r}")
+
+    def test_each_flag_turns_on_its_own_section_and_not_the_others(self):
+        for marker, flag in self.MOVEMENTS.items():
+            with self.subTest(flag=flag, marker=marker):
+                low = run_listen("--replay", flag).stdout.lower()
+                self.assertIn(marker, low, f"{flag} did not print {marker!r}")
+                for other, other_flag in self.MOVEMENTS.items():
+                    if other_flag in (flag, "--closing"):
+                        continue          # the closing is implied by any section
+                    self.assertNotIn(other, low,
+                                     f"{flag} also printed {other!r}")
+
+    def test_the_closing_is_implied_by_a_section_and_suppressible(self):
+        """
+        The disclaimer says which half is data and which is the hook. A run that
+        quotes the 40-clip interval and then does NOT say that is the one
+        combination this segment must not be able to produce by accident — so it
+        rides along, and turning it off is an explicit act.
+        """
+        implied = run_listen("--replay", "--measured").stdout.lower()
+        self.assertIn("intuition pump, not data", implied)
+        suppressed = run_listen("--replay", "--measured", "--no-closing").stdout.lower()
+        self.assertIn("the measured half", suppressed,
+                      "--no-closing removed the section that was asked for")
+        self.assertNotIn("intuition pump, not data", suppressed)
+
+    def test_the_default_run_ends_on_the_last_reveals_last_line(self):
+        lines = self._content_lines(self.bare.stdout)
+        self.assertTrue(lines, "the run printed nothing")
+        self.assertEqual(lines[-1].strip(), self.LAST_REVEAL_LINE,
+                         "something printed after the last pair's reveal")
+        # Anti-vacuity: the run really did get to the end of the beat.
+        self.assertEqual(self.bare.stdout.count(dl.REVEAL_BANNER),
+                         dl.DEFAULT_N_PAIRS)
+        # The control: the same computation on --full does NOT end there, so the
+        # assertion is reading the end of the output rather than always holding.
+        self.assertNotEqual(self._content_lines(self.full.stdout)[-1].strip(),
+                            self.LAST_REVEAL_LINE)
+
+    def test_the_default_ends_there_in_a_live_run_too(self):
+        """`--replay` and a real listener take different branches to the same end."""
+        with tempfile.TemporaryDirectory() as d:
+            r = run_listen("--sessions-dir", d,
+                           stdin=READY + "1\nc\n" + NEXT + "s\n")
+            self.assertEqual(r.returncode, 0, r.stderr[-3000:])
+            self.assertEqual(self._content_lines(r.stdout)[-1].strip(),
+                             self.LAST_REVEAL_LINE)
+
+    # ---- the audio half, which is the part a comment cannot carry -----------
+
+    def _run_with_play_markers(self, **kw) -> str:
+        """
+        Run the beat in-process with `play` replaced by a recorder that prints a
+        unique marker. That puts the playback events INTO the same stream as the
+        reveal banner, which is the only way to assert an ordering between them —
+        an event list alone cannot say whether a play came before or after a line
+        of text, and `--no-audio` prints nothing a test could anchor on.
+        """
+        real_play = dl.play
+        buf = io.StringIO()
+
+        def fake_play(path, ink, enabled):
+            print(f"<<PLAY {Path(str(path)).name}>>")
+
+        try:
+            dl.play = fake_play
+            with contextlib.redirect_stdout(buf):
+                dl.run(self.man, dl.Ink(False), 90, n_pairs=dl.DEFAULT_N_PAIRS,
+                       audio=True, mode="replay", **kw)
+        finally:
+            dl.play = real_play
+        return buf.getvalue()
+
+    def test_no_audio_plays_after_the_last_pairs_reveal(self):
+        out = self._run_with_play_markers()
+        self.assertEqual(out.count("<<PLAY"), 2 * dl.DEFAULT_N_PAIRS,
+                         "the default beat played something other than the pairs")
+        banners = [m.start() for m in re.finditer(re.escape(dl.REVEAL_BANNER), out)]
+        self.assertEqual(len(banners), dl.DEFAULT_N_PAIRS)
+        self.assertLess(out.rindex("<<PLAY"), banners[-1],
+                        "audio played after the last reveal — the listener is "
+                        "finished and the beat started something anyway")
+
+    def test_negative_control_the_payoff_pair_DOES_play_after_it(self):
+        """
+        The same assertion, run against the behaviour it is meant to catch. If
+        `--payoff` did not put a play event after the last pair's reveal, the
+        check above would hold for every possible implementation.
+        """
+        out = self._run_with_play_markers(payoff=True)
+        self.assertEqual(out.count("<<PLAY"), 2 * dl.DEFAULT_N_PAIRS + 2)
+        banners = [m.start() for m in re.finditer(re.escape(dl.REVEAL_BANNER), out)]
+        last_pair_reveal = banners[dl.DEFAULT_N_PAIRS - 1]
+        self.assertGreater(out.rindex("<<PLAY"), last_pair_reveal)
+
+    def test_replay_and_live_share_one_default(self):
+        """A rehearsal that runs a different beat is not a rehearsal."""
+        with tempfile.TemporaryDirectory() as d:
+            live = run_listen("--sessions-dir", d,
+                              stdin=READY + "1\nc\n" + NEXT + "2\nc\n").stdout.lower()
+        replay = self.bare.stdout.lower()
+        for marker in self.MOVEMENTS:
+            self.assertEqual(marker in live, marker in replay,
+                             f"{marker!r} appears in one mode but not the other")
+
+    def test_pairs_3_still_stops_after_the_third_reveal(self):
+        out = run_listen("--replay", "--pairs", "3").stdout
+        self.assertEqual(out.count(dl.REVEAL_BANNER), 3)
+        self.assertEqual(self._content_lines(out)[-1].strip(), self.LAST_REVEAL_LINE)
+        for marker in self.MOVEMENTS:
+            self.assertNotIn(marker, out.lower())
+
+
+class TheFollowUpQuestionMatchesItsOptions(unittest.TestCase):
+    """
+    The question and the three answers it offers must be about the same thing.
+
+    They were not. The prompt asked "How clear was that call?" — which reads as
+    *how clear was the audio* — and then offered "a slight edge" / "honestly a
+    toss-up", which rank *the size of the gap between the two clips*. Nothing
+    failed, nothing was empty, and the one judgement this segment collects was
+    recorded against a question the listener was never asked. It is this repo's
+    signature failure mode in a UI string.
+    """
+
+    OLD_MISMATCHED_QUESTION = "how clear was that call"
+
+    @classmethod
+    def setUpClass(cls):
+        cls.man = manifest()
+        cls.src = (REPO / "demos" / "demo_listen.py").read_text()
+
+    @staticmethod
+    def _labels_missing_from(menu: str, labels: dict) -> list[str]:
+        """Labels the listener is echoed back that they were never offered."""
+        return sorted(v for v in labels.values() if v not in menu)
+
+    def test_every_label_echoed_back_was_on_the_menu(self):
+        self.assertEqual(self._labels_missing_from(dl.CONFIDENCE_MENU, dl._CONF_LABEL),
+                         [], "the reveal echoes a label the menu never offered")
+
+    def test_negative_control_the_check_catches_a_mismatched_menu(self):
+        """The old pairing, restored, must fail the check that now passes."""
+        old_menu = ("    [c] clear                [l] a slight edge"
+                    "        [t] honestly a toss-up")
+        old_labels = {"clear": "clear", "slight": "a slight edge",
+                      "tossup": "a toss-up"}
+        # The old menu is self-consistent, so the mismatch it had is NOT one this
+        # check can see — which is the point: pair today's labels with it and the
+        # missing option shows up immediately.
+        self.assertEqual(self._labels_missing_from(old_menu, old_labels), [])
+        self.assertEqual(self._labels_missing_from(old_menu, dl._CONF_LABEL),
+                         ["a clear difference"])
+
+    def test_the_question_asks_about_the_difference_its_options_rank(self):
+        q = dl.CONFIDENCE_QUESTION.lower()
+        self.assertIn("difference", q,
+                      "the follow-up asks about something other than the gap "
+                      "between the two clips, which is what its options rank")
+        # And it is a question about the CALL just made, not about the audio.
+        self.assertNotIn("clear was", q)
+
+    def test_the_retry_line_names_the_same_three_options(self):
+        retry = dl.CONFIDENCE_RETRY.lower()
+        for key, label in dl._CONF_LABEL.items():
+            with self.subTest(option=key):
+                self.assertIn(label.lower(), retry,
+                              "the re-prompt on bad input offers different "
+                              "options from the menu above it")
+
+    def test_the_old_wording_survives_only_as_an_explanation(self):
+        """
+        The phrase is still in the file — on purpose, in the comment that says
+        why it was wrong. What it must not be is a live string: every line that
+        still contains it has to be a comment, not something that can print.
+        """
+        hits = [ln for ln in self.src.splitlines()
+                if self.OLD_MISMATCHED_QUESTION in ln.lower()]
+        self.assertTrue(hits, "the explanation of the old wording was deleted "
+                              "along with it — this check is now vacuous")
+        for ln in hits:
+            self.assertTrue(ln.lstrip().startswith("#"),
+                            f"the mismatched question is live in the source: {ln!r}")
+
+    def test_the_old_wording_never_reaches_the_screen(self):
+        with tempfile.TemporaryDirectory() as d:
+            out = run_listen("--sessions-dir", d,
+                             stdin=READY + "1\nzzz\nc\n" + NEXT + "s\n").stdout
+        low = out.lower()
+        self.assertNotIn(self.OLD_MISMATCHED_QUESTION, low)
+        # The control: the new one IS there, along with its menu and its retry
+        # line — so "the old wording is absent" is not absent-because-silent.
+        self.assertIn(dl.CONFIDENCE_QUESTION, out)
+        self.assertIn(dl.CONFIDENCE_MENU, out)
+        self.assertIn(dl.CONFIDENCE_RETRY.strip(), out,
+                      "unparseable input did not re-offer the options")
+
+    def test_the_reveal_echoes_the_label_the_listener_picked(self):
+        for key, letter in (("clear", "c"), ("slight", "l"), ("tossup", "t")):
+            with self.subTest(option=key):
+                with tempfile.TemporaryDirectory() as d:
+                    r = run_listen("--sessions-dir", d,
+                                   stdin=READY + f"1\n{letter}\n" + NEXT + "s\n")
+                    self.assertEqual(r.returncode, 0, r.stderr[-3000:])
+                    self.assertIn(f"was harder ({dl._CONF_LABEL[key]})", r.stdout)
+                    rec = json.loads(sorted(Path(d).glob("*.json"))[-1].read_text())
+                self.assertEqual(rec["responses"][0]["confidence"], key)
+
+    def test_the_recorded_session_is_echoed_with_the_same_labels(self):
+        out = run_listen("--replay").stdout
+        self.assertIn("[recorded listener]", out)
+        self.assertTrue(
+            any(f"— {label}" in out for label in dl._CONF_LABEL.values()),
+            "the replayed listener is described with a label that is not one of "
+            "the options a live listener is given")
+
+    def test_the_new_strings_carry_no_leak(self):
+        """
+        They are printed before the listener commits, so they are bound by the
+        same guard as everything else on the blind half.
+        """
+        terms = dl.leak_terms(self.man)
+        for s in (dl.CHOICE_QUESTION, dl.CHOICE_MENU, dl.CONFIDENCE_QUESTION,
+                  dl.CONFIDENCE_MENU, dl.CONFIDENCE_RETRY):
+            with self.subTest(text=s[:40]):
+                self.assertEqual(dl.find_leaks(s, terms), [])
+        # Control: the detector is live on strings of exactly this shape.
+        self.assertNotEqual(
+            dl.find_leaks("    [c] the reverberant one is clearly harder", terms), [])
+
+    def test_the_blind_half_of_a_LIVE_run_names_nothing_either(self):
+        """
+        The question and both menus are printed by `collect_answer`, which a
+        `--replay` run never reaches — so the end-to-end leak check on a replay
+        does not cover them. This is that check on the branch that does.
+        """
+        terms = dl.leak_terms(self.man)
+        with tempfile.TemporaryDirectory() as d:
+            r = run_listen("--sessions-dir", d,
+                           stdin=READY + "1\nc\n" + NEXT + "s\n")
+        self.assertEqual(r.returncode, 0, r.stderr[-3000:])
+        pre = r.stdout[:r.stdout.index(dl.REVEAL_BANNER)]
+        self.assertIn(dl.CONFIDENCE_MENU, pre,
+                      "the slice does not contain the strings it exists to check")
+        self.assertEqual(dl.find_leaks(pre, terms), [],
+                         "a live run named the answer before the listener committed")
+
+
 class Hygiene(unittest.TestCase):
 
     def test_it_never_opens_a_socket(self):
@@ -928,7 +1283,7 @@ class Hygiene(unittest.TestCase):
         self.assertTrue(before, "no protected documents found — check the paths")
         with tempfile.TemporaryDirectory() as d:
             run_listen("--sessions-dir", d,
-                       stdin=READY + "1\nc\n" + NEXT + "2\nc\n" + "y\n")
+                       stdin=READY + "1\nc\n" + NEXT + "2\nc\n")
         self.assertEqual(before, digest(),
                          "the demo rewrote a hand-authored document")
 

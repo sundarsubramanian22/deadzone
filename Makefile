@@ -160,8 +160,12 @@ demo-al:
 ## model scored those clips exactly equal. Offline, no API key, plays wavs
 ## through afplay/aplay/play/ffplay. It waits for a human, so it is
 ## deliberately NOT in the `demo` chain, which must run unattended.
+## The beat ENDS at the last pair's reveal — nothing auto-plays after it.
 ##   demos/demo_listen.py --check     preflight
 ##   demos/demo_listen.py --replay    rehearse with the recorded 2026-08-05 session
+##   demos/demo_listen.py --full      + the measured half, the failed prediction,
+##                                      the third pair and the closing (all opt-in;
+##                                      also --measured/--prediction/--payoff/--closing)
 demo-listen:
 	@$(PY) demos/demo_listen.py
 

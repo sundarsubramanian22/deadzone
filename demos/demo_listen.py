@@ -9,8 +9,18 @@ anything. Then they learn that the model scores every pair **exactly equal**.
 
     ./.venv/bin/python demos/demo_listen.py            # the live beat (~3 min)
     ./.venv/bin/python demos/demo_listen.py --replay   # rehearse it alone
+    ./.venv/bin/python demos/demo_listen.py --full     # + every trailing movement
     ./.venv/bin/python demos/demo_listen.py --sheet     # print the paper sheet
     ./.venv/bin/python demos/demo_listen.py --check     # preflight the artifacts
+
+THE BEAT ENDS AT THE LAST PAIR'S REVEAL. Preamble → hold → pair → reveal → hold
+→ pair → reveal → stop. Everything that used to run on afterwards, unprompted --
+the measured half, the failed prediction, a third pair that STARTED PLAYING
+AUDIO without asking, and the closing -- is now opt-in: `--measured`,
+`--prediction`, `--payoff`, `--closing`, or `--full` for all four. Nothing was
+deleted. Audio that begins on its own after somebody has finished answering is
+the same failure as audio that begins on invocation, and the preamble hold below
+exists because of that one.
 
 WHY THIS BEAT EXISTS -- AND WHAT IT IS NOT. This is the MOTIVATING HOOK, not a
 finding. It exists to manufacture, live, the one question the whole project was
@@ -426,7 +436,9 @@ def recorded_calls(man: dict) -> dict[str, dict]:
     return dict(sessions[0].get("calls") or {})
 
 
-_CONF_LABEL = {"clear": "clear", "slight": "a slight edge", "tossup": "a toss-up"}
+# The label echoed back to the listener in the reveal ("you said clip 1 was
+# harder (a slight edge)") and in the replayed session. Declared with the
+# question and menu it belongs to, below `CHOICE_MENU` — see the comment there.
 
 
 def replay_answer(pair: dict, calls: dict) -> dict:
@@ -515,14 +527,42 @@ def pair_prompt_lines(index: int, total: int, ink: Ink, width: int) -> list[str]
     ]
 
 
+CHOICE_QUESTION = "Which one is harder to understand?"
+
 CHOICE_MENU = (
     "    [1] clip 1 is harder     [2] clip 2 is harder     [s] about the same\n"
     "    [r] hear both again      [r1] / [r2] hear one     [q] stop here"
 )
 
+# --------------------------------------------------------------------------
+# the follow-up question — ONE unit, declared in one place
+# --------------------------------------------------------------------------
+#
+# THE QUESTION AND ITS OPTIONS MUST ASK THE SAME THING. They drifted apart once
+# and it survived review: the prompt read "How clear was that call?", which a
+# listener hears as *how clear was the AUDIO*, while the three options it then
+# offered ("a slight edge", "honestly a toss-up") rank *the size of the gap
+# between the two clips*. Both are reasonable questions. They are not the same
+# question, and a listener who answers the one that was asked is recorded under
+# the other — a silent mis-measurement of the only judgement this segment
+# collects.
+#
+# So the prompt, the menu, the retry line and the label echoed back in the
+# reveal live together here, and `tests/test_demo_listen.py` asserts that every
+# label in `_CONF_LABEL` appears verbatim in the menu the listener chose from.
+# Four strings typed at four call sites is how the mismatch got in.
+CONFIDENCE_QUESTION = "How big was the difference?"
+
 CONFIDENCE_MENU = (
-    "    [c] clear                [l] a slight edge        [t] honestly a toss-up"
+    "    [c] a clear difference   [l] a slight edge        [t] honestly a toss-up"
 )
+
+CONFIDENCE_RETRY = (
+    "    (c for a clear difference, l for a slight edge, t for a toss-up)"
+)
+
+_CONF_LABEL = {"clear": "a clear difference", "slight": "a slight edge",
+               "tossup": "a toss-up"}
 
 
 # ==========================================================================
@@ -842,7 +882,7 @@ def collect_answer(order: list[tuple[str, dict]], ink: Ink, audio: bool,
     choice = None
     for _ in range(MAX_ASK_RETRIES):
         print()
-        print("  " + ink.bold("Which one is harder to understand?"))
+        print("  " + ink.bold(CHOICE_QUESTION))
         print(ink.dim(CHOICE_MENU))
         raw = ask("  > ", turn)
         if raw is None:
@@ -883,7 +923,7 @@ def collect_answer(order: list[tuple[str, dict]], ink: Ink, audio: bool,
     conf = None
     for _ in range(MAX_ASK_RETRIES):
         print()
-        print("  " + ink.bold("How clear was that call?"))
+        print("  " + ink.bold(CONFIDENCE_QUESTION))
         print(ink.dim(CONFIDENCE_MENU))
         raw = ask("  > ", turn)
         if raw is None:
@@ -899,7 +939,7 @@ def collect_answer(order: list[tuple[str, dict]], ink: Ink, audio: bool,
             break
         if raw == "":
             break
-        print(ink.dim("    (c, l or t)"))
+        print(ink.dim(CONFIDENCE_RETRY))
 
     return {"answer": "pick", "harder_arm": order[choice - 1][0], "confidence": conf,
             "n_replays": replays, "seconds_to_answer": seconds}
@@ -967,8 +1007,39 @@ def run_payoff(man: dict, ink: Ink, width: int, audio: bool, turn: Turn,
 
 
 def run(man: dict, ink: Ink, width: int, *, n_pairs: int, audio: bool,
-        mode: str, payoff: bool) -> dict:
-    """The whole beat. Returns the session record."""
+        mode: str, measured: bool = False, prediction: bool = False,
+        payoff: bool = False, closing: bool | None = None) -> dict:
+    """
+    The whole beat. Returns the session record.
+
+    THE DEFAULT BEAT ENDS AT THE LAST PAIR'S REVEAL, and that is a deliberate
+    change from how this started. It used to run straight on — unprompted —
+    into the measured half, the failed prediction, a THIRD pair that began
+    playing audio without asking, and the n=1 disclaimer with the close. Four
+    more movements, several minutes, arriving after the listener has answered
+    the only question they were asked. A person who has just committed to a
+    judgement and been shown the tie is at the end of a beat; audio starting on
+    its own at that point is the same mistake as audio starting on invocation,
+    which the preamble hold exists to prevent.
+
+    So each movement is now opt-in and OFF by default:
+
+        measured    THE MEASURED HALF — the 40-clip paired interval
+        prediction  THE PREDICTION I GOT WRONG — the sealed prediction, and
+                    the fact that it lost
+        payoff      the third pair: "can you still tell someone is speaking?"
+        closing     the n=1 disclaimer + THE QUESTION THAT STARTED THIS
+
+    `closing` defaults to "on if any of the other three is on" — those sections
+    quote a measurement and a failed prediction, and the disclaimer that says
+    which half is data and which is the hook is what makes them safe to say out
+    loud. It is not something a caller should be able to leave off by accident.
+    Pass it explicitly to override.
+
+    Nothing is deleted: `--full` is exactly the old behaviour.
+    """
+    if closing is None:
+        closing = bool(measured or prediction or payoff)
     terms = leak_terms(man)
     blind = Blind(terms)
     turn = Turn(mode)
@@ -1048,21 +1119,29 @@ def run(man: dict, ink: Ink, width: int, *, n_pairs: int, audio: bool,
         })
         prev_order = order
 
+    # Recomputed unconditionally — it is provenance in the session record (and
+    # the drift check against the manifest), not part of the printed movement.
+    # Gating the RECORD on a presentation flag would make two runs of the same
+    # listening test carry different evidence about the same grid.
     live = measured_from_master(man)
-    for line in measured_lines(man, live, ink, width):
-        print(line)
-    for line in prediction_lines(man, ink, width):
-        print(line)
+
+    if measured:
+        for line in measured_lines(man, live, ink, width):
+            print(line)
+    if prediction:
+        for line in prediction_lines(man, ink, width):
+            print(line)
 
     payoff_rec = None
     if payoff:
         payoff_rec = run_payoff(man, ink, width, audio, turn, blind)
 
-    n_answered = sum(1 for r in responses if r["answer"] in ("pick", "same"))
-    for line in honesty_lines(man, n_answered, ink, width):
-        print(line)
-    for line in takeaway_lines(man, responses, ink, width):
-        print(line)
+    if closing:
+        n_answered = sum(1 for r in responses if r["answer"] in ("pick", "same"))
+        for line in honesty_lines(man, n_answered, ink, width):
+            print(line)
+        for line in takeaway_lines(man, responses, ink, width):
+            print(line)
 
     return {
         "schema": SESSION_SCHEMA,
@@ -1076,6 +1155,17 @@ def run(man: dict, ink: Ink, width: int, *, n_pairs: int, audio: bool,
         "model": MODEL,
         "source_manifest": str(MANIFEST),
         "play_order": [int(p["pair"]) for p in pairs],
+        # Which movements this run actually delivered. Recorded because the
+        # default beat now stops at the last reveal: a record that did not say
+        # so would leave a reader unable to tell a two-pair session from a
+        # session where the listener walked out before the closing.
+        "movements": {
+            "pairs": len(pairs),
+            "measured": bool(measured),
+            "prediction": bool(prediction),
+            "payoff": bool(payoff),
+            "closing": bool(closing),
+        },
         "responses": responses,
         "payoff": payoff_rec,
         "measured": {
@@ -1180,8 +1270,32 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--pairs", type=int, default=DEFAULT_N_PAIRS,
                     help=f"how many pairs to play (default {DEFAULT_N_PAIRS}; "
                          f"the third is the reserve)")
-    ap.add_argument("--no-payoff", dest="payoff", action="store_false",
-                    help="skip the final pair")
+
+    # The four movements that used to run on unprompted after the last reveal.
+    # All OFF by default; `--full` is the old behaviour exactly. See run().
+    ap.add_argument("--measured", action="store_true",
+                    help="after the last reveal, also show THE MEASURED HALF "
+                         "(the 40-clip paired interval). Off by default: the "
+                         "beat ends when the listener has been shown the tie.")
+    ap.add_argument("--prediction", action="store_true",
+                    help="also show THE PREDICTION I GOT WRONG (the sealed "
+                         "prediction and the fact that it lost)")
+    ap.add_argument("--payoff", dest="payoff", action="store_true", default=None,
+                    help="also play the third pair — 'can you still tell someone "
+                         "is speaking?'. Off by default: it starts playing audio "
+                         "at a point where the listener is finished.")
+    ap.add_argument("--no-payoff", dest="payoff", action="store_false", default=None,
+                    help="force the third pair off. It is already off by default, "
+                         "so this only bites after --full.")
+    ap.add_argument("--closing", dest="closing", action="store_true", default=None,
+                    help="also show the n=1 disclaimer and THE QUESTION THAT "
+                         "STARTED THIS (implied by any of the three above)")
+    ap.add_argument("--no-closing", dest="closing", action="store_false", default=None,
+                    help="suppress the closing even when another section asked "
+                         "for it (say the disclaimer out loud yourself instead)")
+    ap.add_argument("--full", action="store_true",
+                    help="every movement: the beat as it ran before they became "
+                         "opt-in — measured half, prediction, third pair, closing")
     ap.add_argument("--no-audio", dest="audio", action="store_false",
                     help="run the script without playing anything")
     ap.add_argument("--no-color", dest="color", action="store_false",
@@ -1216,9 +1330,19 @@ def main(argv: list[str] | None = None) -> int:
               "manifest; none found.", file=sys.stderr)
         return 1
 
+    # `--full` turns everything on; an explicit --no-payoff / --no-closing after
+    # it still wins, which is why those two dests are tri-state rather than a
+    # plain store_false with a default.
+    show_measured = bool(args.measured or args.full)
+    show_prediction = bool(args.prediction or args.full)
+    show_payoff = args.payoff if args.payoff is not None else bool(args.full)
+    show_closing = args.closing        # None => run() derives it
+
     try:
         record = run(man, ink, width, n_pairs=args.pairs, audio=args.audio,
-                     mode=mode, payoff=args.payoff)
+                     mode=mode, measured=show_measured,
+                     prediction=show_prediction, payoff=show_payoff,
+                     closing=show_closing)
     except KeyboardInterrupt:
         # Belt and braces: `ask()` already swallows Ctrl-C at the prompt, so this
         # only fires if it lands between prompts. Either way the beat ends at 0.
