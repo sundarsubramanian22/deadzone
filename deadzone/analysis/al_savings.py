@@ -882,7 +882,15 @@ def split_robustness(rows: Sequence[Mapping], space: FactorSpace = DEFAULT_FACTO
                                      holdout_frac=holdout_frac, seed=ss,
                                      use_measured_rt60=use_measured_rt60,
                                      threshold=threshold, band=band)
-        oracle, _ = surrogate_oracle_from_master(split=split, model=model, seed=ss)
+        # `space` MUST be forwarded: the oracle factory encodes each sample with
+        # `encode_sample(space, ...)`, so letting it fall back to
+        # DEFAULT_FACTOR_SPACE would fit the surrogate oracle in a different
+        # coordinate system from the one the arms are sampling and being scored
+        # in. With the default space that is a no-op, which is why it went
+        # unnoticed; with any custom space whose factor NAMES still match it is
+        # silently wrong rather than a KeyError.
+        oracle, _ = surrogate_oracle_from_master(split=split, space=space,
+                                                 model=model, seed=ss)
         multi = multi_seed_curves(oracle, space, X_test=split["X_test"],
                                   y_test=split["y_test"], seeds=seeds,
                                   n_seed=n_seed, budget=budget,

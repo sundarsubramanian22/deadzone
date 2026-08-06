@@ -31,7 +31,7 @@ import math
 
 import numpy as np
 
-from deadzone.design import DEFAULT_FACTOR_SPACE
+from deadzone.design import DEFAULT_FACTOR_SPACE, Factor, FactorSpace
 from deadzone.active_learning import (
     GPSurrogate, acquire, active_learn, random_baseline, compare_arms,
     learning_curve, evals_to_target, best_so_far, make_test_set, boundary_error,
@@ -163,6 +163,260 @@ def test_active_beats_random():
     return res
 
 
+# ===========================================================================
+# 5-7: THE DRR REPARAMETERISATION RE-RUN  (scripts/run_al_drr.py)
+# ===========================================================================
+#
+# The real-grid D3b result is a NULL, and `results/interaction_report.txt` names
+# the obvious suspect: the GP is fitted with `rt60` as a CONTINUOUS coordinate,
+# but `AssetLibrary.resolve()` snaps each rt60 request to the nearest measured
+# RIR, so every level of that axis is a different real ROOM. The re-run swaps the
+# coordinate to DRR and asks whether the null survives.
+#
+# The comparison is only meaningful if the coordinate is the ONLY thing that
+# changed, so the two properties below are pinned here rather than asserted in
+# prose: (5) every condition takes the coordinate of the RIR it actually resolved
+# to, and (6) both arms race on one shared oracle and one shared test set. Test 7
+# checks the identity guard can actually DETECT a difference — a check that
+# always passes would license exactly the confound it exists to rule out.
+
+_ARTIFACTS = ("results/master.csv",)
+
+# The published DRR/C50 table from results/interaction_report.txt, produced by
+# scripts/run_d3a.py. `rir_acoustics` must reproduce it or the two have drifted.
+_PUBLISHED_ACOUSTICS = {
+    "mit_rt60-0.20_h114_Restaurant_txts.wav":            (16.90, 28.10),
+    "mit_rt60-0.47_h174_Bar_1txts.wav":                  (-2.05, 10.22),
+    "mit_rt60-0.68_h058_Campground_Dininghall_3txts.wav": (4.26, 10.03),
+    "mit_rt60-0.99_h081_Shower_2txts.wav":              (-10.02, 2.12),
+}
+
+
+def _have(*paths) -> bool:
+    return all(_os.path.exists(_os.path.join(_REPO_ROOT, p)) for p in paths)
+
+
+def _fake_rows(coord_col="drr_db"):
+    """Two rooms x two other-factor settings, in master-table shape."""
+    base = {"snr_db": "10.0", "noise_type": "babble", "codec": "none",
+            "mic_rolloff": "0.0", "wer": "0.4", "failed": "False",
+            "model": "nova-3", "condition_name": "c"}
+    rows = []
+    for key, rt in (("/rirs/roomA.wav", "0.2"), ("/rirs/roomB.wav", "1.0")):
+        for snr in ("10.0", "0.0"):
+            r = dict(base)
+            r.update({"rir_key": key, "rt60": rt, "rir_rt60_measured": rt,
+                      "snr_db": snr})
+            rows.append(r)
+    return rows
+
+
+def test_coordinate_maps_to_the_resolved_rir():
+    """
+    5: each condition takes the coordinate of the RIR IT ACTUALLY RESOLVED TO.
+
+    The join key is the master table's `rir_key` — the field that records which
+    RIR the composer really used — never the requested `rt60`, because
+    `resolve()` snaps requests to the nearest measured RIR and the two are
+    different objects. An unmapped key must RAISE: silently dropping a room would
+    delete a quarter of the reverb axis and still produce a plausible number.
+    """
+    from scripts.run_al_drr import remap_rows, Coordinate
+
+    values = {"/rirs/roomA.wav": 16.9, "/rirs/roomB.wav": -10.02}
+    coord = Coordinate("drr_db", "test", "primary", values, (-10.02, 16.9))
+    out = remap_rows(_fake_rows(), coord)
+    assert len(out) == 4, len(out)
+    for r in out:
+        assert r["drr_db"] == values[r["rir_key"]], r
+        # nothing else may move
+        assert r["snr_db"] in ("10.0", "0.0") and r["noise_type"] == "babble"
+    # rows sharing a room share a coordinate; different rooms do not
+    a = {r["drr_db"] for r in out if r["rir_key"].endswith("roomA.wav")}
+    b = {r["drr_db"] for r in out if r["rir_key"].endswith("roomB.wav")}
+    assert a == {16.9} and b == {-10.02}, (a, b)
+
+    # an unmapped room must raise, not vanish
+    partial = Coordinate("drr_db", "t", "primary",
+                         {"/rirs/roomA.wav": 1.0}, (0.0, 1.0))
+    try:
+        remap_rows(_fake_rows(), partial)
+    except KeyError as e:
+        assert "roomB" in str(e), e
+    else:
+        raise AssertionError("remap_rows silently dropped an unmapped rir_key")
+
+    print("OK 5: coordinate joins on rir_key (the RIR actually resolved to); "
+          "an unmapped room raises instead of shrinking the axis")
+
+
+def test_coordinate_mapping_against_the_real_grid():
+    """
+    5b: the same mapping on the REAL master table, cross-checked against the
+    published DRR/C50 table, and confirming a coordinate swap changes ONLY the
+    reverb column — same conditions, same WERs, same ordering.
+    """
+    if not _have(*_ARTIFACTS):
+        print("SKIP 5b: results/master.csv absent (gitignored) — pure-function "
+              "mapping is still covered by test 5")
+        return
+    import numpy as _np
+    from scripts.run_al_drr import (
+        measure_delivered_rooms, primary_coordinates, remap_rows,
+    )
+    from deadzone.analysis.interactions import condition_matrix, load_master_rows
+
+    rows = load_master_rows("results/master.csv")
+    try:
+        rooms = measure_delivered_rooms(rows)
+    except (FileNotFoundError, RuntimeError):
+        print("SKIP 5b: RIR files absent (data/ is gitignored)")
+        return
+
+    for r in rooms:
+        want = _PUBLISHED_ACOUSTICS.get(r["room"])
+        if want is None:
+            continue
+        assert abs(r["drr_db"] - want[0]) < 0.02, (r["room"], r["drr_db"], want)
+        assert abs(r["c50_db"] - want[1]) < 0.02, (r["room"], r["c50_db"], want)
+
+    coords = primary_coordinates(rooms)
+    nova = [r for r in rows if r.get("model") == "nova-3"]
+    ref = condition_matrix(nova, use_measured_rt60=True)
+    for c in coords:
+        remapped = remap_rows(rows, c)
+        # every row carries its OWN room's coordinate
+        for r in remapped[:200]:
+            assert r[c.name] == c.values[r["rir_key"]]
+        mat = condition_matrix(remapped, c.space(), model="nova-3",
+                               use_measured_rt60=False)
+        assert mat["n_conditions"] == ref["n_conditions"], (c.name, mat["n_conditions"])
+        assert _np.allclose(mat["y"], ref["y"]), c.name
+        assert ([x["condition_name"] for x in mat["conditions"]]
+                == [x["condition_name"] for x in ref["conditions"]]), c.name
+    print(f"OK 5b: {len(rooms)} delivered rooms match the published DRR/C50 table; "
+          f"all {len(coords)} coordinates keep the same {ref['n_conditions']} "
+          f"conditions, WERs and ordering — only the reverb axis moves")
+
+
+def test_both_arms_share_one_oracle_and_one_test_set():
+    """
+    6: within a coordinate system, active and random race on ONE oracle and ONE
+    held-out set.
+
+    If the arms saw different oracles or different yardsticks, any difference
+    between them would be unattributable — and so would any difference between
+    coordinate systems built on top of them. `run_seed` is the single place that
+    contract lives, so it is checked directly: one oracle object serves every
+    call, all three arms spend the same budget, and one test set scores them all.
+    """
+    from deadzone.analysis.al_savings import run_seed
+
+    calls = {"n": 0, "owners": set()}
+
+    class RecordingOracle:
+        def __call__(self, sample):
+            calls["n"] += 1
+            calls["owners"].add(id(self))
+            return planted_oracle(sample)
+
+    oracle = RecordingOracle()
+    Xt, yt = make_test_set(planted_oracle, SPACE, n=128, seed=11)
+    n_seed, budget = 6, 4
+    res = run_seed(oracle, SPACE, seed=0, X_test=Xt, y_test=yt,
+                   n_seed=n_seed, budget=budget)
+
+    assert set(res["curves"]) == {"active_boundary", "active_uncertainty", "random"}
+    # ONE oracle instance served every call, and every arm spent the same budget
+    assert calls["owners"] == {id(oracle)}, calls["owners"]
+    assert calls["n"] == 3 * (n_seed + budget), calls["n"]
+    for arm, t in res["trajectories"].items():
+        assert t["n_evals"] == n_seed + budget, (arm, t["n_evals"])
+    # ONE test set scored all three arms, and it cost zero oracle calls to build
+    assert res["n_test_points"] == len(yt), (res["n_test_points"], len(yt))
+    assert res["test_oracle_calls"] == 0
+    xs = {tuple(p["n_evals"] for p in c) for c in res["curves"].values()}
+    assert len(xs) == 1, ("arms scored on different checkpoint schedules", xs)
+
+    print(f"OK 6: one oracle instance served all {calls['n']} calls, all three "
+          f"arms spent {n_seed + budget} evals on one shared "
+          f"{res['n_test_points']}-point held-out set")
+
+
+def test_split_robustness_fits_the_oracle_in_the_given_space():
+    """
+    6b: `split_robustness` must build its surrogate oracle in the space it was
+    HANDED, not in DEFAULT_FACTOR_SPACE.
+
+    `surrogate_oracle_from_master` encodes every sample with
+    `encode_sample(space, ...)`, and it defaults `space` to DEFAULT_FACTOR_SPACE.
+    `split_robustness` used to omit the argument, so the arms sampled and were
+    scored in the caller's space while the oracle scored them in the default one.
+    With the default space that is a no-op — which is exactly why it survived —
+    but any renamed axis (the DRR re-run) breaks, and any custom space that
+    merely REORDERS or re-bounds the same factor names breaks SILENTLY.
+    """
+    import inspect
+    from deadzone.analysis import al_savings as ALS
+
+    src = inspect.getsource(ALS.split_robustness)
+    call = src[src.index("surrogate_oracle_from_master"):]
+    call = call[:call.index(")") + 1]
+    assert "space=space" in call, (
+        "split_robustness must forward `space` to surrogate_oracle_from_master; "
+        f"found: {call!r}")
+
+    # and behaviourally: a renamed axis must not blow up or fall back
+    renamed = FactorSpace(
+        [Factor("reverb_x", "continuous", low=0.0, high=1.0, degradation="up")]
+        + list(SPACE.factors[1:]))
+    split = {"X_train": lhs_raw(renamed, 24, seed=0),
+             "y_train": None, "n_train": 24, "n_test": 0}
+    split["y_train"] = np.array(
+        [planted_oracle({**renamed.decode(r), "rt60": 0.2 + 0.8 * r[0]})
+         for r in split["X_train"]])
+    oracle, _ = ALS.surrogate_oracle_from_master(split=split, space=renamed, seed=0)
+    v = oracle(renamed.decode(lhs_raw(renamed, 1, seed=3)[0]))
+    assert math.isfinite(v), v
+    print("OK 6b: split_robustness forwards `space` to the oracle factory; a "
+          "renamed reverb axis is fitted in its own coordinates")
+
+
+def test_identity_guard_detects_a_different_test_set():
+    """
+    7: the cross-coordinate identity guard can actually FAIL.
+
+    `identity_check` is what licenses comparing coordinate systems at all — it
+    asserts each one held out the same conditions with the same WERs. A guard
+    that cannot detect a difference would silently license the confound it exists
+    to rule out, so feed it a corrupted fingerprint and require a NO.
+    """
+    from scripts.run_al_drr import identity_check
+
+    def fp(y_test, names, near=3):
+        return {"name": "x", "split_fingerprint": {
+            "n_conditions": 10, "n_train": 6, "n_test": len(y_test),
+            "n_test_near_boundary": near, "y_train_sum": 1.0,
+            "y_test_sum": float(sum(y_test)), "y_test": list(y_test),
+            "test_condition_names": list(names), "train_test_shared_rows": 0}}
+
+    good = [dict(fp([0.1, 0.5, 0.9], ["a", "b", "c"]), name=n) for n in ("p", "q")]
+    assert identity_check(good)["identical_test_set_across_coordinates"] is True
+
+    for label, bad in (
+        ("different WERs", fp([0.1, 0.5, 0.8], ["a", "b", "c"])),
+        ("different conditions", fp([0.1, 0.5, 0.9], ["a", "b", "z"])),
+        ("different near-boundary count", fp([0.1, 0.5, 0.9], ["a", "b", "c"], near=2)),
+    ):
+        bad = dict(bad, name="bad")
+        res = identity_check([good[0], bad])
+        assert res["identical_test_set_across_coordinates"] is False, label
+        assert "bad" in res["coordinates_differing"], label
+
+    print("OK 7: identity guard flags a changed test set (WERs, conditions or "
+          "near-boundary count) instead of waving it through")
+
+
 if __name__ == "__main__":
     print("factor space:", SPACE.names)
     print(f"planted oracle: sharp sigmoid (K={K_SHARP}) across the rt60==snr_db "
@@ -171,6 +425,13 @@ if __name__ == "__main__":
     test_surrogate_fits()
     test_acquisition_strategies()
     test_active_beats_random()
+    print()
+    test_coordinate_maps_to_the_resolved_rir()
+    test_coordinate_mapping_against_the_real_grid()
+    test_both_arms_share_one_oracle_and_one_test_set()
+    test_split_robustness_fits_the_oracle_in_the_given_space()
+    test_identity_guard_detects_a_different_test_set()
     print("\nAll active-learning tests passed — the surrogate maps the planted "
           "failure boundary, and active sampling reaches target fidelity in far "
-          "fewer oracle calls than random.")
+          "fewer oracle calls than random. The DRR re-run's coordinate mapping "
+          "and its shared-oracle/shared-test-set contract are pinned.")

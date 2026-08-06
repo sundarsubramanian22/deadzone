@@ -128,6 +128,11 @@ def make_listening_set(assets, manifest) -> int:
 
     (LISTEN_DIR / "WHAT_TO_LISTEN_FOR.md").write_text(
         "# Listening set (SPEC A.R3.5)\n\n"
+        "> **The `DEADZONE_*` files here are SUPERSEDED** by\n"
+        "> `results/audio/demo/` (`scripts/make_demo_audio.py`): all of them are\n"
+        f"> clip `{LISTEN_CLIP}`, which nova-3 transcribes at WER 0.000 in four of\n"
+        "> the six flagged conditions, so they demonstrated nothing. The ladder\n"
+        "> below is sound and is what this set is for.\n\n"
         f"All from clip `{LISTEN_CLIP}` so what changes is the CONDITION, not the\n"
         "speaker or sentence. Start with `00_RAW_original.wav`.\n\n"
         "Check four things, in this order:\n\n"
