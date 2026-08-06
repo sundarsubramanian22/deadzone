@@ -65,16 +65,31 @@ MANIFEST = Path("recording_manifest.csv")
 MODEL = "nova-3"
 FS = 16000
 
-# The #1-ranked dead zone in results/dead_zones.csv: reverberant room, GOOD SNR
-# (20 dB), cafeteria babble, low-rate Opus, narrow mic. The SNR is the point --
-# this is a *quiet* room, just a reverberant one on a bad channel.
-DEFAULT_CONDITION = "rt60-0.7_snr-20_babble_opus-lowrate_roll-1"
+# The #1-ranked dead zone in results/dead_zones.csv: a moderately reverberant
+# room, 0 dB engine noise, G.726 narrowband codec, flat mic.
+#
+# WHY THIS CELL AND NOT THE ONE THAT USED TO BE HERE. The previous default
+# (rt60-0.7_snr-20_babble_opus-lowrate_roll-1) ranked #1 only under a pairing
+# defect: its confidence was averaged over the 30 of 40 clips that produced
+# words, while its WER was averaged over all 40 -- including 10 that returned an
+# EMPTY transcript. On the clips it actually spoke on it was 81.8% accurate at
+# 0.843 confidence, i.e. well calibrated. It is now classified `silence_driven`,
+# and demoing it would have been demoing the artifact. This cell has ZERO silent
+# clips, so its confidence and its WER are averaged over the same 40 clips and
+# the claim needs no asterisk.
+DEFAULT_CONDITION = "rt60-0.45_snr-0_engine_g726_roll-0"
 
-# Exemplar clips inside that condition, ranked by confidence x WER. u39 leads
-# because it is an alphanumeric licence plate: the model rewrites two characters
-# of the plate and reports 0.86 / 0.73 confidence on the characters it invented.
-DEMO_CLIPS = ["u39", "u11", "u23", "u10", "u07"]
-DEFAULT_CLIP = "u39"
+# Exemplar clips inside that condition. u38 leads because it is a GPS
+# coordinate destroyed while the model stays confident: "the coordinates are
+# thirty seven north ..." -> "recordings on three seven north ...", WER 0.400 at
+# mean confidence 0.815. It is the entity-destruction failure mode with the
+# clearest downstream consequence, and its confidence clears the "was the model
+# actually confident" bar with margin rather than by a hair.
+# u39 (the alphanumeric licence plate) stays available via --clip: the plate is
+# a better story but the model is only 0.687 confident on it in this cell, and a
+# demo of a *silent* failure has to show a confident one.
+DEMO_CLIPS = ["u38", "u03", "u25", "u18", "u39"]
+DEFAULT_CLIP = "u38"
 
 
 # --------------------------------------------------------------------------
@@ -156,6 +171,29 @@ def _master_rows(clips: set[str], condition: str) -> dict[str, dict]:
     return want
 
 
+def load_dead_zones() -> list[dict]:
+    """
+    The GENUINE dead zones for this demo's model, in rank order.
+
+    Two filters, both load-bearing:
+      * `category == "dead_zone"`. results/dead_zones.csv is the full silent-failure
+        table and also carries `silence_driven` cells (flagged only by a mismatched
+        confidence/WER pairing) and `mute_zone` cells (no words on any clip). They
+        belong in the file — dropping the mute zones would hide the worst conditions
+        measured — but only the dead zones may be shown on stage under that name.
+      * `model == MODEL`. Condition names are shared across arms, so a
+        name-keyed lookup over the whole file silently returns whichever model was
+        written last. That is how a nova-3 demo ends up quoting a Whisper WER.
+    Older CSVs without a `category`/`model` column fall through unfiltered.
+    """
+    rows = list(csv.DictReader(open(DEAD_ZONES)))
+    if rows and "model" in rows[0]:
+        rows = [r for r in rows if r["model"] == MODEL]
+    if rows and "category" in rows[0]:
+        rows = [r for r in rows if r["category"] == "dead_zone"]
+    return rows
+
+
 def _count_conditions() -> int:
     """How many conditions the grid actually measured -- the denominator for
     'N of M conditions are dead zones'. Read, never hardcoded."""
@@ -204,12 +242,15 @@ def build_cache(condition_name: str = DEFAULT_CONDITION,
     refs = load_manifest_refs()
     cond = Condition.from_name(condition_name)
 
-    dz_rows = list(csv.DictReader(open(DEAD_ZONES)))
+    dz_rows = load_dead_zones()
     dz_index = {r["condition_name"]: r for r in dz_rows}
     if condition_name not in dz_index:
         raise SystemExit(
-            f"demo_break: {condition_name!r} is not in {DEAD_ZONES}. "
-            f"Only measured dead zones may be demoed."
+            f"demo_break: {condition_name!r} is not a `dead_zone` row for model "
+            f"{MODEL!r} in {DEAD_ZONES}. Only measured dead zones may be demoed "
+            f"— a `silence_driven` or `mute_zone` row is a different finding "
+            f"(see analysis/confidence_gap.py) and demoing one as a dead zone "
+            f"would be demoing the thing this project exists to catch."
         )
     agg = dz_index[condition_name]
 
@@ -283,13 +324,21 @@ def build_cache(condition_name: str = DEFAULT_CONDITION,
             "rank": 1 + [r["condition_name"] for r in dz_rows].index(condition_name),
             "mean_conf": _f(agg.get("mean_conf")),
             "wer": _f(agg.get("wer")),
+            # the paired accuracy + the silence accounting that makes the pairing
+            # legitimate; a demo that quotes a gap must be able to show both
+            "wer_spoke": _f(agg.get("wer_spoke")),
+            "n_silent": int(_f(agg.get("n_silent"), 0)),
             "gap": _f(agg.get("gap")),
+            "gap_all_clips": _f(agg.get("gap_all_clips")),
+            "category": agg.get("category", "dead_zone"),
             "n_clips": int(_f(agg.get("n_clips"), 0)),
             "n_ref_total": int(_f(agg.get("n_ref_total"), 0)),
         },
         "dead_zones": [
             {"name": r["condition_name"], "mean_conf": _f(r["mean_conf"]),
              "wer": _f(r["wer"]), "gap": _f(r["gap"]),
+             "wer_spoke": _f(r.get("wer_spoke")),
+             "n_silent": int(_f(r.get("n_silent"), 0)),
              "n_clips": int(_f(r["n_clips"], 0))}
             for r in dz_rows
         ],
@@ -689,6 +738,20 @@ def run(cache: dict, clip_id: str, ink: Ink, width: int, audio: bool,
         ink.bold("{:.3f}".format(cond["mean_conf"])),
         ink.bold("{:.3f}".format(cond["wer"])),
         ink.bold("{:+.3f}".format(cond["gap"]))))
+    # The gap above is only meaningful because the two averages cover the SAME
+    # clips. Say so: a cell where some clips return an empty transcript has its
+    # confidence averaged over a strictly easier subset, and the difference is
+    # then missing clips rather than overconfidence.
+    n_sil = int(cond.get("n_silent", 0) or 0)
+    if n_sil == 0:
+        print(ink.dim("      (all {} clips produced a transcript, so the confidence and the "
+                      "WER".format(cond["n_clips"])))
+        print(ink.dim("       are averaged over the same clips -- the gap needs no asterisk.)"))
+    else:
+        print(ink.dim("      ({} of {} clips returned an EMPTY transcript and carry no "
+                      "confidence;".format(n_sil, cond["n_clips"])))
+        print(ink.dim("       WER on the {} clips it spoke on is {:.3f}.)".format(
+            cond["n_clips"] - n_sil, cond.get("wer_spoke", float("nan")))))
     print()
     print(f"    {cache['n_dead_zones']} conditions out of {cache.get('n_conditions', '?')} "
           f"cleared the dead-zone bar (high confidence AND high WER):")
@@ -697,8 +760,9 @@ def run(cache: dict, clip_id: str, ink: Ink, width: int, audio: bool,
         print(f"      {mark} {i}. {pad(z['name'], 46)} conf {z['mean_conf']:.3f}  "
               f"WER {z['wer']:.3f}")
     print()
-    print(ink.dim("    Globally, spearman(confidence, WER) = -0.957: this model mostly DOES"))
-    print(ink.dim("    know when it is failing. That is what makes these 6 dangerous -- a"))
+    print(ink.dim("    Globally, spearman(confidence, WER) = -0.980: this model mostly DOES"))
+    print(ink.dim("    know when it is failing. That is what makes these {} dangerous -- a".format(
+        cache["n_dead_zones"])))
     print(ink.dim("    system tuned on the model's average self-awareness will trust it"))
     print(ink.dim("    exactly where it should not."))
     print()

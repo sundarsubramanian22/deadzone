@@ -88,8 +88,10 @@ test-core:
 # --------------------------------------------------------------------------
 
 ## bake the offline demo artifacts: two wavs per exemplar + every cached number
+## + the listening set (results/audio/demo/, run-of-show in its DEMO_SCRIPT.md)
 demo-prep:
 	$(PY) demos/demo_break.py --prepare
+	$(PY) scripts/make_demo_audio.py
 
 results/demo/demo_cache.json:
 	@$(MAKE) --no-print-directory demo-prep
@@ -128,6 +130,7 @@ demo: test-core demo-break demo-al dashboard
 ## is every artifact the demo needs actually on disk, right now, offline?
 demo-check:
 	@$(PY) demos/demo_break.py --check
+	@$(PY) scripts/make_demo_audio.py --check
 
 ## pin exactly what is installed, so the demo machine is reproducible
 lock:
