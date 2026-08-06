@@ -34,16 +34,28 @@ What is different is the lens, not the machinery:
 Across **176 controlled acoustic conditions** × 40 recorded utterances:
 
 > Nova-3's mean word confidence tracks its own error rate almost perfectly —
-> **Spearman ρ = −0.957** — and it is nonetheless **overconfident in 92% of
-> conditions**. **6 of 176 (3.41%)** are genuine dead zones. The worst reports
-> mean word confidence **0.843** while running **WER 0.387**
-> (`rt60 0.7 s · SNR 20 dB · babble · opus-lowrate · mic rolloff 1.0`).
+> **Spearman ρ = −0.980** (paired on the clips it actually spoke on; −0.952
+> against every clip, silent ones included; n = 169 either way) — and it is
+> nonetheless **overconfident in 91% of conditions (154/169)**, mean gap
+> **+0.147**. **2 of 176 (1.14%)** are genuine dead zones. The worst: mean word
+> confidence **0.829** at **WER 0.306**, all 40 clips, none silent
+> (`rt60 0.45 s · SNR 0 dB · engine · g726 · mic rolloff 0`).
+
+These numbers moved from an earlier pass because of a real defect, and the fix
+is the more interesting result. `mean_conf` was averaged only over clips that
+returned words, while `wer` was averaged over every clip, including **empty**
+ones with no confidence at all — two populations subtracted as if they were
+one, manufacturing dead zones that weren't real. Caught by **listening**, not a
+test. Conditions now split three ways: **dead zone** — confidently wrong (2) —
+**silence-driven** — the gap was clips vanishing, not confident errors (4) — and
+**mute zone** — nothing emitted on any of the 40 clips (7). A mute zone is not a
+dead zone — confidently wrong vs. entirely absent — and **a confidence-based
+monitor cannot see one at all**: WER 1.0, 100% deletions, no confidence to be
+wrong with.
 
 The point is not that the model is blind. It is that the model is *mostly*
 self-aware, which is exactly what makes the residual dangerous: any system tuned
-on its average self-awareness will trust it precisely where it should not. Note
-the SNR in that condition — 20 dB is a **quiet** room. This is reverberation and
-channel, not loudness.
+on its average self-awareness will trust it precisely where it should not.
 
 ## Run the demo in three commands
 
@@ -53,7 +65,7 @@ DSP that produced it.
 
 ```bash
 make demo-break     # 60 s  one clip, clean -> a measured dead zone, out loud
-make demo-al        # 20 s  the surrogate walking onto the failure boundary
+make demo-al        # 30 s  the surrogate walking onto the failure boundary
 make dashboard      #  —    the self-contained dashboard, opened from file://
 ```
 
@@ -63,7 +75,8 @@ suite. `make help` lists every target; `make demo-check` is the preflight to run
 artifacts (it is invoked automatically if they are missing).
 
 The 3-minute spoken path through the dashboard is in
-[`dashboard/DEMO.md`](dashboard/DEMO.md).
+[`dashboard/DEMO.md`](dashboard/DEMO.md); a sealed-prediction blind listening
+exercise (reverb vs. babble) lives in `results/audio/demo/` (`DEMO_SCRIPT.md`).
 
 ## Honest boundaries
 
@@ -98,9 +111,9 @@ audio.
 | `deadzone/conditions.py` | Named, reproducible degradation composer + disk-backed asset library |
 | `deadzone/design.py` | Plackett–Burman screen → Saltelli/Sobol sensitivity → counterintuitive cells |
 | `deadzone/active_learning.py` | GP surrogate, straddle acquisition, active-vs-random comparison |
-| `deadzone/analysis/` | The finding layers: confidence gap, fingerprints, sensitivity, sim2real, AL savings. Run as `python3 -m deadzone.analysis.<layer>`. |
+| `deadzone/analysis/` | The finding layers: confidence gap, fingerprints, sensitivity, sim2real, AL savings. Run as `./.venv/bin/python -m deadzone.analysis.<layer>`. |
 | `scripts/` | Entry points that spend money or produce artifacts — `run_experiment.py` (the grid runner → `results/master.csv`), the asset fetchers, the smoke tests |
-| `dashboard/` | The self-contained 8-panel HTML dashboard + the demo script |
+| `dashboard/` | The self-contained 8-panel HTML dashboard + its build script |
 | `demos/` | `demo_break.py`, `demo_al.py` — the demo kit (offline, key-free) |
 | `tests/` | Fully offline suites; every stage validated on synthetic signals |
 
