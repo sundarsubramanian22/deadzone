@@ -15,33 +15,48 @@ cutting-edge voice AI — and the model under test is their product.
   segment on that.** Nova-3's confidence tracks its own error rate at spearman
   **−0.980** (D1, 40 clips), and on the matched subset it beats Whisper by a
   distance (§4.4). That is true and it is theirs. It is *not* the load-bearing
-  claim, because a **third arm is landing that is a commercial peer, not a weak
-  baseline** — see the box below and §4.4.
+  claim, and the third arm is now the proof of why: **a commercial peer landed,
+  and Nova-3's apparent lead over it collapsed from 0.20 to 0.03 the moment the
+  orthography was normalised.** See the box below and §4.4.
 - **They asked about product decisions.** Budget real time for what a deployment
   should *do* with these findings.
 
-> **Two dead-zone rates — say which is which.** D1 runs the full 40-clip corpus:
-> **2 of 176 (1.14 %)**. L1 restricts *every* arm to the 10 clips Whisper also
-> ran: **1 of 176 (0.57 %)**. Quote the matched one whenever a second model is on
-> the page, and never put 1.14 % and 39.20 % side by side as if they were
-> matched — they are not.
+> **Three dead-zone rates now — say which population, every time.** D1 runs the
+> full 40-clip corpus for nova-3: **2 of 176 (1.14 %)**. L1 restricts *every* arm
+> to the 10 clips all three ran: nova-3 **1 of 176 (0.57 %)**, Scribe **7 (3.98 %)**,
+> Whisper **69 (39.20 %)**. Quote the matched ones whenever a second model is on
+> the page, and never put 1.14 % beside 39.20 % as if they were matched.
+> **And read the next box before you quote Scribe's 3.98 % at all — you should
+> not quote it.**
 
-> ⚠️ **ELEVENLABS SCRIBE: THE ARM EXISTS, THE RESULTS DO NOT.** The day-one
-> confidence gate passed — Scribe returns a per-word `logprob` (≤ 0; `exp()` for
-> a probability), `transcribe_elevenlabs` is in `audio_pipeline.py`, and
-> `elevenlabs-scribe` → `scribe_v2` is in `MODEL_REGISTRY`. **Zero Scribe rows
-> exist in `results/master.csv`.** Every Scribe claim in this document is marked
-> `[[PENDING SCRIBE]]` and **must not be spoken until the grid has run.** If
-> asked, the honest answer is *"the adapter and the confidence gate are done; the
-> arm is gated on an orthography audit and I have not spent the calls yet."*
-> Rehearse the whole hour **without** Scribe; treat it as an upgrade, never a
-> dependency.
+> ✅ **ELEVENLABS SCRIBE: THE ARM HAS RUN.** **1,760 rows** in
+> `results/master.csv` (176 conditions × the same 10 clips, **0 failures**), three
+> arms in the dashboard toggle, and Scribe is the **first block** in
+> `results/confidence_gap.txt`. The day-one gate held: per-word `logprob` (≤ 0;
+> `exp()` for a probability), `transcribe_elevenlabs` in `audio_pipeline.py`,
+> `elevenlabs-scribe` → `scribe_v2` in `MODEL_REGISTRY`.
+>
+> **What the arm bought is not a ranking — it is a demonstration that the ranking
+> is a function of the scoring.** §4.4 is now the strongest segment in the hour.
+> Two things must never be said, and they are both the tempting things:
+>
+> - ❌ **Never quote Scribe's dead-zone rate, in either direction.**
+>   `dead_zone_flags` thresholds an **absolute** WER, so an arm carrying an
+>   orthography offset crosses it for non-acoustic reasons. Under the normalizer
+>   Scribe's count goes **7/176 → 0/176** — all seven fall from WER 0.30–0.43 to
+>   0.08–0.12. **3.98 % does not go on a slide.**
+> - ❌ **Never claim Nova-3 is meaningfully ahead of its commercial peer.**
+>   Strict −0.970 vs −0.820 looks like a 0.15 gap; re-scored under the
+>   orthography normalizer it is **−0.970 vs −0.948**, ~0.02 — and since
+>   measurement error only attenuates a rank correlation, that is an **upper
+>   bound** and may be zero.
 
-> 🔁 **The model-comparison beat is RESULT-CONDITIONAL now.** Scribe is
-> apples-to-apples with Nova-3 on the exact metric this project leads with, so
-> "lead with Nova-3 winning" is a framing that can invert on stage in a room full
-> of people who build Nova-3. §4.4 gives the direction-independent primary
-> framing and both fallback branches. Read it before the interview, not during.
+> 🔁 **The model-comparison beat was written result-conditional, and the result
+> came back better than any of its three branches.** Branch (b) technically fired
+> — Scribe reads worse on dead-zone rate — but the honest reading of it is that
+> **the metric that would have said so is not scale-free**, which is a finding
+> about benchmarks rather than about either vendor. §4.4 is rewritten around that.
+> Read it before the interview, not during.
 
 ---
 
@@ -74,15 +89,20 @@ hand over **`blind/` only** (8 neutral filenames + `BLIND_SHEET.md`). The workin
 filenames in the parent directory say `reverb` and `babble` — a listener who sees
 them has been told the answer.
 
-> ⚠️ **`DEMO_SCRIPT.md` IS STALE — do not read it verbatim.** It was written
-> before the pre-registered listening prediction had been run. Three things in it
-> are now wrong: it calls **pairs 1 and 2** the primary evidence (use **2 and
-> 3**); its §4 "The mechanism" asserts precedence-effect-vs-informational-masking
-> as the *explanation* for what the listener heard, and that mechanism was
-> **refuted** at this DRR; and its fallback list still handles only the "they rank
-> them equal" case. Use the beats below. The *numbers* in `DEMO_SCRIPT.md` and
-> `KEY.md` are still correct and are recomputed from `results/master.csv` at build
-> time — it is the narration that has gone stale.
+> ✅ **`DEMO_SCRIPT.md` HAS BEEN FIXED — read it, it is now the better document.**
+> The earlier warning here (that it led with the wrong pair, asserted a refuted
+> precedence-effect mechanism, and had no fallback for a backwards result) was
+> accurate when written and **all three are repaired**, verified 2026-08-06: it
+> now opens on **pair 2 then pair 3** with pair 1 explicitly third; §4 carries the
+> failed prediction and labels the DRR story *"a hypothesis I formed after seeing
+> the result, not a finding"*; and its Fallbacks list handles **"they rank the
+> reverb clip harder"** by name. The beats below and `DEMO_SCRIPT.md` now agree —
+> use whichever is in front of you.
+>
+> 🛑 **One live hazard in that file:** it is **generated** by
+> `scripts/make_demo_audio.py`, which rewrites it unconditionally, and the
+> revisions are hand-written. Do not run the generator before the interview. See
+> `REGENERATION_HAZARD.md` in the same directory.
 
 **Beat 1 — the ranking. Ask, do not predict.** Show that
 `PREREGISTERED_PREDICTION.md` exists and **leave it closed** — stating a

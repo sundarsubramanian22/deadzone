@@ -9,39 +9,106 @@ behaviour (limitation 17).
 
 *Sundar Subramanian · grid run 2026-08-05 · `run-20260805T070146Z-6a77c4`*
 
-> Sections 1–10 are the argument. Derivations, mechanism detail and full tables are in
-> the appendices and are not part of the read.
+> **§1 is the whole argument in three minutes and is the only place the headline is
+> summarised**; §2–§10 are that argument at full length, and a reader who continues from §1
+> is not asked to re-read it. Derivations, mechanism detail and full tables are in the
+> appendices and are not part of the read.
 
 ---
 
-## 1. Abstract
+## 1. Summary — the three-minute version
 
-**Across 176 controlled acoustic conditions, Nova-3's word confidence tracks its own error
-rate almost perfectly (Spearman ρ = −0.980) — and is nonetheless overconfident in 91 % of
-them (mean gap +0.147), with 2 of 176 (1.14 %) qualifying as genuine dead zones. The worst
-reports mean word confidence 0.829 at WER 0.306, on 40 clips none of which came back empty.**
+*Every figure below is read from `results/`, and `tests/test_report_numbers.py` fails if any
+of them drifts from the artifact it came from.*
 
-**That headline is a correction.** An earlier version reported 6 dead zones at a mean gap of
-0.256, because per-condition confidence was averaged over the clips that produced words while
-WER was averaged over *all* of them — clean arithmetic on two different estimands (§6.1). The
-fix splits the old set into three categories needing three different mitigations — **dead
-zone**, **silence-driven**, **mute zone** — and the last, where the model emits nothing at all,
-is invisible to any confidence-based monitor.
+**What it is.** A controlled-degradation rig for Deepgram Nova-3: **176 acoustic conditions ×
+40 utterances = 7,040 transcriptions, 0 failures** (11,086 Deepgram calls ≈ $3.26; 14,606 calls
+≈ $3.70 across all three arms). Real ingredients — 16 measured RIRs, DEMAND noise, real ffmpeg
+codecs — and a controlled assembly, because **counterfactual isolation is the one thing field
+recordings cannot give**: in the wild the mic, placement, noise and codec all move at once. It
+asks not *how much* the model breaks but **whether it knows it is breaking**. The genre is
+**well-trodden** — WildASR, Speech Robustness Bench, "When Denoising Hinders" — and **nothing in
+the method is novel**; the delta is the lens: the confidence–accuracy gap *per condition* instead
+of WER per condition (§3).
 
-The model is not blind, it is *mostly* self-aware, and that makes the residual 1.1 % dangerous:
-a system whose "ask the caller to repeat" threshold was tuned on average behaviour will trust it
-precisely where it should not. The same grid — a **complete 4 × 4 × 3 × 3 factorial**, so its
-Sobol decomposition is *exact* rather than sampled — also gives typed failure fingerprints, a
-**confirmed** pre-registered `rt60 × snr_db` interaction, the mechanistic result that reverb
-damage is monotone in **direct-to-reverberant ratio, not RT60** (ρ = −1.000 vs +0.800), and a
-**null** on active learning reported as a null. And a dead-zone map does not transfer: simulated
-RIRs rank conditions well (ρ = 0.873) yet recover **none** of the real dead zones, and neither
-does a second model family (both Jaccard 0.00). A **second commercial arm** (ElevenLabs
-`scribe_v2`, 1760 rows, per-word confidence) was added to ask whether self-knowledge is a
-commercial-model property — and returned a prior result: **its orthography is not deterministic**,
-four identical calls giving up to 0.727 WER of spread on the same audio, which reverses the
-model comparison depending on how it is scored and makes single-call benchmarking of a commercial
-ASR unsound on entity-bearing speech (§6.7).
+**The headline.** Nova-3's word confidence tracks its own error rate almost perfectly —
+**Spearman ρ = −0.980** across the **169 of 176** conditions that returned any words — and it is
+nonetheless **overconfident in 91 %** of them (mean gap **+0.147**), with **2 of 176 (1.14 %)**
+qualifying as genuine dead zones. The worst is **rt60 0.45 s / SNR 0 dB / engine / G.726 → mean
+word confidence 0.829 at WER 0.306**, with **0 of 40** clips coming back empty, so confidence and
+WER cover the same clips and the claim needs no asterisk. **The danger is not that the model is
+blind but that it is *mostly* self-aware**: a system whose "ask the caller to repeat" threshold
+was tuned on average behaviour will trust it precisely where it should not, and silent failure
+lives in exactly the region a deployment considers acceptable (§6.1).
+
+**And that headline is a correction.** An earlier version of this document reported **6** dead
+zones at a mean gap of 0.256. It was wrong: per-condition confidence was averaged over the clips
+that produced words while WER was averaged over *all* of them — clean arithmetic on two different
+estimands, with the right row count, no NaN, no error and no failing test. What found it was a
+**listening pass**: the exemplars sounded intelligible. The corrected set splits into three
+categories needing three different mitigations — **2 dead zones**, **4 silence-driven**, **7 mute
+zones** — and the last, where the model emits nothing on any clip, is **invisible to any
+confidence-based monitor**, because absent is not wrong (§6.1).
+
+**Three mechanisms.** (a) Reverb damage is monotone in **direct-to-reverberant ratio, not RT60**:
+the `rt60` marginal is non-monotonic — 0.203 → 0.636 → 0.449 → 0.758 — because each level is
+delivered by a different *measured* room, and **ρ(DRR, WER) = −1.000** against
+**ρ(RT60, WER) = +0.800**, so reverb benchmarks parameterised by RT60 alone will mis-rank
+conditions (§6.3). (b) Failures are **typed, not scalar**: deletions **0.351** of reference words
+against substitutions 0.136, entities degrading faster than words (entity error rate **0.633**
+against WER **0.511**), and each signature implies a different fix (§6.2). (c) Vendor confidence
+is not a calibrated probability, and a feature-conditioned calibrator cuts **ECE 0.051 → 0.008**
+(§6.4).
+
+**Pre-registration: CONFIRMED.** `rt60 × snr_db` was registered as a genuine two-way interaction
+(`d8ddd4f`, 2026-07-27, before any audio existed) under a decision rule fixed in advance. The
+grid is a **complete 4 × 4 × 3 × 3 factorial**, so its Sobol decomposition is an **exact**
+functional-ANOVA partition rather than a Saltelli estimate (`sum(S_u) = 1.000000000000`):
+**ST − S1 = 0.128 [0.091, 0.164]** for `rt60` and **0.112 [0.072, 0.152]** for `snr_db`, S2 rank
+1/6, against a threshold of 0.020 (§6.3).
+
+**Four honest negatives.**
+
+1. **Active learning is a null.** Straddle acquisition reached the `boundary_rmse` target in
+   **2 of 8 seeds** against random's **4 of 8** inside a 45-evaluation budget, so no savings
+   claim is supported. The synthetic control still passes, which is what makes this a method
+   meeting a surface it has no purchase on rather than a broken implementation (§6.5).
+2. **A dead-zone map does not transfer.** Synthetic RIRs rank conditions well (**ρ = 0.873**) but
+   read **12.1 points optimistic** [−15.0, −9.6] and recover **none** of the real dead zones
+   (**Jaccard 0.00**) — and neither does a different model family (nova-3 against whisper-base,
+   Jaccard **0.000**). Two independent senses of the same warning: **you cannot borrow someone
+   else's** (§6.6, §7).
+3. **Listening is not QA.** Drenched-but-quiet (DRR −10 dB at SNR 20 dB) and dry-but-buried
+   (DRR +17 dB at SNR 0 dB) are **statistically indistinguishable to the model** — WER **0.112**
+   against **0.130**, paired difference **−0.018, 95 % CI [−0.065, +0.031]**, with **18 of 40**
+   clips scoring identically — and no human is close to indifferent between them (§6.3).
+4. **One vendor's output is not reproducible call to call.** A **second commercial arm**
+   (ElevenLabs `scribe_v2`, 1760 rows, per-word confidence) was added to ask whether
+   self-knowledge is a *commercial-model* property, and returned a prior result instead:
+   **its orthography is not deterministic** — four identical calls on identical audio worth up to
+   **0.727 WER** of spread — which reverses the model comparison depending on how it is scored and
+   makes **single-call benchmarking of a commercial ASR unsound on entity-bearing speech** (§6.7).
+
+**The limitation that binds hardest.** **Every arm ran in batch mode, not streaming**
+(limitation 17): Deepgram through the pre-recorded endpoint, never `listen.live`. Nova-3 is
+streaming-*capable* and is studied here for the per-word confidence that makes the silent-failure
+question askable at all, but what is mapped is **acoustic robustness, not streaming behaviour**,
+and the dead-zone map should not be read as a live-agent map. Behind it: **one speaker, one
+accent, 40 utterances**, and the **Lombard effect** bracketed out by construction — in noise
+people involuntarily change pitch, loudness and timing, so noise does not merely mask the signal,
+it changes how the signal is *produced*, and no room simulator captures a behaviour. All 19
+limitations are in §8, which is the section I would most want to be asked about.
+
+**What I'd do next.** Finish the survivor-bias fix — emission rate × calibrated per-word
+confidence, one score that degrades toward zero exactly where a confidence monitor goes blind.
+Measure **more rooms** rather than a better reverb coordinate, since re-parameterising a
+four-room axis was the obvious fix and has now been tested and refuted. And **measure a genuinely
+streaming arm**, now the shortest remaining step rather than an aspiration, because
+`scribe_v2_realtime` exposes the same per-word confidence over a websocket, making the comparison
+batch-versus-streaming *within one vendor* (§9).
+
+**Go deeper:** §6.1 the headline and its correction · §6.3 DRR and the pre-registration verdict ·
+§6.7 the non-deterministic arm · §7 sim-versus-real · §8 the limitations.
 
 ---
 
@@ -607,12 +674,13 @@ level up.
 ## 10. Reproducibility
 
 **The experiment freeze is `results/MANIFEST.json`**; this section defers to it (Appendix F).
-Headline, taking the manifest's own split between the billed and the local arm: **11,086 Deepgram
-calls ≈ 757.5 min of audio ≈ $3.26** at the $0.0043/min rate quoted 2026-08-04 — 7220 on the
-real-RIR arm and 3866 on the simulated one. Counting the local Whisper arm as well the experiment
-is **12,846 calls ≈ 877.8 min**, and still **$3.26**, because Whisper runs on this machine at zero
-marginal cost — its price is wall clock, not money. The main grid is 7040 calls in 394 s; every
-row caches append-only.
+Headline, taking the manifest's own per-arm split: **11,086 Deepgram calls ≈ 757.5 min of audio
+≈ $3.26** at the $0.0043/min rate quoted 2026-08-04 — 7220 on the real-RIR arm and 3866 on the
+simulated one. The second commercial arm (§6.7) adds **1,760 ElevenLabs calls ≈ 120.3 min ≈
+$0.44** at the quoted $0.22/hr, and the local Whisper arm another **1,760 calls ≈ 120.3 min at
+zero marginal cost** — its price is wall clock, not money. **The whole experiment is 14,606 calls
+≈ 998.1 min ≈ $3.70**, of which $3.26 is Deepgram and $0.44 ElevenLabs. The main grid is 7040
+calls in 394 s; every row caches append-only.
 
 ```
 ./.venv/bin/python tests/test_pipeline.py            # the three trap functions, offline
