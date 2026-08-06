@@ -247,18 +247,27 @@ Each ρ is over **that arm's own** non-mute conditions (164 / 174 / 171) — sha
 - WER **exceeds 1.0** — possible only because insertions are unbounded
 
 <p align="center">
-  <img src="docs/assets/whisper-hallucination.svg" alt="Three reference words expanded into a 49-word degenerate repetition loop" width="820">
+  <img src="docs/assets/whisper-hallucination.svg" alt="Eleven reference words expanded into a 47-word degenerate repetition loop" width="820">
 </p>
 
 ```
-[u02 @ rt60-1_snr-5_babble_opus-lowrate_roll-1]      3 reference words  ->  49 hypothesis words
-REF: call maria at
+[u02 @ rt60-1_snr-5_babble_opus-lowrate_roll-1]     11 reference words  ->  47 hypothesis words
+REF: call maria at four zero five nine one two seven seven
 HYP: I'm gonna go here and do a little bit of the work. You call her, you have a
      passport, you have a file. You have a file, you have a file, you have a file,
      you have a file, you have a file. You have a file.
 ```
 
-**WER understates this.** WER caps damage at one error per reference word; a 49-word invention handed to a downstream LLM agent is unbounded harm. Across the arm: **9.9%** of rows exceed 2× the reference length (p95 length ratio **2.75**) against nova-3's 0.1%.
+> **⚠️ A counting bug I found in my own published figure.** This exhibit was
+> reported everywhere in this repo as **3 → 49**. It isn't. `hallucination_report`
+> normalizes spoken numbers to digits, then tokenizes with `[a-z']+` — letters
+> only — so it *creates* eight digit tokens and then discards them. The reference
+> is 11 spoken words, not 3. Strict alignment: **11 → 47, WER 4.18, 1 match /
+> 10 sub / 36 ins**. The hypothesis has no digits, so it loses nothing and the
+> ratio inflates. The mechanism is real and the model did invent a repetition
+> loop — the *magnitude* was part model, part tokenizer.
+
+**WER understates this.** WER caps damage at one error per reference word; a 47-word invention handed to a downstream LLM agent is unbounded harm. Across the arm: **9.9%** of rows exceed 2× the reference length (p95 length ratio **2.75**) against nova-3's 0.1%.
 
 <!-- MODEL-ARCH-SPECULATION: sourced from report/model_architecture_notes.md -->
 > ### 💭 POTENTIAL EXPLANATION — hypothesis, **not measured here**

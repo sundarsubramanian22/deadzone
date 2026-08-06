@@ -1856,6 +1856,7 @@ def checks_readme():
     xm = {k: v["edit_signature_crossmodel"] for k, v in pm.items()}
     hal = m["hallucination_by_model"]
     ex = m["whisper_hallucination"]["examples"][0]
+    fig = _read_json("docs/assets/figures.json")["figures"]["whisper-hallucination.svg"]
     out += [
         C("README nova-3 silent-rate advantage over scribe",
           [r"\*\*([\d.]+)× less likely to go silent\*\*"],
@@ -1874,14 +1875,29 @@ def checks_readme():
           [r"= \*\*([\d.]+)×\*\*"],
           float(xm["whisper-base"]["ins"]) / float(xm["nova-3"]["ins"]), TOL1,
           ma + " edit_signature_crossmodel ins ratio", "§7 whisper"),
-        C("README hallucination exhibit: reference words",
-          [r"(\d+) reference words  ->"], float(ex["n_ref"]), EXACT,
-          ma.replace("[per_model]", "[whisper_hallucination.examples[0]]") + " n_ref",
+        # NOT pinned to model_arms.json's own n_ref/n_hyp, which are 3 and 49.
+        # Those come from `hallucination_report`, which cross-model-normalizes
+        # ("four zero five" -> "405") and then tokenizes with [a-z']+ — so it
+        # MANUFACTURES eight digit tokens and immediately discards them. The
+        # reference is 11 spoken words. The hypothesis contains no digits, loses
+        # nothing, and the ratio inflates 16.3x against a true 4.3x. The figure
+        # and the README both publish the strict alignment; these pin that, and
+        # figures.json stores the discarded counting alongside it under
+        # n_{ref,hyp}_tokens_crossmodel so the artifact still records both.
+        C("README hallucination exhibit: reference words (STRICT, not the "
+          "letters-only tokenization)",
+          [r"(\d+) reference words  ->"], float(fig["n_ref"]), EXACT,
+          "docs/assets/figures.json [whisper-hallucination.svg] n_ref",
           "§7 exhibit"),
-        C("README hallucination exhibit: hypothesis words",
-          [r"->  (\d+) hypothesis words"], float(ex["n_hyp"]), EXACT,
-          ma.replace("[per_model]", "[whisper_hallucination.examples[0]]") + " n_hyp",
+        C("README hallucination exhibit: hypothesis words (STRICT)",
+          [r"->  (\d+) hypothesis words"], float(fig["n_hyp_words"]), EXACT,
+          "docs/assets/figures.json [whisper-hallucination.svg] n_hyp_words",
           "§7 exhibit"),
+        C("README hallucination exhibit: the discarded counting is named as the "
+          "artifact it is, never as the result",
+          [r"reported everywhere in this repo as \*\*(\d+) → \d+\*\*"],
+          float(fig["n_ref_tokens_crossmodel"]), EXACT,
+          "docs/assets/figures.json n_ref_tokens_crossmodel", "§7 exhibit"),
         C("README whisper rows over 2x reference length",
           [r"\*\*([\d.]+)%\*\* of rows exceed 2× the reference length"],
           100.0 * float(hal["whisper-base"]["frac_rows_over_2x"]), TOL1,
