@@ -465,8 +465,8 @@ WER directly; this is not accuracy clipping.) One correction, two signs, because
 in opposite directions — **nova-3 goes quiet, Whisper invents**:
 
 ```
-[u02 @ rt60-1_snr-5_babble_opus-lowrate_roll-1]   3 ref words -> 49 hyp words
-REF: call maria at
+[u02 @ rt60-1_snr-5_babble_opus-lowrate_roll-1]  11 ref words -> 47 hyp words
+REF: call maria at four zero five nine one two seven seven
 HYP: I'm gonna go here and do a little bit of the work. You call her, you have a
      passport, you have a file. You have a file, you have a file, you have a file,
      you have a file, you have a file. You have a file.
@@ -1325,8 +1325,8 @@ condition there was silence-driven). Every other cell is unchanged in both colum
 **0.528**. The §6.6 example in full, plus two more on the same 3-word reference:
 
 ```
-[u02 @ rt60-1_snr-5_babble_opus-lowrate_roll-1]   3 ref words -> 49 hyp words
-REF: call maria at
+[u02 @ rt60-1_snr-5_babble_opus-lowrate_roll-1]  11 ref words -> 47 hyp words
+REF: call maria at four zero five nine one two seven seven
 HYP: I'm gonna go here and do a little bit of the work. You call her, you have a
      passport, you have a file. You have a file, you have a file, you have a file,
      you have a file, you have a file. You have a file.
@@ -1334,13 +1334,13 @@ HYP: I'm gonna go here and do a little bit of the work. You call her, you have a
 
 
 ```
-[u02 @ rt60-0.7_snr-0_babble_g726_roll-1]   3 ref words -> 38 hyp words
-REF: call maria at
+[u02 @ rt60-0.7_snr-0_babble_g726_roll-1]  11 ref words -> 34 hyp words
+REF: call maria at four zero five nine one two seven seven
 HYP: I don't know if you can do it. I'm calling you. I have a voice there. I'm not
      going to put it in the comments. I'm not going to put it in the comments.
 
-[u02 @ rt60-1_snr-5_babble_opus-lowrate_roll-0.5]   3 ref words -> 34 hyp words
-REF: call maria at
+[u02 @ rt60-1_snr-5_babble_opus-lowrate_roll-0.5]  11 ref words -> 36 hyp words
+REF: call maria at four zero five nine one two seven seven
 HYP: The car is going to be in the air for a minute. The car is going to be in the
      air at 4.05. The car is going to be in the air for a minute.
 ```
@@ -1359,7 +1359,7 @@ mean_conf: 0.926
 ```
 
 The glyphs normalize away to nothing, so the row scores as a total deletion. **This is n = 1 and
-an illustration of the failure mode's extreme, not a rate**, but it makes a point the 49-word
+an illustration of the failure mode's extreme, not a rate**, but it makes a point the 47-word
 example cannot: that transcript is fluent English, so a downstream consumer might plausibly act
 on it, whereas this one is not language at all *and the confidence is still 0.926*. The failure
 is not "the model wrote something wrong" but **"the confidence signal is uninformative about

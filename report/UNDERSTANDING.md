@@ -316,8 +316,14 @@ ran, n = 1,757 rows per arm.**
   knowing* it is worse.**
 - **The models fail in opposite ways.** Substitutions 0.149 (nova-3) vs 0.413
   (whisper); insertions 0.021 vs 0.197 — **9.4×**. Under stress **nova-3 goes
-  quiet and Whisper invents.** The worst example (verified in `master.csv`): 3
-  reference words → 49 hypothesis words, a degenerate repetition loop. At the
+  quiet and Whisper invents.** The worst example (verified in `master.csv`): **11
+  reference words → 47 hypothesis words**, a degenerate repetition loop.
+  *(Corrected 2026-08-06. Every document in this repo published this as "3 → 49",
+  which is `hallucination_report` normalizing "four zero five" → "405" and then
+  tokenizing with `[a-z']+` — manufacturing eight digit tokens and discarding
+  them. A ratio between two differently-tokenized quantities: 16.3× reported
+  against 4.3× actual. The mechanism stands; the magnitude was part tokenizer.)*
+  At the
   extreme, one cell returned a row of decorative Unicode glyphs — not language at
   all — at confidence **0.926** (`u11`, `rt60-1_snr-0_babble_opus-lowrate_roll-1`).
 - **nova-3 vs whisper dead-zone Jaccard = 0.000.** Combined with panel 6's Jaccard
