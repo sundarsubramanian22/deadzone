@@ -2,7 +2,7 @@
 L1 — multi-model comparison on real data (SPEC A.R5.7).
 
 **N arms, not two.** The layer was built and validated against two — **nova-3**,
-the commercial streaming model that exposes per-word confidence (the spine), and
+the commercial model that exposes per-word confidence (the spine), and
 **whisper-base**, the open baseline that shows we benchmark rather than depend on
 one vendor's API — and a third (ElevenLabs `scribe_v2`) is expected. Nothing here
 may be pairwise: every arm in the table is discovered, compared and reported.

@@ -262,7 +262,12 @@ def build() -> dict:
         },
         "models": {
             # The literal is the thing that matters; the family name is not enough.
-            "streaming_commercial": {
+            # Renamed from "streaming_commercial" (SPEC Appendix K.5): the key
+            # contradicted its own `api` field two lines below, which has always
+            # read "pre-recorded". No arm in this project ever streamed. Nothing
+            # consumes this key by name -- verified by grep across the repo before
+            # the rename -- so the taxonomy is free to tell the truth.
+            "batch_commercial": {
                 "provider": "deepgram",
                 "literal": "nova-3",
                 "api": "pre-recorded (listen.v1.media.transcribe_file)",

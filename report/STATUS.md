@@ -57,8 +57,8 @@ read cold. Numbers here are pointers; the artifacts in `results/` are the source
   The *persistence* curve is the real statistic, not the scalar.
 - **One speaker, one accent, 40 utterances.** Nothing here generalizes across
   speakers.
-- **No arm is streaming.** All three are batch. The framing says "streaming-capable
-  model", not "measured in streaming mode".
+- **No arm is streaming.** All three are batch. The forward-facing framing no
+  longer claims otherwise (SPEC Appendix K); the batch scope is stated, not implied.
 - **The active-learning null is a null**, reproduced across 44 parameterisations.
 - **The human half of the listening beat is n = 1 and unblinded.** Intuition pump,
   never data.
