@@ -490,6 +490,96 @@ class Rendering(unittest.TestCase):
             self.assertEqual(empties, 0, f"{pid} went empty after switching model")
 
 
+class ModelArmsPanelIsNArm(unittest.TestCase):
+    """
+    Panel 7 IS the multi-model comparison, so it is the panel a third arm most
+    obviously belongs in — and the one where its absence is least visible,
+    because the page renders identically either way.
+    """
+
+    THIRD = "elevenlabs-scribe"
+
+    def _payload(self, tmp, arms):
+        """A minimal results/model_arms.json in the shape the analysis writes."""
+        res = {
+            "arms": list(arms),
+            "arm_census": {"n_arms": len(arms), "n_common_cells": 40,
+                           "n_common_clips": 4, "n_common_conditions": 10,
+                           "cells_matched": False, "arms_excluded": [],
+                           "n_rows_dropped_by_intersection": 12},
+            "per_model": {m: {"n_conditions": 10, "wer_mean_strict": 0.2,
+                              "wer_mean_crossmodel": 0.2, "dead_zone_rate": 0.1,
+                              "n_dead_zones": 1, "shape": {"spearman": -0.9},
+                              "edit_signature_crossmodel": {"sub": 0.1, "del": 0.1,
+                                                            "ins": 0.0}}
+                          for m in arms},
+            "normalization_shift": {m: {"mean_shift": 0.0} for m in arms},
+            "dead_zone_overlap": {
+                "models": list(arms), "jaccard": 0.0, "shared": [],
+                "jaccard_definition": "all-arm Jaccard",
+                "pairwise": {f"{a}|{b}": {"models": [a, b], "jaccard": 0.5,
+                                          "n_shared": 1, "n_union": 2}
+                             for i, a in enumerate(arms) for b in arms[i + 1:]},
+                **{f"{m}_only": ["c1"] for m in arms},
+            },
+            "divergence_regions": [],
+            # every arm measured; the THIRD is the one that hallucinates
+            "hallucination_by_model": {
+                m: {"median_len_ratio": 1.0, "p95_len_ratio": 1.0,
+                    "frac_rows_over_2x": (0.8 if m == self.THIRD else 0.0),
+                    "mean_foreign_frac": 0.1, "examples": []}
+                for m in arms},
+        }
+        if "whisper-base" in arms:
+            res["whisper_hallucination"] = res["hallucination_by_model"]["whisper-base"]
+        path = os.path.join(tmp, "model_arms.json")
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(res, fh)
+        return path
+
+    def test_three_arms_reach_the_panel_and_the_worst_one_is_named(self):
+        arms = ["nova-3", "whisper-base", self.THIRD]
+        with tempfile.TemporaryDirectory() as tmp:
+            panel = B.build_model_arms(self._payload(tmp, arms))
+        self.assertEqual(panel["status"], "ok", panel.get("reason"))
+        d = panel["data"]
+        self.assertEqual({m["model"] for m in d["models"]}, set(arms))
+        # the hallucination block is selected by MEASUREMENT and names its arm,
+        # rather than being whichever arm a literal pointed at
+        self.assertEqual(d["hallucination"]["model"], self.THIRD)
+        self.assertAlmostEqual(d["hallucination"]["frac_rows_over_2x"], 0.8)
+        self.assertEqual(set(d["hallucination_by_model"]), set(arms))
+        # all three pairs travel, so an all-arm Jaccard of 0 cannot be mistaken
+        # for "no two arms agree anywhere"
+        self.assertEqual(len(d["overlap"]["pairwise"]), 3)
+        self.assertEqual(set(d["overlap"]["only"]),
+                         {f"{m}_only" for m in arms})
+        self.assertEqual(d["census"]["n_arms"], 3)
+        json.dumps(B.jsonable(panel))          # must survive the page's JSON door
+
+    def test_two_arms_still_report_the_baseline_arm(self):
+        """
+        NEGATIVE CONTROL. Without it the test above would pass on a build that
+        always reports the last arm, or the alphabetically-last one. With only
+        the original two arms — and whisper the sole hallucinator — the panel
+        must name whisper, not something else.
+        """
+        arms = ["nova-3", "whisper-base"]
+        with tempfile.TemporaryDirectory() as tmp:
+            path = self._payload(tmp, arms)
+            with open(path, encoding="utf-8") as fh:
+                res = json.load(fh)
+            res["hallucination_by_model"]["whisper-base"]["frac_rows_over_2x"] = 0.5
+            res["whisper_hallucination"] = res["hallucination_by_model"]["whisper-base"]
+            with open(path, "w", encoding="utf-8") as fh:
+                json.dump(res, fh)
+            panel = B.build_model_arms(path)
+        d = panel["data"]
+        self.assertEqual(d["hallucination"]["model"], "whisper-base")
+        self.assertEqual(len(d["overlap"]["pairwise"]), 1)
+        self.assertEqual(len(d["models"]), 2)
+
+
 class CommittedArtifact(unittest.TestCase):
 
     def test_it_exists_and_is_self_contained(self):

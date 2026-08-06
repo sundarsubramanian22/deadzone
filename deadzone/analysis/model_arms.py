@@ -1,9 +1,30 @@
 """
 L1 — multi-model comparison on real data (SPEC A.R5.7).
 
-Two arms: **nova-3**, the commercial streaming model that exposes per-word
-confidence (the spine), and **whisper-base**, the open baseline that shows we
-benchmark rather than depend on one vendor's API.
+**N arms, not two.** The layer was built and validated against two — **nova-3**,
+the commercial streaming model that exposes per-word confidence (the spine), and
+**whisper-base**, the open baseline that shows we benchmark rather than depend on
+one vendor's API — and a third (ElevenLabs `scribe_v2`) is expected. Nothing here
+may be pairwise: every arm in the table is discovered, compared and reported.
+
+## The two-arm hazard this module was audited for
+
+The dangerous shape is not a crash — it is an arm that quietly does not appear.
+`matched_arms` used to default to `(SPINE_MODEL, BASELINE_MODEL)`, so a third arm
+sitting in `master.csv` was dropped before any analysis ran and the report came
+out complete, well-formed and silently two-armed. Same family as SPEC Appendix E
+("a guard whose failure mode is silence"). So:
+
+  * arms are **discovered from the table** unless the caller names them, and the
+    set actually compared is printed in the report;
+  * the dead-zone overlap is **all pairs plus an all-arm intersection**, never one
+    hardcoded pair;
+  * the hallucination callout is computed for **every** arm, and no key ever holds
+    one arm's numbers under another arm's name;
+  * `matched_arms` intersects over **all N arms** — which with three arms is a
+    strictly smaller set than with two — and the shrinkage is reported as a
+    census, with a floor underneath it (SPEC Appendix C.8: an unenforced matching
+    silently absorbed 7.8 WER points of confound in D4).
 
 ## The three things this module is careful about
 
@@ -27,10 +48,14 @@ re-scored cross-model WER via `cross_model_norm`, which applies the Whisper
 authors' own published normalizer symmetrically to both sides. See that module's
 docstring for what it fixes and what residuals survive.
 
-**3. The two arms must cover the same cells.** The Whisper arm was run on the
+**3. Every arm must cover the same cells.** The Whisper arm was run on the
 10-clip AL subset, not all 40. Comparing Whisper-on-10 against nova-3-on-40 would
 confound the model with the clip set. This module intersects down to the cells
-both arms actually ran, and refuses to proceed if the intersection is ragged.
+EVERY arm actually ran and reports the census; it refuses only when the
+intersection is a data defect (duplicated cells, an arm with no usable rows) or
+has collapsed below the floor where a per-condition mean stops describing an
+acoustic condition. Arms legitimately running different clip subsets is the
+expected case, not an error — see `arm_intersection`.
 
 **4. A confidence is never subtracted from — or thresholded against — an accuracy
 measured on DIFFERENT clips.** This is the same defect D1 was rebuilt around
@@ -78,8 +103,9 @@ from deadzone.analysis.confidence_gap import (
 from deadzone.cross_model_norm import cross_model_classify_errors, cross_model_normalize
 from deadzone.design import DEFAULT_FACTOR_SPACE, FactorSpace
 from deadzone.model_compare import (
-    _bins_for, _region_rows, compare_models, confidence_wer_shape,
-    find_divergence_regions, within_model_conf_percentile,
+    WER_INCOMPARABLE_ARMS, WerIncomparableArmError, _bins_for, _region_rows,
+    compare_models, confidence_wer_shape, find_divergence_regions,
+    is_wer_comparable, wer_comparability, within_model_conf_percentile,
 )
 
 MASTER = "results/master.csv"
@@ -88,16 +114,55 @@ OUT_JSON = Path("results/model_arms.json")
 OUT_TXT = Path("results/model_arms.txt")
 
 SPINE_MODEL = "nova-3"
+# The arm whose hallucination behaviour has a named callout in the write-up. It
+# is a LABEL, never a selector: every arm is measured, and this name only decides
+# which arm the legacy `whisper_hallucination` key aliases (and only when that arm
+# is actually present).
 BASELINE_MODEL = "whisper-base"
+
+# TWO FLOORS, because they answer two different questions and only one of them
+# is a judgement call.
+#
+#   MIN_COMMON_CLIPS (3) is the REPORTING floor, applied by `model_arms_report`.
+#   Mirrors analysis/sim2real.MIN_COMMON_CLIPS and is the same number for the
+#   same reason: below it a per-condition mean stops describing an acoustic
+#   condition and starts describing whichever two utterances happened to overlap.
+#
+#   CORRECTNESS_FLOOR (1) is `arm_intersection`'s default, and it is not a
+#   judgement at all. An EMPTY intersection is the case that most needs catching
+#   because it defeats every other check: with no common cells every arm is
+#   equally empty, so the per-arm row-count identity passes, the equal-size check
+#   passes, and the failure only surfaces later as a confusing error in an
+#   aggregation step — or as a report over nothing.
+#
+# The split matters for N arms specifically: the intersection is monotonically
+# shrinking in the number of arms, so the first time these floors bite will be
+# the day a third arm is added.
+MIN_COMMON_CLIPS = 3
+CORRECTNESS_FLOOR = 1
 
 
 class RaggedArmsError(ValueError):
     """
-    Raised when the two arms do not cover the same (clip, condition) cells.
+    Raised when the arms do not cover the same (clip, condition) cells *for a
+    reason that is a data defect rather than a coverage choice*.
 
     Loud on purpose. A silent inner join would still produce a comparison table,
     and every number in it would be a mixture of a model effect and a coverage
     effect with no way to separate them afterwards.
+    """
+
+
+class ThinOverlapError(RaggedArmsError):
+    """
+    Raised when intersecting all N arms leaves too few clips to compare on.
+
+    A subclass so existing `except RaggedArmsError` handlers keep working. It
+    exists because the intersection is monotonically shrinking in the number of
+    arms: two arms sharing the 10-clip AL subset overlap on 10 clips, but add a
+    third arm run on a different subset and the common set can collapse to a
+    handful — or to nothing — while every per-arm size check still passes
+    (they are all equally empty) and the report still renders.
     """
 
 
@@ -133,20 +198,90 @@ def _cells(rows: Sequence[Mapping]) -> set[tuple[str, str]]:
     return {(r["clip_id"], r["condition_name"]) for r in rows}
 
 
-def matched_arms(rows: Sequence[Mapping],
-                 models: Sequence[str] = (SPINE_MODEL, BASELINE_MODEL),
-                 ) -> dict[str, list[dict]]:
+def discover_arms(rows: Sequence[Mapping]) -> list[str]:
+    """Every model id present in the table, sorted.
+
+    The default arm set, because the alternative — a hardcoded pair — makes a
+    newly-added arm vanish from the analysis without changing anything a reader
+    can see. That is the exact failure this layer exists to characterise in ASR
+    models, committed in the code that characterises it.
     """
-    Split by model and intersect to the cells every arm actually ran.
+    return sorted({str(r["model"]) for r in rows if r.get("model") is not None})
+
+
+def arm_intersection(rows: Sequence[Mapping],
+                     models: Sequence[str] | None = None,
+                     min_common_clips: int = CORRECTNESS_FLOOR,
+                     ) -> dict:
+    """
+    Split by model, intersect to the cells EVERY arm ran, and return the arms
+    together with the census that makes the restriction visible.
+
+    `models=None` discovers the arms from the table. Naming them restricts the
+    comparison; naming a model with no rows is an error, not a silent omission.
+
+    ## Why the census, and why it is not optional
+
+    The intersection is taken over all N arms at once, so it shrinks as arms are
+    added: nova-3 ran 40 clips, whisper-base the 10-clip AL subset, and a third
+    arm run on some other subset can cut the common set again. Every per-arm
+    check still passes in that situation — the arms are equal-sized because they
+    have been made equal-sized — so the only thing that can tell a reader the
+    comparison narrowed is a census that says so. SPEC Appendix C.8 records what
+    the alternative costs: D4's unenforced clip matching quietly folded 7.8 WER
+    points of clip difficulty into a 19.9-point "simulation gap".
+
+    ## Report-and-proceed, with a floor
+
+    Arms running different clip subsets is the DESIGNED state here (the local
+    arms are subset to save wall clock and spend), so refusing it would delete a
+    legitimate finding. Restriction plus a loud census is the fix. Three things
+    still raise, because none of them is a coverage choice:
+
+      * an arm with no usable rows at all (`RaggedArmsError`) — a wholesale arm
+        failure reads as "this model is perfect on zero cells";
+      * a duplicated cell within an arm (`RaggedArmsError`, below) — a data
+        defect that double-weights one clip and leaves the table's shape intact;
+      * an intersection below `min_common_clips` (`ThinOverlapError`). The
+        DEFAULT here is the correctness floor (`CORRECTNESS_FLOOR`): an empty
+        intersection, which passes every other check because it makes all arms
+        equally empty. The stricter statistical floor (`MIN_COMMON_CLIPS`) is
+        applied by `model_arms_report`, which is where per-condition means are
+        actually computed and quoted — splitting arms and reporting on them are
+        different jobs and only the second one needs the adequacy argument.
 
     Drops `failed` rows first: a failure sentinel is not a prediction, and
     counting one as a low-confidence output would corrupt both the dead-zone rate
     and the confidence shape.
     """
+    present = discover_arms(rows)
+    if models is None:
+        models = present
+    models = list(models)
+    if not models:
+        raise RaggedArmsError(
+            "no model arms found in the table (no rows carry a `model` value). "
+            "L1 compares arms; there is nothing here to compare.")
+    unknown = [m for m in models if m not in present]
+    if unknown:
+        raise RaggedArmsError(
+            f"requested arm(s) {unknown} are not in the table (it holds "
+            f"{present}). Refusing rather than comparing the arms that happen "
+            f"to be present: a comparison silently missing a requested arm is "
+            f"indistinguishable from one where that arm did well.")
+
     by_model: dict[str, list[dict]] = {m: [] for m in models}
+    raw_counts = {m: 0 for m in models}
+    failed_counts = {m: 0 for m in models}
     for r in rows:
-        if r["model"] in by_model and not r["failed"]:
-            by_model[r["model"]].append(dict(r))
+        m = str(r["model"])
+        if m not in by_model:
+            continue
+        raw_counts[m] += 1
+        if r["failed"]:
+            failed_counts[m] += 1
+        else:
+            by_model[m].append(dict(r))
 
     empty = [m for m, v in by_model.items() if not v]
     if empty:
@@ -157,7 +292,30 @@ def matched_arms(rows: Sequence[Mapping],
             f"anything into this."
         )
 
-    common = set.intersection(*(_cells(v) for v in by_model.values()))
+    per_arm_cells = {m: _cells(v) for m, v in by_model.items()}
+    common = set.intersection(*per_arm_cells.values())
+    common_clips = sorted({str(c[0]) for c in common})
+
+    # THE FLOOR. An EMPTY intersection is the case that most needs catching: it
+    # makes every arm equally empty, so the per-arm row-count identity and the
+    # equal-size check below both PASS, and the failure only surfaces much later
+    # as a confusing error in an aggregation step (or, worse, as a report over
+    # one or two clips that reads like a measurement).
+    if len(common_clips) < max(1, int(min_common_clips)):
+        detail = ", ".join(
+            f"{m}: {len({str(c[0]) for c in per_arm_cells[m]})} clips"
+            for m in models)
+        raise ThinOverlapError(
+            f"intersecting {len(models)} arms {models} leaves "
+            f"{len(common_clips)} common clip(s) over {len(common)} cell(s) "
+            f"({detail}) — below the floor of {min_common_clips}. A "
+            f"per-condition mean over that few clips describes the utterances "
+            f"that happened to overlap, not an acoustic condition. Note the "
+            f"intersection SHRINKS as arms are added: two arms sharing the "
+            f"10-clip AL subset overlap on 10 clips, a third arm run on a "
+            f"different subset can cut it to nothing. Re-run one arm on the "
+            f"others' clip set, or restrict the comparison with models=[...].")
+
     out = {m: [r for r in v if (r["clip_id"], r["condition_name"]) in common]
            for m, v in by_model.items()}
 
@@ -186,10 +344,70 @@ def matched_arms(rows: Sequence[Mapping],
                 f"cache that logged the same cell under two run_ids, or two "
                 f"result tables concatenated. Deduplicate before comparing.")
 
-    sizes = {m: len(v) for m, v in out.items()}
-    if len(set(sizes.values())) != 1:
-        raise RaggedArmsError(f"arms still ragged after intersection: {sizes}")
-    return out
+    # Post-condition, stated over N arms rather than as a set of sizes. A SET of
+    # sizes cannot distinguish "all arms agree" from "all arms are equally
+    # wrong" (SPEC Appendix E.1 defect 3 is exactly that shape); the per-arm
+    # identity above is the real guard and this is its restatement.
+    bad = {m: len(v) for m, v in out.items() if len(v) != len(common)}
+    if bad:
+        raise RaggedArmsError(
+            f"arms still ragged after intersecting {len(models)} arms: "
+            f"{bad} rows against {len(common)} common cells")
+
+    census = {
+        "models": models,
+        "n_arms": len(models),
+        "arms_discovered": present,
+        "arms_compared": models,
+        "arms_excluded": [m for m in present if m not in models],
+        "n_common_cells": len(common),
+        "n_common_clips": len(common_clips),
+        "common_clips": common_clips,
+        "n_common_conditions": len({str(c[1]) for c in common}),
+        # True only when EVERY arm ran exactly the common cell set — i.e. nothing
+        # was dropped. False is the expected state on this project's own tables.
+        "cells_matched": all(len(per_arm_cells[m]) == len(common) for m in models),
+        "clips_matched": all(
+            {str(c[0]) for c in per_arm_cells[m]} == set(common_clips)
+            for m in models),
+        "per_arm": {
+            m: {
+                "n_rows_raw": raw_counts[m],
+                "n_failed_excluded": failed_counts[m],
+                "n_usable": len(by_model[m]),
+                "n_cells": len(per_arm_cells[m]),
+                "n_clips": len({str(c[0]) for c in per_arm_cells[m]}),
+                "n_conditions": len({str(c[1]) for c in per_arm_cells[m]}),
+                "n_rows_kept": len(out[m]),
+                "n_rows_dropped_by_intersection": len(by_model[m]) - len(out[m]),
+            } for m in models
+        },
+        "n_rows_dropped_by_intersection": sum(
+            len(by_model[m]) - len(out[m]) for m in models),
+        "min_common_clips": int(min_common_clips),
+        "note": ("arms intersected to the cells EVERY arm ran; failed rows "
+                 "dropped first. The intersection shrinks as arms are added, so "
+                 "adding a third arm can narrow a comparison that two arms "
+                 "supported — which is why the per-arm counts are published "
+                 "rather than summarised."),
+    }
+    return {"arms": out, "census": census}
+
+
+def matched_arms(rows: Sequence[Mapping],
+                 models: Sequence[str] | None = None,
+                 min_common_clips: int = CORRECTNESS_FLOOR,
+                 ) -> dict[str, list[dict]]:
+    """
+    `arm_intersection`'s arms only, for callers that do not need the census.
+
+    `models` defaults to EVERY arm in the table. It used to default to
+    `(SPINE_MODEL, BASELINE_MODEL)`, which silently dropped any third arm before
+    a single number was computed — the report was complete, correct-looking and
+    missing a model. Anything that reports numbers to a human should call
+    `arm_intersection` and print the census instead.
+    """
+    return arm_intersection(rows, models, min_common_clips)["arms"]
 
 
 # ---------------------------------------------------------------------------
@@ -201,10 +419,14 @@ def rescore_cross_model(arms: Mapping[str, Sequence[Mapping]],
     Add `wer_xm` and the cross-model edit counts to every row, leaving the spine
     `wer` untouched so both are available side by side.
 
-    Both arms are re-scored, not just Whisper. Correcting one side only is how a
-    "fix" becomes a bias: nova-3's output is already word-form, so its numbers
-    should barely move -- and if they move a lot, that is a signal the normalizer
-    is doing something unintended and should be looked at before trusting it.
+    EVERY arm is re-scored, not just the ones expected to move. Correcting one
+    side only is how a "fix" becomes a bias: nova-3's output is already
+    word-form, so its numbers should barely move -- and if they move a lot, that
+    is a signal the normalizer is doing something unintended and should be looked
+    at before trusting it. That audit (`normalization_shift`) is per arm and is a
+    GATE on any new arm: a vendor whose orthography differs from the reference's
+    produces a large, condition-independent WER offset that is mathematically
+    indistinguishable from an acoustic effect once it is in the table.
     """
     # A clip with no manifest entry would score against an EMPTY reference, and
     # `classify_errors("", hyp)` returns wer=1.0 with n_ref=0 — a perfect-looking
@@ -248,6 +470,13 @@ def normalization_shift(arms: Mapping[str, Sequence[Mapping]]) -> dict:
     This is the audit that makes the correction trustworthy. The expectation is
     a large shift for whisper-base and a near-zero shift for nova-3; anything
     else means the normalizer is changing more than orthography.
+
+    THE AUDIT RUNS FOR EVERY ARM, INCLUDING THE EXCLUDED ONES — that is the
+    point. `wer_comparable` is carried on each row because this table is where a
+    reader decides whether to believe the arm's WER at all, and an arm excluded
+    from the cross-model comparison must be visible as excluded exactly here,
+    beside the shift that got it excluded. A shift is only subtractable if it is
+    the same shift every call; see `model_compare.WER_INCOMPARABLE_ARMS`.
     """
     out = {}
     for model, rows in arms.items():
@@ -258,6 +487,8 @@ def normalization_shift(arms: Mapping[str, Sequence[Mapping]]) -> dict:
             "wer_crossmodel_mean": float(np.nanmean(xm)),
             "mean_shift": float(np.nanmean(strict - xm)),
             "n_rows": len(rows),
+            "wer_comparable": is_wer_comparable(model),
+            "wer_incomparable_reason": WER_INCOMPARABLE_ARMS.get(str(model)),
         }
     return out
 
@@ -485,6 +716,13 @@ def augment_divergence_regions(regions: list[dict],
     The canonical name points at the correct quantity (the convention D1 fixed:
     `gap` == `gap_spoke`); the mismatched one survives only under a name that
     says what it is, so the published grid-v1 numbers stay reproducible.
+
+    A REGION CAN CARRY TWO DIFFERENT ARM SETS, and it must say so. `wer_gap` /
+    `wer_by_model` come from the cross-model WER scan and therefore cover only
+    the WER-comparable arms; the dead-zone RATE is within-model (each arm's own
+    threshold against its own confidence percentile) so it covers every arm
+    `cond` holds. Both lists are written onto the region — a reader who counts
+    the models in one dict and assumes the other matches is the reason.
     """
     lookup = _region_dead_zone_rates(cond, space, n_bins, wer_hi, conf_pct_hi)
     for r in regions:
@@ -501,18 +739,106 @@ def augment_divergence_regions(regions: list[dict],
         # is the right estimand and restricting it to the spoke subset would
         # silently discount each arm's worst clips.
         r["wer_pairing"] = "all_clips"
+        r["wer_arms"] = sorted(r.get("wer_by_model") or {})
+        r["dead_zone_rate_arms"] = sorted(rates)
     return regions
 
 
 # ---------------------------------------------------------------------------
 # the report
 
+def dead_zone_overlap(sets: Mapping[str, set]) -> dict:
+    """
+    Do the arms fail silently in the SAME places? Over N arms, not a pair.
+
+    Three quantities, because with more than two arms one number cannot carry the
+    answer:
+
+      `jaccard`      the ALL-ARM Jaccard, |intersection of every arm| /
+                     |union of every arm|. For exactly two arms this is
+                     bit-identical to the pairwise value the two-arm version
+                     published, so the key keeps its meaning and grid-v1 stays
+                     reproducible; for three it honestly reports that agreement
+                     must hold everywhere, not just between the two arms someone
+                     happened to hardcode.
+      `pairwise`     every unordered pair, each with its own Jaccard and shared
+                     set. This is what names WHICH arms agree — an all-arm
+                     Jaccard of 0 cannot distinguish "no two arms agree" from
+                     "two agree perfectly and the third is disjoint".
+      `<model>_only` per arm: dead zones in that arm and in NO other. With two
+                     arms this is the set difference; with three it is the
+                     difference against the union of the others, which is the
+                     only reading that does not silently ignore an arm.
+
+    A key never holds a pair's number under a global name. That substitution is
+    how the previous version reported a two-arm Jaccard for a three-arm study.
+    """
+    models = list(sets)
+    if len(models) < 2:
+        raise ValueError(
+            f"dead_zone_overlap needs >= 2 arms, got {models}. With one arm the "
+            f"overlap is trivially the arm itself and reads as perfect agreement.")
+
+    def _j(a: set, b: set) -> float:
+        u = a | b
+        return (len(a & b) / len(u)) if u else float("nan")
+
+    inter_all = set.intersection(*(sets[m] for m in models))
+    union_all = set.union(*(sets[m] for m in models))
+    pairwise: dict[str, dict] = {}
+    for i, a in enumerate(models):
+        for b in models[i + 1:]:
+            pairwise[f"{a}|{b}"] = {
+                "models": [a, b],
+                "jaccard": _j(sets[a], sets[b]),
+                "n_shared": len(sets[a] & sets[b]),
+                "shared": sorted(sets[a] & sets[b]),
+                "n_union": len(sets[a] | sets[b]),
+            }
+
+    out = {
+        "models": models,
+        "jaccard": (len(inter_all) / len(union_all)) if union_all else float("nan"),
+        "jaccard_definition": (
+            f"all-arm Jaccard over {len(models)} arms: |dead zones flagged by "
+            f"EVERY arm| / |dead zones flagged by ANY arm|. Identical to the "
+            f"pairwise value when there are exactly two arms."),
+        "shared": sorted(inter_all),          # shared by EVERY arm
+        "n_union": len(union_all),
+        "pairwise": pairwise,
+        "n_by_model": {m: len(sets[m]) for m in models},
+    }
+    for m in models:
+        others = set.union(*(sets[k] for k in models if k != m))
+        out[f"{m}_only"] = sorted(sets[m] - others)
+    return out
+
+
 def model_arms_report(master_path: str = MASTER,
                       manifest_path: str = MANIFEST,
-                      wer_hi: float = 0.3, conf_pct_hi: float = 0.6) -> dict:
+                      wer_hi: float = 0.3, conf_pct_hi: float = 0.6,
+                      models: Sequence[str] | None = None,
+                      min_common_clips: int = MIN_COMMON_CLIPS) -> dict:
+    """
+    The whole L1 layer over EVERY arm in the table (or the ones `models` names).
+
+    `models=None` discovers the arms. That default is the fix for this module's
+    worst two-arm assumption: with a hardcoded pair, adding a third arm to the
+    grid changed nothing a reader of this report could see.
+
+    This is the path that computes and quotes per-condition means, so it applies
+    the STATISTICAL floor (`MIN_COMMON_CLIPS`), not just `arm_intersection`'s
+    correctness floor.
+    """
     rows = load_master(master_path)
     refs = load_refs(manifest_path)
-    arms = matched_arms(rows)
+    matched = arm_intersection(rows, models, min_common_clips)
+    arms, census = matched["arms"], matched["census"]
+    if len(arms) < 2:
+        raise RaggedArmsError(
+            f"L1 compares arms and this table holds {len(arms)}: "
+            f"{sorted(arms)}. Run the grid for a second model "
+            f"(`--models <a>,<b>`) before running this layer.")
     arms = rescore_cross_model(arms, refs)
 
     shift = normalization_shift(arms)
@@ -545,6 +871,13 @@ def model_arms_report(master_path: str = MASTER,
         per_model[m] = {
             "n_conditions": len(table),
             "n_clips_per_condition": table[0]["n_clips"] if table else 0,
+            # Every WER key below is this arm's OWN number. It is a legitimate
+            # within-model quantity (it is what the dead-zone threshold is
+            # applied to) and an illegitimate cross-arm one for an arm whose
+            # orthography is unstable — so the flag rides along with them rather
+            # than being kept in a header the reader may not have reached.
+            "wer_comparable": is_wer_comparable(m),
+            "wer_incomparable_reason": WER_INCOMPARABLE_ARMS.get(str(m)),
             "wer_mean_strict": float(np.nanmean([r["wer"] for r in table])),
             "wer_mean_crossmodel": float(np.nanmean(
                 [r["wer"] for r in cond_xm[m]])),
@@ -578,6 +911,26 @@ def model_arms_report(master_path: str = MASTER,
             # wer_spoke; leaving them in returns a NaN spearman).
             "shape": confidence_wer_shape(paired, wer_key="wer_spoke"),
             "shape_all_clips_pairing": confidence_wer_shape(table, wer_key="wer"),
+            # THE SAME WITHIN-MODEL SHAPE, RE-SCORED. Same rows, same
+            # confidences, same estimand — only the ORTHOGRAPHY layer of the
+            # scoring changes. This is not a cross-arm comparison (nothing is
+            # subtracted between arms) and it is the measurement that decides
+            # whether an arm's formatting offset is a BIAS or NOISE:
+            #   * a constant offset shifts WER without reordering conditions, so
+            #     a rank correlation is invariant to it — the shape must not move;
+            #   * a per-call draw is measurement error in the WER variable, which
+            #     ATTENUATES a rank correlation toward zero — the shape moves,
+            #     and the strict-scored figure is a lower bound on |rho|.
+            # So this column is the evidence for (or against) the arm's presence
+            # in WER_INCOMPARABLE_ARMS, rather than a policy asserted in a
+            # comment. It is computed for every arm, including the ones expected
+            # not to move: an arm that was supposed to be stable and is not is
+            # exactly what this is for.
+            "shape_crossmodel": confidence_wer_shape(
+                [r for r in cond_xm[m]
+                 if np.isfinite(as_float(r["mean_conf"]))
+                 and np.isfinite(as_float(r["wer_spoke"]))],
+                wer_key="wer_spoke"),
             "edit_signature_strict": edit_signature(arms[m], "n_"),
             "edit_signature_crossmodel": {
                 op: sum(int(r[f"n_{op}_xm"]) for r in arms[m])
@@ -585,10 +938,20 @@ def model_arms_report(master_path: str = MASTER,
                 for op in ("sub", "del", "ins")},
         }
 
+    # THE TWO CROSS-MODEL WER CALL SITES. `exclude_incomparable=True` is typed
+    # here, in the open, and nowhere else: it is the whole enforcement surface.
+    # Without it both calls RAISE the moment a WER-incomparable arm is in the
+    # table, which is the behaviour we want — a new arm cannot slide into a WER
+    # ranking by being added to the grid. The census returned by each call is
+    # published verbatim so the exclusion is a line in the report, not a
+    # property of the code.
+    wer_census = wer_comparability(list(cond))
     divergence = augment_divergence_regions(
-        find_divergence_regions(cond, wer_hi=wer_hi, conf_pct_hi=conf_pct_hi),
+        find_divergence_regions(cond, wer_hi=wer_hi, conf_pct_hi=conf_pct_hi,
+                                exclude_incomparable=True),
         cond, wer_hi=wer_hi, conf_pct_hi=conf_pct_hi)
-    combined = compare_models(cond, wer_hi=wer_hi, conf_pct_hi=conf_pct_hi)
+    combined = compare_models(cond, wer_hi=wer_hi, conf_pct_hi=conf_pct_hi,
+                              exclude_incomparable=True)
     # `compare_models` is model_compare's own harness and takes no wer_key, so
     # every dead-zone number inside it is the MISMATCHED all-clips pairing. It is
     # kept (this module uses the shared harness rather than a private fork) but
@@ -601,53 +964,132 @@ def model_arms_report(master_path: str = MASTER,
         "['dead_zone_rate'] above, and the all-clips ones are repeated there as "
         "'dead_zone_rate_all_clips_pairing'.")
 
-    # Dead-zone set overlap: do the two models fail silently in the SAME places?
+    # Dead-zone set overlap: do the arms fail silently in the SAME places?
     sets = {m: set(v["dead_zones"]) for m, v in per_model.items()}
     sets_all = {m: set(v["dead_zones_all_clips_pairing"])
                 for m, v in per_model.items()}
-    a, b = SPINE_MODEL, BASELINE_MODEL
+    overlap = dead_zone_overlap(sets)
+    overlap["jaccard_all_clips_pairing"] = dead_zone_overlap(sets_all)["jaccard"]
+    overlap["pairing"] = "same-subset (dead zones flagged on wer_spoke)"
 
-    def _jac(s: dict) -> float:
-        union = s[a] | s[b]
-        return (len(s[a] & s[b]) / len(union)) if union else float("nan")
+    # Hallucination is measured for EVERY arm. It was computed only for the
+    # baseline arm, so a new arm that invents fluent text under degradation --
+    # the failure mode WER structurally understates -- would have gone
+    # unmeasured while the report still carried a confident-looking
+    # hallucination section about a different model.
+    halluc = {m: hallucination_report(arms[m], refs) for m in arms}
 
-    return {
+    out = {
         "arms": list(arms),
+        "arm_census": census,
+        # WHICH ARMS ARE IN THE WER COMPARISON. Separate from `arms` on purpose:
+        # `arms` is the within-model arm set (everything), this is the cross-arm
+        # WER arm set (a subset), and a payload that carried only one of them
+        # would let a reader assume the wrong one.
+        "wer_comparability": wer_census,
         "normalization_shift": shift,
         "per_model": per_model,
-        "dead_zone_overlap": {
-            "shared": sorted(sets[a] & sets[b]),
-            f"{a}_only": sorted(sets[a] - sets[b]),
-            f"{b}_only": sorted(sets[b] - sets[a]),
-            "jaccard": _jac(sets),
-            "jaccard_all_clips_pairing": _jac(sets_all),
-            "pairing": "same-subset (dead zones flagged on wer_spoke)",
-        },
+        "dead_zone_overlap": overlap,
         "divergence_regions": divergence,
         "compare_models": combined,
-        "whisper_hallucination": hallucination_report(arms[BASELINE_MODEL], refs),
+        "hallucination_by_model": halluc,
         "category_meaning": CATEGORY_MEANING,
         "params": {"wer_hi": wer_hi, "conf_pct_hi": conf_pct_hi},
     }
+    # Legacy alias, emitted ONLY when the arm it is named after is present. A key
+    # called `whisper_hallucination` must never hold some other arm's numbers;
+    # consumers should read `hallucination_by_model`, which names every arm.
+    if BASELINE_MODEL in halluc:
+        out["whisper_hallucination"] = halluc[BASELINE_MODEL]
+    return out
+
+
+def _wrap(text: str, width: int = 70) -> list[str]:
+    import textwrap
+    return textwrap.wrap(" ".join(str(text).split()), width=width) or [""]
+
+
+def _wer_mark(res: Mapping, model: str) -> str:
+    """`‡` beside any WER printed for an arm excluded from the WER comparison."""
+    excluded = set((res.get("wer_comparability") or {}).get("excluded") or ())
+    return "‡" if str(model) in excluded else " "
 
 
 def format_report(res: Mapping) -> str:
     L: list[str] = []
     add = L.append
+    cen = res.get("arm_census") or {}
+    wc = res.get("wer_comparability") or {}
+    excluded = list(wc.get("excluded") or ())
     add("L1 — MULTI-MODEL COMPARISON (SPEC R5.7)")
     add("=" * 72)
     add("")
-    add("Arms matched to the cells BOTH models ran; failed rows dropped.")
+    add(f"Arms compared ({len(res['arms'])}): {', '.join(res['arms'])}")
+    add("Matched to the cells EVERY arm ran; failed rows dropped.")
+    add("")
+
+    # THE WER-COMPARABILITY BLOCK. Printed before any WER, in the same place
+    # every time, whether or not anything is excluded — a block that appears
+    # only when there is bad news trains the reader to skip it, and its absence
+    # then carries information nobody reads.
+    add("-- WER comparability (WHICH ARMS MAY BE RANKED AGAINST EACH OTHER) ----")
+    add(f"  cross-model WER comparison IN : "
+        f"{', '.join(wc.get('comparable') or res['arms'])}")
+    add(f"  cross-model WER comparison OUT: "
+        f"{', '.join(excluded) if excluded else '(none)'}")
+    for m in excluded:
+        reason = (wc.get("reasons") or {}).get(m, "")
+        add(f"  WHY {m} is excluded:")
+        for line in _wrap(reason, width=70):
+            add(f"    {line}")
+    if excluded:
+        add("  An excluded arm is still measured WITHIN itself — dead-zone rate,")
+        add("  confidence-vs-WER shape and L2 calibration are computed against")
+        add("  that arm's OWN distribution and never touch a cross-arm WER. Its")
+        add("  own WER columns below are marked with a dagger (‡): read them as")
+        add("  that arm's internal scale, never as a rank against another arm.")
+        add("  This is enforced in code, not by convention: the cross-model WER")
+        add("  paths (model_compare.find_divergence_regions / compare_models)")
+        add("  RAISE on an incomparable arm unless the caller explicitly passes")
+        add("  exclude_incomparable=True. There is no flag that includes them.")
+    add("")
+
+    # THE CENSUS. Printed before any number, because every number below is a
+    # number over this cell set and the restriction is invisible otherwise.
+    add("-- arm census (what the comparison is actually over) -----------------")
+    if cen.get("arms_excluded"):
+        add(f"  ARMS IN THE TABLE BUT NOT COMPARED: {cen['arms_excluded']}")
+    add(f"  common cells {cen.get('n_common_cells', '?')} = "
+        f"{cen.get('n_common_clips', '?')} clips x "
+        f"{cen.get('n_common_conditions', '?')} conditions"
+        + ("   (every arm ran exactly these)" if cen.get("cells_matched")
+           else "   (RESTRICTED — arms ran different cell sets)"))
+    add(f"{'model':<16}{'raw':>7}{'failed':>8}{'usable':>8}{'clips':>7}"
+        f"{'conds':>7}{'kept':>8}{'dropped':>9}")
+    for m, d in (cen.get("per_arm") or {}).items():
+        add(f"{m:<16}{d['n_rows_raw']:>7}{d['n_failed_excluded']:>8}"
+            f"{d['n_usable']:>8}{d['n_clips']:>7}{d['n_conditions']:>7}"
+            f"{d['n_rows_kept']:>8}{d['n_rows_dropped_by_intersection']:>9}")
+    if not cen.get("clips_matched", True):
+        add("  NOTE: the arms ran different CLIP sets, so the intersection above")
+        add("  is smaller than any single arm. This is expected (local arms are")
+        add("  subset to save wall clock) but every WER below is over the common")
+        add("  clips only — it is NOT each arm's corpus-wide number.")
+    add("  The intersection shrinks as arms are added: a third arm on a different")
+    add("  clip subset narrows a comparison two arms supported.")
     add("")
 
     add("-- normalization audit ------------------------------------------------")
-    add("Cross-model WER re-scores BOTH arms. nova-3 is already word-form, so its")
-    add("shift should be ~0; a large shift there would mean the normalizer is")
-    add("changing more than orthography.")
-    add(f"{'model':<16}{'WER strict':>12}{'WER x-model':>13}{'shift':>9}{'n':>8}")
+    add("Cross-model WER re-scores EVERY arm. An arm that is already word-form")
+    add("(nova-3) should shift ~0; a large shift there would mean the normalizer")
+    add("is changing more than orthography. This is a GATE on any new arm.")
+    add("A shift can only be SUBTRACTED if it is the same shift on every call.")
+    add(f"{'model':<16}{'WER strict':>12}{'WER x-model':>13}{'shift':>9}{'n':>8}"
+        f"  {'WER-comparable':<14}")
     for m, d in res["normalization_shift"].items():
         add(f"{m:<16}{d['wer_strict_mean']:>12.3f}{d['wer_crossmodel_mean']:>13.3f}"
-            f"{d['mean_shift']:>9.3f}{d['n_rows']:>8}")
+            f"{d['mean_shift']:>9.3f}{d['n_rows']:>8}  "
+            f"{'yes' if d.get('wer_comparable', True) else 'NO — EXCLUDED':<14}")
     add("")
 
     add("-- per-model, per-condition ------------------------------------------")
@@ -655,11 +1097,19 @@ def format_report(res: Mapping) -> str:
     add("the clips that emitted words, i.e. the population mean_conf is averaged")
     add("over — the ONLY accuracy a confidence may be thresholded against. Dead")
     add("zones are flagged on WERsp; the all-clips pairing is shown to be rejected.")
-    add(f"{'model':<16}{'conds':>7}{'WERall':>8}{'WERsp':>8}{'WERxm':>8}"
+    if excluded:
+        add("A '‡' marks an arm EXCLUDED from the cross-model WER comparison: its WER")
+        add("columns are its own internal scale and must not be ranked against another")
+        add("arm's. Its dead-zone rate and confidence shape ARE comparable in kind,")
+        add("being computed within the arm — with the caveat that the dead-zone")
+        add("threshold (wer_hi) is an ABSOLUTE WER, so an arm carrying an orthography")
+        add("offset crosses it for non-acoustic reasons too.")
+    add(f"{'model':<16}{'conds':>7}{'WERall':>9}{'WERsp':>9}{'WERxm':>9}"
         f"{'deadzone%':>11}{'n_dz':>6}{'n_dz(all)':>10}")
     for m, d in res["per_model"].items():
-        add(f"{m:<16}{d['n_conditions']:>7}{d['wer_mean_strict']:>8.3f}"
-            f"{d['wer_mean_strict_spoke']:>8.3f}{d['wer_mean_crossmodel']:>8.3f}"
+        k = _wer_mark(res, m)
+        add(f"{m:<16}{d['n_conditions']:>7}{d['wer_mean_strict']:>8.3f}{k}"
+            f"{d['wer_mean_strict_spoke']:>8.3f}{k}{d['wer_mean_crossmodel']:>8.3f}{k}"
             f"{100 * d['dead_zone_rate']:>10.2f}%{d['n_dead_zones']:>6}"
             f"{d['n_dead_zones_all_clips_pairing']:>10}")
     add("")
@@ -697,50 +1147,114 @@ def format_report(res: Mapping) -> str:
     add("  self-awareness is really a silence pattern.")
     for m, d in res["per_model"].items():
         s, sa = d["shape"], d["shape_all_clips_pairing"]
-        add(f"  {m:<14} spearman={s['spearman']:+.3f}, n={s['n']}"
+        add(f"  {m:<18} spearman={s['spearman']:+.3f}, n={s['n']}"
             f"   [all-clips: {sa['spearman']:+.3f}, n={sa['n']}]")
+    add("")
+    add("  BIAS OR NOISE? The same shape, same rows, re-scored under the")
+    add("  cross-model orthography normalization. A rank correlation is INVARIANT")
+    add("  to a constant WER offset (it reorders nothing) and is ATTENUATED by a")
+    add("  per-call one (measurement error in the WER variable pulls |rho| toward")
+    add("  zero). So an arm that MOVES here has formatting noise, not formatting")
+    add("  bias, and its strict-scored rho is a LOWER BOUND on |rho|. This is the")
+    add("  evidence behind the WER-comparability verdict at the top — measured,")
+    add("  not asserted.")
+    add(f"  {'model':<18}{'rho strict':>12}{'rho x-model':>13}{'shift':>9}"
+        f"   verdict")
+    for m, d in res["per_model"].items():
+        s, sx = d["shape"], d.get("shape_crossmodel") or {}
+        rx = as_float(sx.get("spearman"))
+        shift = rx - s["spearman"] if np.isfinite(rx) else float("nan")
+        verdict = ("(n/a)" if not np.isfinite(shift) else
+                   "NOISE — |rho| attenuated by formatting" if abs(shift) >= 0.05
+                   else "bias only — rank order unaffected")
+        add(f"  {m:<18}{s['spearman']:>12.3f}{rx:>13.3f}{shift:>9.3f}   {verdict}")
     add("")
 
     add("-- edit signature (fraction of reference words) ----------------------")
-    add(f"{'model':<16}{'sub':>8}{'del':>8}{'ins':>8}")
+    if excluded:
+        add("  THE EDIT COMPOSITION IS THE SAME MEASUREMENT AS WER, TYPED. It is a")
+        add("  cross-arm comparison and it inherits the comparability verdict above:")
+        add("  an orthography mismatch scores `405-912-77` against `four zero five`")
+        add("  as SUBSTITUTIONS, so a '‡' arm reading high on `sub` is not evidence")
+        add("  that it substitutes more. Rows are marked, not suppressed, because the")
+        add("  number is real within the arm — it just does not mean what the column")
+        add("  header implies when read across rows.")
+    add(f"{'model':<16}{'sub':>9}{'del':>9}{'ins':>9}")
     for m, d in res["per_model"].items():
-        e = d["edit_signature_crossmodel"]
-        add(f"{m:<16}{e['sub']:>8.3f}{e['del']:>8.3f}{e['ins']:>8.3f}")
+        e, k = d["edit_signature_crossmodel"], _wer_mark(res, m)
+        add(f"{m:<16}{e['sub']:>8.3f}{k}{e['del']:>8.3f}{k}{e['ins']:>8.3f}{k}")
+    if excluded:
+        add(f"  NOT CLAIMABLE from this table: any statement of the form "
+            f"'{excluded[0]} substitutes/deletes more than X'.")
     add("")
 
     ov = res["dead_zone_overlap"]
-    add("-- do the two models fail silently in the SAME places? ---------------")
-    add(f"  shared dead zones : {len(ov['shared'])}")
-    add(f"  jaccard           : {ov['jaccard']:.3f}   "
+    add("-- do the arms fail silently in the SAME places? ---------------------")
+    add(f"  dead zones flagged by EVERY arm : {len(ov['shared'])}")
+    add(f"  all-arm jaccard                 : {ov['jaccard']:.3f}   "
         f"[all-clips pairing: {ov['jaccard_all_clips_pairing']:.3f}]")
-    for k in ov:
-        if k.endswith("_only"):
-            add(f"  {k:<18}: {len(ov[k])}")
+    add(f"  ({ov.get('jaccard_definition', '')})")
+    for k in sorted(k for k in ov if k.endswith("_only")):
+        add(f"  {k:<32}: {len(ov[k])}   (flagged by this arm and NO other)")
+    if len(ov.get("models", [])) > 2:
+        add("  pairwise — which arms agree with which:")
+        for key, d in ov.get("pairwise", {}).items():
+            add(f"    {key:<32} jaccard {d['jaccard']:.3f}  "
+                f"shared {d['n_shared']}/{d['n_union']}")
     add("")
 
     add("-- divergence regions (ranked by all-clips WER gap) ------------------")
+    add(f"  WER arms: {', '.join(wc.get('comparable') or res['arms'])}"
+        + (f"   (EXCLUDED: {', '.join(excluded)})" if excluded else ""))
+    add("  A region's dead_zone_rate_by_model covers EVERY arm (within-model);")
+    add("  its wer_by_model covers only the WER-comparable ones. The two dicts")
+    add("  can therefore have different lengths — see wer_arms /")
+    add("  dead_zone_rate_arms on each region.")
     add("  wer_gap/wer_by_model are ALL-CLIPS (corpus severity — no confidence")
     add("  term, so restricting to the spoke subset would discount each arm's")
     add("  worst clips). dead_zone_rate_by_model is the SAME-SUBSET rate.")
+    add("  models_absent is printed ONLY when an arm has no rows in the region —")
+    add("  'these arms diverge here' means something different when a third arm")
+    add("  was never measured in that slice.")
     for d in res["divergence_regions"][:8]:
-        bits = " ".join(f"{k}={v}" for k, v in d.items()
-                        if k not in ("gap", "detail", "wer_pairing",
-                                     "dead_zone_rate_by_model_spoke"))
+        hide = {"gap", "detail", "wer_pairing", "dead_zone_rate_by_model_spoke",
+                "models_compared",
+                # The full census (with its multi-sentence reason) is printed
+                # ONCE in the header block above. Repeating it on every region
+                # line buries the numbers the block exists to show — it stays in
+                # the JSON, where a consumer that copies a single region still
+                # gets it.
+                "wer_comparability"}
+        if not d.get("models_absent"):
+            hide.add("models_absent")
+        if not d.get("models_excluded_wer_incomparable"):
+            hide |= {"models_excluded_wer_incomparable", "wer_arms",
+                     "dead_zone_rate_arms"}
+        bits = " ".join(f"{k}={v}" for k, v in d.items() if k not in hide)
         add(f"  {bits}")
     add("")
 
-    h = res["whisper_hallucination"]
-    add("-- whisper hallucination (a DIFFERENT failure mode from nova-3's) ----")
-    add(f"  median hyp/ref length ratio : {h['median_len_ratio']:.2f}")
-    add(f"  p95 length ratio            : {h['p95_len_ratio']:.2f}")
-    add(f"  rows over 2x reference len  : {100 * h['frac_rows_over_2x']:.1f}%")
-    add(f"  mean foreign-token fraction : {h['mean_foreign_frac']:.3f}")
-    for ex in h["examples"][:3]:
+    halluc = res.get("hallucination_by_model") or {}
+    add("-- hallucination, PER ARM (a failure mode WER structurally understates)")
+    add("  Inventing fluent text is qualitatively different from acoustic")
+    add("  confusion, and it is unbounded where WER caps at one error per")
+    add("  reference word. Measured for every arm, so a new arm cannot be")
+    add("  described by an older arm's number.")
+    add(f"{'model':<16}{'median':>9}{'p95':>8}{'>2x ref':>10}{'foreign':>9}")
+    for m, h in halluc.items():
+        add(f"{m:<16}{h['median_len_ratio']:>9.2f}{h['p95_len_ratio']:>8.2f}"
+            f"{100 * h['frac_rows_over_2x']:>9.1f}%{h['mean_foreign_frac']:>9.3f}")
+    worst = max(halluc.items(), key=lambda kv: kv[1]["frac_rows_over_2x"],
+                default=(None, None))
+    if worst[0] is not None and worst[1]["examples"]:
         add("")
-        add(f"  [{ex['clip_id']} @ {ex['condition_name']}]  "
-            f"{ex['n_ref']} ref words -> {ex['n_hyp']} hyp words")
-        add(f"    REF: {ex['reference']}")
-        add(f"    HYP: {ex['transcript']}")
+        add(f"  worst arm: {worst[0]}")
+        for ex in worst[1]["examples"][:3]:
+            add("")
+            add(f"  [{worst[0]} {ex['clip_id']} @ {ex['condition_name']}]  "
+                f"{ex['n_ref']} ref words -> {ex['n_hyp']} hyp words")
+            add(f"    REF: {ex['reference']}")
+            add(f"    HYP: {ex['transcript']}")
     return "\n".join(L)
 
 
@@ -750,9 +1264,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     ap.add_argument("--manifest", default=MANIFEST)
     ap.add_argument("--wer-hi", type=float, default=0.3)
     ap.add_argument("--conf-pct-hi", type=float, default=0.6)
+    ap.add_argument("--models", default=None,
+                    help="comma-separated arms to compare (default: EVERY arm "
+                         "in the table). Naming a subset is a deliberate act "
+                         "and is printed in the report's arm census.")
     a = ap.parse_args(argv)
 
-    res = model_arms_report(a.master, a.manifest, a.wer_hi, a.conf_pct_hi)
+    models = ([m.strip() for m in a.models.split(",") if m.strip()]
+              if a.models else None)
+    res = model_arms_report(a.master, a.manifest, a.wer_hi, a.conf_pct_hi,
+                            models=models)
     txt = format_report(res)
     OUT_JSON.parent.mkdir(parents=True, exist_ok=True)
     OUT_JSON.write_text(json.dumps(res, indent=2, default=float), encoding="utf-8")

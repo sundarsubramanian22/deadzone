@@ -51,6 +51,12 @@ DEFAULT_OUT = os.path.join(HERE, "deadzone.html")
 # RIR it actually used; the synthetic RIRs live in their own directory.
 SIM_MARKERS = ("rirs_sim", "/sim_", "sim_rt60")
 
+# The arm the page opens on. Imported from the analysis layer rather than
+# re-declared, so the dashboard and L1 cannot disagree about which arm is the
+# spine. It is a DEFAULT, never a filter: every arm in the table gets its own
+# full set of panels and the model toggle reaches all of them.
+from deadzone.analysis.model_arms import SPINE_MODEL  # noqa: E402
+
 
 # ===========================================================================
 # JSON hygiene — NaN and numpy do not survive a browser
@@ -457,17 +463,23 @@ def build_model_arms(path: str) -> dict:
     dashboard build that must not fail. The analysis owns the numbers; the
     dashboard displays them.
 
-    NOTE FOR THE READER OF THE PAGE, enforced by the payload below: the two arms'
+    NOTE FOR THE READER OF THE PAGE, enforced by the payload below: the arms'
     confidences are NOT on a common scale (Deepgram returns acoustic confidence,
     Whisper the decoder's token probability), so this panel never draws them on a
     shared axis. It shows each model's dead-zone rate, its own confidence-vs-WER
-    shape, and where the two disagree.
+    shape, and where they disagree.
+
+    N ARMS. Everything read out below is per-arm or all-pairs. The hallucination
+    block in particular is selected by measurement (the worst arm, named) rather
+    than by the literal `whisper_hallucination`, which describes one arm and
+    would have kept describing that one arm after a third was added.
     """
     if not os.path.isfile(path):
         return _missing(
             "results/model_arms.json is absent, so the multi-model comparison has "
             "not been run. Produce it with `python3 -m deadzone.analysis.model_arms` once "
-            "both arms are in the master table.")
+            "at least two arms are in the master table (it compares every arm "
+            "it finds, not a fixed pair).")
     with open(path, encoding="utf-8") as fh:
         res = json.load(fh)
 
@@ -479,7 +491,23 @@ def build_model_arms(path: str) -> dict:
             f"the analysis.")
 
     ov = res.get("dead_zone_overlap") or {}
-    hall = res.get("whisper_hallucination") or {}
+    # WER COMPARABILITY. The panel prints a WER column per arm, which is a
+    # cross-arm WER table by construction — so the exclusion has to reach the
+    # page, not stop at the JSON. Every arm row carries `wer_comparable`, and
+    # the panel-level census carries the reason text, so a viewer cannot read a
+    # WER column without the verdict on whether those cells may be compared.
+    wc = res.get("wer_comparability") or {}
+    wer_excluded = set(wc.get("excluded") or ())
+    # Prefer the per-arm hallucination map and show the WORST arm, named. Falling
+    # back to the legacy single-arm key is safe only because that key is emitted
+    # only when the arm it is named after is present.
+    hall_by_model = res.get("hallucination_by_model") or {}
+    if hall_by_model:
+        hall_model, hall = max(
+            hall_by_model.items(),
+            key=lambda kv: (kv[1] or {}).get("frac_rows_over_2x") or 0.0)
+    else:
+        hall_model, hall = "whisper-base", (res.get("whisper_hallucination") or {})
     return _ok({
         "models": [
             {"model": m,
@@ -489,25 +517,51 @@ def build_model_arms(path: str) -> dict:
              "dead_zone_rate": d.get("dead_zone_rate"),
              "n_dead_zones": d.get("n_dead_zones"),
              "shape": d.get("shape"),
-             "edits": d.get("edit_signature_crossmodel")}
+             "edits": d.get("edit_signature_crossmodel"),
+             # False => this arm's WER / edit columns are its own internal
+             # scale and must not be ranked against another arm's.
+             "wer_comparable": m not in wer_excluded,
+             "wer_incomparable_reason": (wc.get("reasons") or {}).get(m)}
             for m, d in per.items()
         ],
+        "wer_comparability": {
+            "comparable": wc.get("comparable") or list(per),
+            "excluded": sorted(wer_excluded),
+            "reasons": wc.get("reasons") or {},
+            "statement": wc.get("statement"),
+        },
         "normalization_shift": res.get("normalization_shift"),
+        "census": res.get("arm_census"),
         "overlap": {"jaccard": ov.get("jaccard"),
+                    "jaccard_definition": ov.get("jaccard_definition"),
                     "shared": ov.get("shared", []),
+                    "pairwise": ov.get("pairwise", {}),
                     "only": {k: v for k, v in ov.items() if k.endswith("_only")}},
         "divergence_regions": (res.get("divergence_regions") or [])[:8],
         "hallucination": {
+            "model": hall_model,
             "median_len_ratio": hall.get("median_len_ratio"),
             "p95_len_ratio": hall.get("p95_len_ratio"),
             "frac_rows_over_2x": hall.get("frac_rows_over_2x"),
             "examples": (hall.get("examples") or [])[:3],
         },
-        "caption": ("Confidence is comparable WITHIN a model, never across two. "
+        "hallucination_by_model": {
+            m: {"frac_rows_over_2x": (h or {}).get("frac_rows_over_2x"),
+                "p95_len_ratio": (h or {}).get("p95_len_ratio")}
+            for m, h in hall_by_model.items()},
+        "caption": ("Confidence is comparable WITHIN a model, never across arms. "
                     "Each arm is ranked against its own confidence distribution; "
                     "absolute WER is shown both under the strict scoring and under "
-                    "a symmetric cross-model normalization, because the two models "
-                    "disagree about orthography as well as about acoustics."),
+                    "a symmetric cross-model normalization, because the arms "
+                    "disagree about orthography as well as about acoustics."
+                    + ((" WER comparison EXCLUDES "
+                        + ", ".join(sorted(wer_excluded))
+                        + ": its orthography is non-deterministic across "
+                          "identical calls, so its WER offset is a per-call draw "
+                          "rather than a constant that can be subtracted. It is "
+                          "still measured within itself — dead-zone rate and "
+                          "confidence-vs-WER shape are computed against its own "
+                          "distribution.") if wer_excluded else "")),
     })
 
 
@@ -664,7 +718,15 @@ def collect(master_path: str, with_al: bool = True, sobol_n: int = 1024,
         },
         "models": per_model,
         "cross": cross,
-        "default_model": models[0] if models else None,
+        # THE ARM THE PAGE OPENS ON — the spine, not whichever arm sorts first.
+        # `models` is alphabetical, so adding an arm whose name begins with a
+        # letter before 'n' silently changed what a viewer sees on load, and
+        # what the demo opens on. It also changed which panels are populated:
+        # the sim-vs-real arm was only ever run for the spine, so an
+        # alphabetically-earlier arm opens the page on an explained-but-empty
+        # panel 6. Falling back to models[0] keeps a spine-less table working.
+        "default_model": (SPINE_MODEL if SPINE_MODEL in per_model
+                          else (models[0] if models else None)),
     }
 
 

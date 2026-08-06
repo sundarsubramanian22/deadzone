@@ -25,9 +25,10 @@ import tempfile
 import numpy as np
 
 from deadzone.analysis.model_arms import (
-    RaggedArmsError, augment_divergence_regions, condition_table, edit_signature,
-    hallucination_report, matched_arms, model_arms_report, normalization_shift,
-    rescore_cross_model,
+    MIN_COMMON_CLIPS, RaggedArmsError, ThinOverlapError, arm_intersection,
+    augment_divergence_regions, condition_table, dead_zone_overlap,
+    discover_arms, edit_signature, format_report, hallucination_report,
+    matched_arms, model_arms_report, normalization_shift, rescore_cross_model,
 )
 
 REFS = {
@@ -602,6 +603,374 @@ def test_augment_is_a_no_op_when_nothing_is_silent():
     print("ok: augment_divergence_regions is a no-op on a silence-free table")
 
 
+# =============================================================================
+# THREE ARMS. This layer was built and validated against exactly two, and every
+# test below constructs a THIRD arm — because the dangerous shape here is not a
+# crash, it is a complete, plausible, well-formed report that quietly describes
+# two of the three models that were run.
+# =============================================================================
+
+THIRD = "elevenlabs-scribe"
+
+
+def _three_arm_report(tmp, spec=None, models=None, third_spec=None):
+    """A master table with THREE arms over the same 10 clips."""
+    spec = spec or CLEAN_SPEC
+    rows = (_grid("nova-3", spec) + _grid("whisper-base", spec)
+            + _grid(THIRD, third_spec or spec))
+    master = os.path.join(tmp, "master.csv")
+    manifest = os.path.join(tmp, "manifest.csv")
+    _write_csv(master, rows)
+    with open(manifest, "w", newline="", encoding="utf-8") as fh:
+        w = csv.DictWriter(fh, fieldnames=["id", "ground_truth"])
+        w.writeheader()
+        for c in CLIPS10:
+            w.writerow({"id": c, "ground_truth": REFS["u02"]})
+    return model_arms_report(master, manifest, models=models)
+
+
+def test_a_third_arm_is_never_silently_dropped():
+    """
+    THE HEADLINE THREE-ARM ASSERTION.
+
+    `matched_arms` used to default to `(SPINE_MODEL, BASELINE_MODEL)`, so a third
+    arm sitting in master.csv was discarded before a single number was computed.
+    Nothing raised, nothing was NaN, no count looked wrong — the report was
+    simply about two models while three had been paid for and run. Same family as
+    SPEC Appendix E: a guard whose failure mode is silence.
+    """
+    rows = (_condition_rows("nova-3", "c1", n_silent=0, wer_spoke=0.10)
+            + _condition_rows("whisper-base", "c1", n_silent=0, wer_spoke=0.30)
+            + _condition_rows(THIRD, "c1", n_silent=0, wer_spoke=0.50))
+
+    arms = matched_arms(rows)
+    assert set(arms) == {"nova-3", "whisper-base", THIRD}, sorted(arms)
+    assert all(len(v) == len(CLIPS10) for v in arms.values()), \
+        {m: len(v) for m, v in arms.items()}
+
+    # NEGATIVE CONTROL — pinned to the DISCOVERY DEFAULT, not to the fixture.
+    # Naming the old hardcoded pair must still give exactly two arms, and the
+    # census must say the third was excluded on purpose. If this assertion and
+    # the one above returned the same thing, the test would pass on the broken
+    # code too.
+    pair = arm_intersection(rows, ["nova-3", "whisper-base"])
+    assert set(pair["arms"]) == {"nova-3", "whisper-base"}, sorted(pair["arms"])
+    assert pair["census"]["arms_excluded"] == [THIRD], pair["census"]
+    assert set(arms) != set(pair["arms"]), \
+        "the default must not reproduce the old hardcoded pair"
+
+    # and an arm that is NOT in the table is refused rather than quietly skipped
+    try:
+        arm_intersection(rows, ["nova-3", "not-an-arm"])
+        assert False, "a requested arm missing from the table must raise"
+    except RaggedArmsError as exc:
+        assert "not-an-arm" in str(exc), exc
+
+    with tempfile.TemporaryDirectory() as tmp:
+        res = _three_arm_report(tmp)
+    for key in ("per_model", "normalization_shift", "hallucination_by_model"):
+        assert set(res[key]) == {"nova-3", "whisper-base", THIRD}, (key, res[key])
+    assert set(res["arms"]) == {"nova-3", "whisper-base", THIRD}, res["arms"]
+    assert res["arm_census"]["n_arms"] == 3, res["arm_census"]
+    assert THIRD in format_report(res), "the third arm is missing from the report text"
+    print("ok: a third arm is discovered by default and reaches every per-arm "
+          "section; naming the old pair still excludes it, loudly")
+
+
+def _named_third_arm_report(tmp, third, spec=None, third_spec=None):
+    """Three-arm master table where the THIRD arm's NAME is the variable.
+
+    The name is what decides WER comparability, so it has to be the only thing
+    that changes between the test and its control — same rows, same grid, same
+    everything else.
+    """
+    spec = spec or CLEAN_SPEC
+    rows = (_grid("nova-3", spec) + _grid("whisper-base", spec)
+            + _grid(third, third_spec or spec))
+    master = os.path.join(tmp, f"master_{third}.csv")
+    manifest = os.path.join(tmp, "manifest.csv")
+    _write_csv(master, rows)
+    with open(manifest, "w", newline="", encoding="utf-8") as fh:
+        w = csv.DictWriter(fh, fieldnames=["id", "ground_truth"])
+        w.writeheader()
+        for c in CLIPS10:
+            w.writerow({"id": c, "ground_truth": REFS["u02"]})
+    return model_arms_report(master, manifest)
+
+
+def test_a_wer_incomparable_arm_is_excluded_from_wer_and_kept_within_model():
+    """
+    THE SCOPE DECISION, made executable in BOTH directions.
+
+    `elevenlabs-scribe`'s orthography is non-deterministic across identical
+    calls, so its WER offset is a per-call draw rather than a constant that can
+    be measured once and subtracted. It is therefore excluded from every
+    cross-arm WER comparison — and it is NOT excluded from the within-model
+    analyses, which are computed against its own distribution and never subtract
+    one arm's number from another's.
+
+    Both halves are asserted, because either one alone is satisfiable by a wrong
+    implementation: dropping the arm entirely passes the first, and doing
+    nothing passes the second.
+    """
+    # The third arm is planted WORSE than the other two, so that keeping it
+    # widens the WER gaps. If it scored identically the exclusion would be
+    # undetectable and the control below could not fail.
+    third_spec = {k: (v[0], min(1.0, v[1] + 0.30), v[2], v[3])
+                  for k, v in CLEAN_SPEC.items()}
+    with tempfile.TemporaryDirectory() as tmp:
+        res = _named_third_arm_report(tmp, THIRD, third_spec=third_spec)
+        control = _named_third_arm_report(tmp, "some-other-arm",
+                                          third_spec=third_spec)
+
+    # --- half 1: OUT of every cross-model WER path -------------------------
+    wc = res["wer_comparability"]
+    assert wc["excluded"] == [THIRD], wc
+    assert set(wc["comparable"]) == {"nova-3", "whisper-base"}, wc
+    assert wc["reasons"][THIRD], "an exclusion with no stated reason gets 'fixed'"
+    assert res["divergence_regions"], "fixture produced no regions"
+    for r in res["divergence_regions"]:
+        assert THIRD not in r["wer_by_model"], r["wer_by_model"]
+        assert THIRD not in r["n_by_model"], r["n_by_model"]
+        assert r["wer_arms"] == ["nova-3", "whisper-base"], r["wer_arms"]
+        assert r["models_excluded_wer_incomparable"] == [THIRD], r
+        # ... but the WITHIN-MODEL rate in the same region still covers it
+        assert THIRD in r["dead_zone_rate_by_model"], r["dead_zone_rate_by_model"]
+        assert THIRD in r["dead_zone_rate_arms"], r
+    assert res["per_model"][THIRD]["wer_comparable"] is False
+    assert res["normalization_shift"][THIRD]["wer_comparable"] is False
+
+    # --- half 2: IN every within-model analysis ---------------------------
+    for key in ("per_model", "normalization_shift", "hallucination_by_model"):
+        assert THIRD in res[key], (key, sorted(res[key]))
+    d = res["per_model"][THIRD]
+    for k in ("dead_zone_rate", "n_dead_zones", "shape", "silence",
+              "n_mute_zones", "wer_mean_strict", "wer_mean_strict_spoke"):
+        assert k in d, (k, sorted(d))
+    assert np.isfinite(d["shape"]["spearman"]), d["shape"]
+    assert THIRD in res["dead_zone_overlap"]["n_by_model"], res["dead_zone_overlap"]
+
+    # --- NEGATIVE CONTROL: same rows, comparable NAME ----------------------
+    cwc = control["wer_comparability"]
+    assert cwc["excluded"] == [], cwc
+    for r in control["divergence_regions"]:
+        assert "some-other-arm" in r["wer_by_model"], r["wer_by_model"]
+    assert control["per_model"]["some-other-arm"]["wer_comparable"] is True
+    # and the exclusion actually MOVED the WER comparison — if the two runs gave
+    # identical gaps, the mechanism would be a relabelling with no effect
+    assert ([round(r["wer_gap"], 12) for r in res["divergence_regions"]]
+            != [round(r["wer_gap"], 12) for r in control["divergence_regions"]]), \
+        "the excluded arm never affected a WER gap in this fixture"
+
+    # --- the report TEXT must SAY it, not just the payload ------------------
+    txt = format_report(res)
+    assert "WER comparability" in txt, txt[:400]
+    assert f"cross-model WER comparison OUT: {THIRD}" in txt, txt[:1500]
+    assert "non-deterministic" in txt.lower(), "the reason must reach the reader"
+    assert "‡" in txt, "excluded arms' WER columns must be marked"
+    assert "NOT CLAIMABLE" in txt, "the edit-composition caveat must be stated"
+    ctxt = format_report(control)
+    assert "cross-model WER comparison OUT: (none)" in ctxt, ctxt[:1500]
+    assert "‡" not in ctxt, "nothing may be marked when nothing is excluded"
+
+    print(f"ok: {THIRD} is excluded from every cross-arm WER path (regions, "
+          f"gaps, coverage) and kept in every within-model one (dead-zone rate "
+          f"{d['dead_zone_rate']:.3f}, shape {d['shape']['spearman']:+.3f}); an "
+          f"identically-shaped arm under a comparable name is untouched, and "
+          f"the report states the exclusion and its reason")
+
+
+def test_dead_zone_overlap_covers_every_arm_and_every_pair():
+    """
+    A single `jaccard` between two hardcoded arms cannot describe three.
+
+    Planted sets: A={c1,c2}, B={c2,c3}, C={c3}. No cell is in all three, so the
+    all-arm Jaccard is 0 — and 0 is exactly the number that MUST NOT be allowed
+    to stand alone, because it cannot distinguish "no two arms agree" from "two
+    agree perfectly and the third is disjoint". The pairwise table is what
+    separates them.
+    """
+    sets = {"A": {"c1", "c2"}, "B": {"c2", "c3"}, "C": {"c3"}}
+    ov = dead_zone_overlap(sets)
+
+    assert ov["shared"] == [], ov["shared"]           # nothing in ALL three
+    assert ov["jaccard"] == 0.0, ov["jaccard"]
+    assert ov["n_union"] == 3, ov
+    assert ov["A_only"] == ["c1"], ov                 # in A and in NO other arm
+    assert ov["B_only"] == [], ov                     # c2 with A, c3 with C
+    assert ov["C_only"] == [], ov
+    pw = ov["pairwise"]
+    assert set(pw) == {"A|B", "A|C", "B|C"}, sorted(pw)
+    assert pw["A|B"]["jaccard"] == 1 / 3, pw["A|B"]   # {c2} of {c1,c2,c3}
+    assert pw["A|C"]["jaccard"] == 0.0, pw["A|C"]
+    assert pw["B|C"]["jaccard"] == 0.5, pw["B|C"]     # {c3} of {c2,c3}
+
+    # NEGATIVE CONTROL — the generalization must REDUCE to the old number, not
+    # merely produce some number. At two arms the all-arm Jaccard has to be
+    # bit-identical to the pairwise one, or grid-v1's published overlap changed
+    # meaning without changing name.
+    two = dead_zone_overlap({"A": sets["A"], "B": sets["B"]})
+    assert two["jaccard"] == two["pairwise"]["A|B"]["jaccard"] == 1 / 3, two
+    assert two["A_only"] == ["c1"] and two["B_only"] == ["c3"], two
+
+    # one arm is not an overlap
+    try:
+        dead_zone_overlap({"A": sets["A"]})
+        assert False, "a single arm must raise, not report perfect agreement"
+    except ValueError as exc:
+        assert ">= 2" in str(exc), exc
+    print("ok: dead-zone overlap is all-arm + all-pairs, and reduces exactly to "
+          "the two-arm value when there are two arms")
+
+
+def test_an_empty_intersection_raises_instead_of_comparing_nothing():
+    """
+    The N-arm intersection SHRINKS as arms are added, and an empty one defeats
+    every other guard: with no common cells all arms are equally empty, so the
+    per-arm row-count identity passes and the equal-size check passes too.
+    """
+    disjoint = ([_row("nova-3", c, "c1", 0.1, 0.9, "a") for c in ("u01", "u02")]
+                + [_row("whisper-base", c, "c1", 0.2, 0.5, "a") for c in ("u03", "u04")]
+                + [_row(THIRD, c, "c1", 0.3, 0.4, "a") for c in ("u05", "u06")])
+    try:
+        matched_arms(disjoint)
+        assert False, "an empty intersection must raise"
+    except ThinOverlapError as exc:
+        assert "0 common clip" in str(exc), exc
+        assert isinstance(exc, RaggedArmsError), "must stay catchable as ragged"
+
+    # THE GUARD'S NECESSITY, shown rather than asserted: the checks that used to
+    # be the only ones there all pass on this input, because every arm is
+    # equally empty. Without the floor this table produces a report over nothing.
+    per_arm = {m: {(r["clip_id"], r["condition_name"]) for r in disjoint
+                   if r["model"] == m}
+               for m in ("nova-3", "whisper-base", THIRD)}
+    common = set.intersection(*per_arm.values())
+    kept = {m: len([1 for r in disjoint if r["model"] == m
+                    and (r["clip_id"], r["condition_name"]) in common])
+            for m in per_arm}
+    assert common == set() and set(kept.values()) == {0}, (common, kept)
+
+    # NEGATIVE CONTROL: add ONE shared clip and the same call succeeds, with the
+    # census naming the single clip everything is now computed over.
+    shared = disjoint + [_row(m, "u09", "c1", 0.2, 0.6, "a")
+                         for m in ("nova-3", "whisper-base", THIRD)]
+    res = arm_intersection(shared)
+    assert res["census"]["n_common_clips"] == 1, res["census"]
+    assert res["census"]["common_clips"] == ["u09"], res["census"]
+    assert all(len(v) == 1 for v in res["arms"].values()), res["arms"]
+    print("ok: an empty three-arm intersection raises; one shared clip is "
+          "enough to proceed and the census says so")
+
+
+def test_the_reporting_floor_is_stricter_than_the_splitter():
+    """
+    Two floors, two jobs. Splitting arms needs only correctness (a non-empty
+    intersection); QUOTING per-condition means needs enough clips for the mean to
+    describe an acoustic condition rather than the utterances that overlapped.
+    """
+    two_clips = [_row(m, c, "c1", 0.4, 0.8, "a")
+                 for m in ("nova-3", "whisper-base", THIRD)
+                 for c in ("u01", "u02")]
+    matched_arms(two_clips)                          # the splitter is content
+
+    try:
+        arm_intersection(two_clips, min_common_clips=MIN_COMMON_CLIPS)
+        assert False, "the reporting floor must reject a 2-clip intersection"
+    except ThinOverlapError as exc:
+        assert "below the floor of 3" in str(exc), exc
+
+    # NEGATIVE CONTROL: one more shared clip and the reporting floor is met, so
+    # the raise is pinned to the clip COUNT and not to anything else about the
+    # fixture (three arms, one condition, identical WERs are unchanged).
+    three_clips = two_clips + [_row(m, "u03", "c1", 0.4, 0.8, "a")
+                               for m in ("nova-3", "whisper-base", THIRD)]
+    ok = arm_intersection(three_clips, min_common_clips=MIN_COMMON_CLIPS)
+    assert ok["census"]["n_common_clips"] == 3, ok["census"]
+    print("ok: the splitter's floor is correctness (non-empty), the report's is "
+          "statistical adequacy (>= 3 clips)")
+
+
+def test_hallucination_is_measured_for_every_arm():
+    """
+    `hallucination_report` ran on `arms[BASELINE_MODEL]` only. A third arm that
+    invents fluent text — the failure mode WER structurally understates, since
+    insertions are unbounded while WER caps at one error per reference word —
+    would have gone unmeasured while the report still carried a confident
+    hallucination section about a different model.
+    """
+    ref = REFS["u02"]
+    refs10 = {c: ref for c in CLIPS10}
+    blow_up = ref + " " + " ".join(["and then the operator said hold please"] * 6)
+    rows = ([_row("nova-3", c, "c1", 0.1, 0.9, ref) for c in CLIPS10]
+            + [_row("whisper-base", c, "c1", 0.2, 0.5, ref) for c in CLIPS10]
+            + [_row(THIRD, c, "c1", 0.3, 0.4, blow_up) for c in CLIPS10])
+    arms = matched_arms(rows)
+    halluc = {m: hallucination_report(arms[m], refs10) for m in arms}
+
+    assert halluc[THIRD]["frac_rows_over_2x"] == 1.0, halluc[THIRD]
+    # NEGATIVE CONTROL: the other two arms transcribe the reference exactly, so
+    # a test that merely found "some arm hallucinates" could not tell them apart.
+    for m in ("nova-3", "whisper-base"):
+        assert halluc[m]["median_len_ratio"] == 1.0, (m, halluc[m])
+        assert halluc[m]["frac_rows_over_2x"] == 0.0, (m, halluc[m])
+
+    with tempfile.TemporaryDirectory() as tmp:
+        rows3 = ([_row("nova-3", c, "c1", 0.1, 0.9, ref) for c in CLIPS10]
+                 + [_row("whisper-base", c, "c1", 0.2, 0.5, ref) for c in CLIPS10]
+                 + [_row(THIRD, c, "c1", 0.3, 0.4, blow_up) for c in CLIPS10])
+        master, manifest = os.path.join(tmp, "m.csv"), os.path.join(tmp, "man.csv")
+        _write_csv(master, rows3)
+        with open(manifest, "w", newline="", encoding="utf-8") as fh:
+            w = csv.DictWriter(fh, fieldnames=["id", "ground_truth"])
+            w.writeheader()
+            for c in CLIPS10:
+                w.writerow({"id": c, "ground_truth": ref})
+        res = model_arms_report(master, manifest)
+
+    assert set(res["hallucination_by_model"]) == set(res["arms"]), res["arms"]
+    # The legacy key must never hold another arm's numbers under this arm's name.
+    assert res["whisper_hallucination"] == res["hallucination_by_model"]["whisper-base"]
+    assert res["whisper_hallucination"]["frac_rows_over_2x"] == 0.0, \
+        "the legacy key silently absorbed the third arm's hallucination"
+    txt = format_report(res)
+    assert f"worst arm: {THIRD}" in txt, txt[-1200:]
+    print("ok: hallucination is measured per arm; the legacy whisper key keeps "
+          "describing whisper and the worst arm is named by measurement")
+
+
+def test_arm_census_reports_the_shrinkage_it_causes():
+    """
+    Arms legitimately run different clip subsets (SPEC: nova-3 on 40, the local
+    arms on the 10-clip AL set). That is report-and-proceed, not an error — but
+    the restriction has to be VISIBLE, because every WER downstream is a WER over
+    the intersection and reads exactly like a corpus-wide number otherwise. SPEC
+    Appendix C.8 measured what the silent version costs: 7.8 WER points.
+    """
+    rows = ([_row("nova-3", c, "c1", 0.1, 0.9, "a") for c in CLIPS10]
+            + [_row("whisper-base", c, "c1", 0.2, 0.5, "a") for c in CLIPS10[:5]]
+            + [_row(THIRD, c, "c1", 0.3, 0.4, "a") for c in CLIPS10[:4]])
+    cen = arm_intersection(rows)["census"]
+
+    assert cen["n_common_clips"] == 4, cen
+    assert cen["clips_matched"] is False and cen["cells_matched"] is False, cen
+    assert cen["per_arm"]["nova-3"]["n_rows_dropped_by_intersection"] == 6, cen
+    assert cen["per_arm"]["whisper-base"]["n_rows_dropped_by_intersection"] == 1, cen
+    assert cen["per_arm"][THIRD]["n_rows_dropped_by_intersection"] == 0, cen
+    assert cen["n_rows_dropped_by_intersection"] == 7, cen
+
+    # NEGATIVE CONTROL: identical clip sets -> nothing dropped and the census
+    # says so, so the flags above are pinned to the ragged coverage and not to
+    # the mere presence of three arms.
+    even = [_row(m, c, "c1", 0.1, 0.9, "a")
+            for m in ("nova-3", "whisper-base", THIRD) for c in CLIPS10[:4]]
+    cen2 = arm_intersection(even)["census"]
+    assert cen2["clips_matched"] is True and cen2["cells_matched"] is True, cen2
+    assert cen2["n_rows_dropped_by_intersection"] == 0, cen2
+    print("ok: the arm census reports per-arm coverage and exactly how many rows "
+          "the N-arm intersection dropped")
+
+
 if __name__ == "__main__":
     test_arms_are_intersected_to_common_cells()
     test_failed_rows_are_dropped_not_scored()
@@ -623,6 +992,13 @@ if __name__ == "__main__":
     test_a_mute_condition_is_never_a_dead_zone_and_is_still_named()
     test_divergence_regions_carry_the_corrected_rate_and_the_old_one()
     test_augment_is_a_no_op_when_nothing_is_silent()
+    test_a_third_arm_is_never_silently_dropped()
+    test_a_wer_incomparable_arm_is_excluded_from_wer_and_kept_within_model()
+    test_dead_zone_overlap_covers_every_arm_and_every_pair()
+    test_an_empty_intersection_raises_instead_of_comparing_nothing()
+    test_the_reporting_floor_is_stricter_than_the_splitter()
+    test_hallucination_is_measured_for_every_arm()
+    test_arm_census_reports_the_shrinkage_it_causes()
     print("\nL1 comparison layer verified on planted structure — including that a "
           "confidence is never thresholded against an accuracy measured on a "
           "different set of clips (both pairings published, silence-driven and "

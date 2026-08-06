@@ -1137,23 +1137,64 @@
     // measurement; the cross-model column is what remains once both arms are
     // made to agree about orthography. Showing only the second would hide how
     // large the formatting artefact was.
+    // WER COMPARABILITY. This table IS a cross-arm WER ranking, so the arms
+    // excluded from that comparison must be marked here or the page quietly
+    // invites the exact reading the analysis refuses. The dead-zone rate and
+    // the confidence shape are NOT marked: those are within-model and every arm
+    // is a first-class member of them.
+    var wc = d.wer_comparability || {};
+    var werOut = wc.excluded || [];
+    var mark = function (a, s) { return a.wer_comparable === false ? s + " ‡" : s; };
     var head = ["model", "WER strict", "WER cross-model", "dead-zone rate", "sub", "del", "ins", "conf vs WER"];
     var rows = arms.map(function (a) {
       var e = a.edits || {};
-      return [a.model, f3(a.wer_strict), f3(a.wer_crossmodel), pct(a.dead_zone_rate),
-              f3(e.sub), f3(e.del), f3(e.ins), f2((a.shape || {}).spearman)];
+      return [a.model, mark(a, f3(a.wer_strict)), mark(a, f3(a.wer_crossmodel)),
+              pct(a.dead_zone_rate), mark(a, f3(e.sub)), mark(a, f3(e.del)),
+              mark(a, f3(e.ins)), f2((a.shape || {}).spearman)];
     });
     host.appendChild(simpleTable(head, rows));
+    if (werOut.length) {
+      host.appendChild(el("p", { className: "note", text:
+        "‡ " + werOut.join(", ") + " is EXCLUDED from cross-model WER "
+        + "comparison: its orthography is non-deterministic across identical "
+        + "calls, so its WER offset is a per-call draw and not a constant that "
+        + "can be measured once and subtracted. Its WER and edit-composition "
+        + "cells are its own internal scale — do not rank them against another "
+        + "arm's, and in particular a high `sub` here is orthography, not "
+        + "evidence that it substitutes more. Its dead-zone rate and "
+        + "confidence-vs-WER shape are unmarked because they are computed "
+        + "within the arm and are unaffected." }));
+    }
+
+    // Overlap over N arms. `jaccard` is the ALL-ARM value (identical to the
+    // pairwise one when there are exactly two), so the label must say which,
+    // or a three-arm number reads as a two-arm one.
+    var nArms = arms.length;
+    var stats = [
+      [nArms > 2 ? "Jaccard (all " + nArms + " arms)" : "Jaccard", f2(ov.jaccard),
+       nArms > 2 ? "cells every arm flags dangerous" : "same cells flagged dangerous?"],
+      ["shared", String((ov.shared || []).length),
+       nArms > 2 ? "dead zones present in EVERY arm" : "dead zones present in both arms"],
+      ["hallucination rate", pct(hall.frac_rows_over_2x),
+       "rows where hyp > 2x ref length" + (hall.model ? " (" + hall.model + ", worst arm)" : "")]
+    ];
+    var pw = ov.pairwise || {};
+    if (nArms > 2) {
+      // An all-arm Jaccard of 0 cannot distinguish "no two arms agree" from
+      // "two agree perfectly and the third is disjoint". Name the pairs.
+      Object.keys(pw).forEach(function (k) {
+        stats.push([k.replace("|", " vs "), f2(pw[k].jaccard),
+                    "shared " + pw[k].n_shared + " of " + pw[k].n_union]);
+      });
+    }
 
     host.appendChild(el("div", { className: "two-col", style: "margin-top:22px" }, [
-      el("div", {}, [subhead("where the two arms disagree most"), divergenceList(d.divergence_regions || [])]),
+      el("div", {}, [subhead(nArms > 2 ? "where the arms disagree most" : "where the two arms disagree most"),
+                     divergenceList(d.divergence_regions || [])]),
       el("div", {}, [
         subhead("dead-zone overlap"),
-        statList([
-          ["Jaccard", f2(ov.jaccard), "same cells flagged dangerous?"],
-          ["shared", String((ov.shared || []).length), "dead zones present in both arms"],
-          ["hallucination rate", pct(hall.frac_rows_over_2x), "rows where hyp > 2x ref length"]
-        ]),
+        statList(stats),
+        censusNote(d.census),
         normNote(d.normalization_shift)
       ])
     ]));
@@ -1163,7 +1204,8 @@
     // transcript makes the distinction in a way no summary statistic does.
     var ex = (hall.examples || [])[0];
     if (ex) {
-      host.appendChild(sighead("exhibit — the open baseline invents fluent text under heavy degradation"));
+      host.appendChild(sighead("exhibit — " + (hall.model || "the open baseline")
+        + " invents fluent text under heavy degradation"));
       host.appendChild(el("div", { className: "exhibit" }, [
         el("p", { className: "meta", text: "clip " + ex.clip_id + " at " + ex.condition_name + " — "
           + ex.n_ref + " reference words came back as " + ex.n_hyp
@@ -1185,6 +1227,25 @@
         + Object.keys(by).map(function (m) { return m + " " + f2(by[m]); }).join("  vs  ") + ")" }));
     });
     return ul;
+  }
+
+  // The arms are intersected to the cells EVERY arm ran, and that intersection
+  // shrinks as arms are added. A page that shows only the resulting numbers
+  // cannot show that they narrowed, so the census travels with them.
+  function censusNote(cen) {
+    if (!cen) return null;
+    var bits = "compared over " + cen.n_common_cells + " cells ("
+      + cen.n_common_clips + " clips x " + cen.n_common_conditions + " conditions) that all "
+      + cen.n_arms + " arms ran";
+    if (!cen.cells_matched) {
+      bits += ". The arms ran different cell sets, so "
+        + cen.n_rows_dropped_by_intersection
+        + " rows fall outside the comparison — these are not each arm's corpus-wide numbers.";
+    }
+    if ((cen.arms_excluded || []).length) {
+      bits += " Arms present in the table but NOT compared: " + cen.arms_excluded.join(", ") + ".";
+    }
+    return el("p", { className: "prov", text: bits });
   }
 
   function normNote(sh) {

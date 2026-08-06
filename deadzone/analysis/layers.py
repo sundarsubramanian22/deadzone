@@ -383,12 +383,21 @@ def run_l1_model_comparison(rows: Sequence[Mapping],
     if len(by_model_raw) < 2:
         raise ValueError(
             "L1 needs >= 2 models in the table; got "
-            f"{sorted(by_model_raw)} (run the grid with both arms first)")
+            f"{sorted(by_model_raw)} (run the grid for another arm first). "
+            "Note this compares EVERY model present, not a fixed pair.")
 
     tables = {m: (aggregate_by_condition(r) if aggregate == "condition" else r)
               for m, r in by_model_raw.items()}
 
-    result = compare_models(tables, space, n_bins, wer_hi, conf_pct_hi)
+    # `exclude_incomparable=True` is typed here, deliberately, and it is the
+    # only reason this call does not raise on a three-arm table containing an
+    # arm from `WER_INCOMPARABLE_ARMS`. It restricts the DIVERGENCE REGIONS (a
+    # cross-arm WER ranking) and nothing else: `per_model` below still covers
+    # every arm, because a dead-zone rate and a confidence shape are computed
+    # within an arm. The census is republished so the payload states which arms
+    # each half is over.
+    result = compare_models(tables, space, n_bins, wer_hi, conf_pct_hi,
+                            exclude_incomparable=True)
 
     # Enrich each model's dead zones with the within-model percentile that made
     # them dead zones, and rank them — this is the table the write-up quotes.
@@ -422,6 +431,12 @@ def run_l1_model_comparison(rows: Sequence[Mapping],
     report = {
         "layer": "L1",
         "models": list(tables.keys()),
+        # The two arm sets, named apart. `models` is the within-model set
+        # (everything measured); `models_wer_compared` is the subset the WER
+        # gaps below are over.
+        "models_wer_compared": result.get("models_wer_compared",
+                                          list(tables.keys())),
+        "wer_comparability": result.get("wer_comparability", {}),
         "aggregate": aggregate,
         "thresholds": {"wer_hi": wer_hi, "conf_pct_hi": conf_pct_hi,
                        "n_bins": n_bins},

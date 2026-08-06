@@ -444,7 +444,36 @@ def test_seed_band_refuses_a_fake_band():
           "seeds still produce a band")
 
 
+def test_the_statement_names_the_arm_it_was_fit_on():
+    """
+    L2 is single-model BY DESIGN — confidences are never pooled across arms — but
+    `--model` is a parameter, and the plain-language statement hardcoded the
+    spine's name. Run it on a third arm and it produced a fluent, numerate
+    sentence attributing that arm's ECE to nova-3, with nothing in the output to
+    contradict it. Purely a label, and purely the dangerous class: plausible.
+    """
+    third = "elevenlabs-scribe"
+    rows = make_master_rows()
+    relabelled = [dict(r, model=third) for r in rows]
+
+    rep = CR.build_report(model=third, seeds=(0, 1), rows=relabelled)
+    assert rep["model"] == third, rep["model"]
+    assert f"{third}'s raw word confidence" in rep["statement"], rep["statement"][:200]
+    assert "nova-3" not in rep["statement"], rep["statement"][:200]
+    assert "nova-3" not in CR.format_report(rep)
+
+    # NEGATIVE CONTROL: the same call on the spine still says nova-3, so the
+    # assertion above is about the PARAMETER and not about a string that was
+    # simply deleted.
+    spine = CR.build_report(model="nova-3", seeds=(0, 1), rows=rows)
+    assert "nova-3's raw word confidence" in spine["statement"], spine["statement"][:200]
+    assert third not in spine["statement"]
+    print(f"ok: the L2 statement names the arm it was fit on ({third} vs nova-3), "
+          "never a hardcoded one")
+
+
 if __name__ == "__main__":
+    test_the_statement_names_the_arm_it_was_fit_on()
     test_metrics_sane()
     test_temperature_reduces_ece()
     test_feature_calibrator_beats_temp()

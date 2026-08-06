@@ -36,8 +36,10 @@ import numpy as np
 
 from deadzone.design import DEFAULT_FACTOR_SPACE
 from deadzone.model_compare import (
-    MODEL_REGISTRY, get_model, compare_models, dead_zone_flags,
-    find_divergence_regions, within_model_conf_percentile, confidence_wer_shape,
+    MODEL_REGISTRY, WER_INCOMPARABLE_ARMS, WerIncomparableArmError, get_model,
+    compare_models, dead_zone_flags, find_divergence_regions, is_wer_comparable,
+    within_model_conf_percentile, confidence_wer_shape, wer_comparability,
+    wer_comparable_tables,
 )
 from deadzone.audio_pipeline import _parse_vosk_result
 
@@ -75,14 +77,35 @@ def build_tables():
     return {"strong": strong, "weak": weak}
 
 
-# ---- 1: registry is three one-line arms, resolvable but not called ----------
+# ---- 1: registry is N one-line arms, resolvable but not called -------------
 
 def test_registry():
-    assert set(MODEL_REGISTRY) == {"nova-3", "whisper-base", "vosk"}, MODEL_REGISTRY
-    assert len(MODEL_REGISTRY) == 3
+    """
+    The registry is OPEN. It is asserted as a contract — every listed arm
+    resolves to a callable, no duplicates, the spine and the open baseline are
+    both there — and NOT as a frozen set of names.
+
+    Pinning the exact membership was itself a two-arm-era assumption: it turns
+    "a new arm was added" into a test failure that reads like a regression, which
+    trains the next person to edit the assertion rather than to check whether the
+    arm was wired in correctly. The properties below fail for a BROKEN arm and
+    pass for a new working one, which is the distinction that matters.
+    """
+    required = {"nova-3", "whisper-base"}             # the spine + the open baseline
+    assert required <= set(MODEL_REGISTRY), (required - set(MODEL_REGISTRY))
+    assert len(set(MODEL_REGISTRY)) == len(MODEL_REGISTRY), MODEL_REGISTRY
+    assert len(MODEL_REGISTRY) >= 2, MODEL_REGISTRY
     for name in MODEL_REGISTRY:
+        assert isinstance(name, str) and name, name
         assert callable(get_model(name)), name        # resolvable, NOT invoked
-    print(f"OK 1: MODEL_REGISTRY = {tuple(MODEL_REGISTRY)} (each a one-line arm)")
+    # negative control: the contract is a real filter, not a tautology.
+    try:
+        get_model("no-such-arm")
+        assert False, "an unknown arm must raise, not resolve to something"
+    except KeyError as exc:
+        assert "no-such-arm" in str(exc), exc
+    print(f"OK 1: MODEL_REGISTRY = {tuple(MODEL_REGISTRY)} "
+          f"({len(MODEL_REGISTRY)} one-line arms, each resolvable)")
 
 
 # ---- 2: cross-scale confidence handled WITHIN each model --------------------
@@ -254,6 +277,277 @@ def test_ragged_region_coverage_raises():
           "raises rather than reporting a confounded WER gap")
 
 
+# ---- 4c: three arms — the gap is over ALL of them, and coverage is named ----
+
+def test_divergence_over_three_arms_uses_every_arm():
+    """
+    `wer_gap` is max - min over the arms in a region, and with three arms the
+    MIDDLE arm is in neither `worse_model` nor `better_model`. Two things must
+    hold: the third arm actually participates in the gap, and an arm with no
+    rows in a region is NAMED rather than dropped — "these arms diverge here"
+    means something different when a third arm was never measured in that slice.
+    """
+    tables = build_tables()
+    # a middling arm: worse than `strong`, better than `weak` everywhere.
+    middle = [dict(r, wer=min(1.0, r["wer"] + 0.12), mean_conf=0.62)
+              for r in tables["strong"]]
+    three = {"strong": tables["strong"], "middle": middle, "weak": tables["weak"]}
+
+    regions = find_divergence_regions(three, SPACE, n_bins=4)
+    assert regions, "no regions produced"
+    for r in regions:
+        assert set(r["wer_by_model"]) == {"strong", "middle", "weak"}, r
+        assert set(r["n_by_model"]) == {"strong", "middle", "weak"}, r
+        assert r["models_absent"] == [], r
+        vals = [v for v in r["wer_by_model"].values() if np.isfinite(v)]
+        assert abs(r["wer_gap"] - (max(vals) - min(vals))) < 1e-12, r
+    # `worse_model`/`better_model` name only the extremes, so with three arms
+    # there are regions whose middle arm appears in NEITHER field. That is why a
+    # consumer must iterate `wer_by_model` rather than read the two names.
+    hidden = [r for r in regions
+              if "middle" not in (r["worse_model"], r["better_model"])]
+    assert hidden, "no region exercised the third-arm-not-an-extreme case"
+
+    # NEGATIVE CONTROL — the third arm must MATTER. Drop the extreme arm and the
+    # top region's gap has to shrink; if it did not, this test would pass on an
+    # implementation that quietly compared only two arms.
+    top3 = regions[0]
+    top2 = find_divergence_regions({"strong": tables["strong"], "middle": middle},
+                                   SPACE, n_bins=4)[0]
+    assert top2["wer_gap"] < top3["wer_gap"] - 1e-9, (top2["wer_gap"], top3["wer_gap"])
+
+    # An arm with NO rows in a whole region is named, not silently omitted. The
+    # fixture keeps every arm's per-bin count equal on the continuous factors
+    # (so the ragged-coverage guard is not what fires) and differs only in which
+    # noise_type levels it covers — arm C never ran `engine`.
+    def _cover(model_wer, levels):
+        return [{"rt60": rt, "snr_db": snr, "noise_type": lv, "codec": "none",
+                 "mic_rolloff": 0.0, "wer": model_wer(rt, lv),
+                 "mean_conf": 0.9 - 0.5 * model_wer(rt, lv)}
+                for rt in (0.2, 0.6, 1.0) for snr in (0.0, 25.0) for lv in levels]
+
+    absent = {
+        "A": _cover(lambda rt, lv: 0.10 + 0.1 * rt, ("babble", "engine")),
+        "B": _cover(lambda rt, lv: 0.40 + 0.1 * rt, ("babble", "engine")),
+        "C": _cover(lambda rt, lv: 0.25 + 0.1 * rt, ("babble", "road")),
+    }
+    regions_a = find_divergence_regions(absent, SPACE, n_bins=4)
+    by_span = {(r["factor"], str(r["span"])): r for r in regions_a}
+    eng = by_span[("noise_type", "engine")]
+    assert eng["models_absent"] == ["C"], eng
+    assert eng["models_compared"] == ["A", "B"], eng
+    assert eng["n_by_model"]["C"] == 0, eng
+    # NEGATIVE CONTROL: the level every arm DID run reports nobody absent, so
+    # the flag is pinned to the missing coverage rather than to the fixture.
+    bab = by_span[("noise_type", "babble")]
+    assert bab["models_absent"] == [] and set(bab["models_compared"]) == {"A", "B", "C"}, bab
+    print(f"ok 4c: three-arm gap spans all arms (top {top3['wer_gap']:.3f} vs "
+          f"{top2['wer_gap']:.3f} for two); an arm absent from a whole region is "
+          f"named instead of dropped")
+
+
+# ---- 4d: WER comparability — an arm property, enforced, with no bypass -----
+
+def _scribe_arm(tables):
+    """A third arm named `elevenlabs-scribe`, over the SAME grid as the others.
+
+    Planted so it is a real arm rather than a placeholder: its own confident-
+    but-wrong region above rt60 0.7 (so its within-model dead-zone rate is
+    NON-zero and its confidence shape is finite), and a WER that makes it the
+    worst arm in the low-rt60 bins (so dropping it demonstrably moves the gaps).
+    """
+    out = []
+    for r in tables["strong"]:
+        hot = r["rt60"] > 0.7
+        wer = 0.55 if hot else min(1.0, r["wer"] + 0.2)
+        conf = 0.93 if hot else 0.60 + 0.006 * r["snr_db"]
+        out.append(dict(r, wer=wer, mean_conf=conf))
+    return out
+
+
+def test_wer_incomparable_arm_cannot_enter_a_cross_model_wer_comparison():
+    """
+    Some arms may be measured but NOT ranked by WER against other arms.
+
+    `elevenlabs-scribe`'s orthography is non-deterministic: four repeat calls on
+    byte-identical audio returned different transcripts on 5 of 6 probe clips
+    (`A7X42` vs `A seven X four two`), worth up to 0.727 strict WER on the SAME
+    input. Whisper's formatting offset is a constant (+0.090) and can be
+    measured once and subtracted; a per-call draw cannot. A WER gap that is a
+    coin flip on identical input is not a measurement of the model.
+
+    The failure this test exists to prevent is not a crash. It is a divergence
+    table that comes out complete, ranked and well-formed, whose top region is a
+    formatting draw wearing an acoustic result's name. So the cross-model WER
+    path RAISES on such an arm, and the only way past is a keyword the caller
+    has to type — there is no argument that includes the arm.
+    """
+    tables = build_tables()
+    scribe = _scribe_arm(tables)
+    three = {"strong": tables["strong"], "weak": tables["weak"],
+             "elevenlabs-scribe": scribe}
+
+    # 1. it RAISES, and the message carries the evidence rather than a rule name
+    try:
+        find_divergence_regions(three, SPACE, n_bins=4)
+        assert False, "a WER-incomparable arm must not enter a WER comparison"
+    except WerIncomparableArmError as exc:
+        assert "elevenlabs-scribe" in str(exc), exc
+        assert "exclude_incomparable=True" in str(exc), exc
+        assert "identical" in str(exc).lower(), "the reason must travel with the raise"
+
+    # 2. NEGATIVE CONTROL — pinned to the ARM, not to "three arms" or to the
+    #    fixture. Rename the same rows to a comparable arm and it must NOT raise.
+    #    Without this the test would pass on an implementation that refused any
+    #    third arm, or refused everything.
+    renamed = {"strong": tables["strong"], "weak": tables["weak"],
+               "some-other-arm": scribe}
+    ok_regions = find_divergence_regions(renamed, SPACE, n_bins=4)
+    assert ok_regions, "the comparable-arm control produced no regions"
+    assert all("some-other-arm" in r["wer_by_model"] for r in ok_regions)
+    assert all(not r["models_excluded_wer_incomparable"] for r in ok_regions)
+
+    # 3. with the exclusion typed at the call site it proceeds, WITHOUT the arm,
+    #    and every region says so
+    kept = find_divergence_regions(three, SPACE, n_bins=4,
+                                   exclude_incomparable=True)
+    assert kept, "no regions after exclusion"
+    for r in kept:
+        assert "elevenlabs-scribe" not in r["wer_by_model"], r
+        assert set(r["wer_by_model"]) == {"strong", "weak"}, r
+        assert r["models_excluded_wer_incomparable"] == ["elevenlabs-scribe"], r
+        assert r["wer_comparability"]["comparable"] == ["strong", "weak"], r
+
+    # 4. and the exclusion is REAL: it must reproduce the two-arm scan exactly,
+    #    AND differ from the scan that keeps the arm. Without both halves the
+    #    mechanism could be a no-op that only edits the labels.
+    two_only = find_divergence_regions(
+        {"strong": tables["strong"], "weak": tables["weak"]}, SPACE, n_bins=4)
+    assert ([round(r["wer_gap"], 12) for r in kept]
+            == [round(r["wer_gap"], 12) for r in two_only]), \
+        "excluding the arm must give exactly the two-arm comparison"
+    with_scribe = find_divergence_regions(renamed, SPACE, n_bins=4)
+    assert ([round(r["wer_gap"], 12) for r in with_scribe]
+            != [round(r["wer_gap"], 12) for r in kept]), \
+        "the excluded arm never affected any gap — the fixture cannot detect a no-op"
+
+    print("ok 4d: a WER-incomparable arm raises in the cross-model WER path, is "
+          "dropped only when the caller types exclude_incomparable=True, and an "
+          "identically-shaped comparable arm is untouched")
+
+
+def test_the_within_model_half_still_includes_the_excluded_arm():
+    """
+    THE OTHER HALF OF THE SCOPE DECISION, and the one that is easy to get wrong
+    by over-correcting: excluding an arm from the WER comparison must NOT
+    exclude it from the within-model analyses. Its dead-zone rate and its
+    confidence-vs-WER shape are computed against its OWN confidence distribution
+    and its OWN WER, so nothing is subtracted across arms and the arm is a
+    first-class member there.
+    """
+    tables = build_tables()
+    scribe = _scribe_arm(tables)
+    three = {"strong": tables["strong"], "weak": tables["weak"],
+             "elevenlabs-scribe": scribe}
+
+    # compare_models refuses by default for exactly the same reason...
+    try:
+        compare_models(three, SPACE, n_bins=4)
+        assert False, "compare_models must refuse an incomparable arm by default"
+    except WerIncomparableArmError:
+        pass
+
+    res = compare_models(three, SPACE, n_bins=4, exclude_incomparable=True)
+    # ... and with the exclusion typed, the two halves carry DIFFERENT arm sets
+    assert set(res["per_model"]) == {"strong", "weak", "elevenlabs-scribe"}, res["per_model"]
+    assert res["models_within"] == list(three), res
+    assert res["models_wer_compared"] == ["strong", "weak"], res
+    for r in res["divergence_regions"]:
+        assert "elevenlabs-scribe" not in r["wer_by_model"], r
+    # the within-model numbers are REAL, not placeholders
+    dz = res["per_model"]["elevenlabs-scribe"]
+    assert np.isfinite(dz["dead_zone_rate"]), dz
+    assert np.isfinite(dz["shape"]["spearman"]), dz
+    assert dz["n"] == len(scribe), dz
+
+    # NEGATIVE CONTROL: the within-model numbers must be BIT-IDENTICAL to what
+    # the arm gets computed entirely on its own rows, with no other arm in the
+    # room. That is the claim "the exclusion changed nothing within the arm"
+    # made executable, and it would fail if the exclusion had leaked into the
+    # within-model half (e.g. by dropping the arm's rows before flagging).
+    solo_rate = float(np.mean(dead_zone_flags(scribe, 0.3, 0.6)))
+    solo_shape = confidence_wer_shape(scribe)["spearman"]
+    assert solo_rate == dz["dead_zone_rate"], (solo_rate, dz["dead_zone_rate"])
+    assert solo_shape == dz["shape"]["spearman"], (solo_shape, dz["shape"])
+    assert dz["dead_zone_rate"] > 0.0, ("the fixture must plant a real dead zone, "
+                                        "or 'the numbers are real' is untested")
+
+    print(f"ok 4e: the excluded arm keeps a real within-model dead-zone rate "
+          f"({dz['dead_zone_rate']:.3f}) and shape "
+          f"({dz['shape']['spearman']:+.3f}), bit-identical to analysing it "
+          f"alone, while being absent from every WER gap")
+
+
+def test_comparability_is_a_registry_property_not_a_hardcoded_name():
+    """
+    GENERALITY. The next arm with unstable formatting must be handled by adding
+    one line to `WER_INCOMPARABLE_ARMS`, not by editing a conditional. Register a
+    fake arm, prove the same refusal fires, then unregister and prove it stops.
+    """
+    tables = build_tables()
+    fake = {"strong": tables["strong"], "weak": tables["weak"],
+            "brand-new-arm": [dict(r) for r in tables["strong"]]}
+
+    assert is_wer_comparable("brand-new-arm")
+    find_divergence_regions(fake, SPACE, n_bins=4)      # comparable -> fine
+
+    WER_INCOMPARABLE_ARMS["brand-new-arm"] = "planted for the test"
+    try:
+        assert not is_wer_comparable("brand-new-arm")
+        try:
+            find_divergence_regions(fake, SPACE, n_bins=4)
+            assert False, "registering an arm must make the WER path refuse it"
+        except WerIncomparableArmError as exc:
+            assert "brand-new-arm" in str(exc) and "planted for the test" in str(exc)
+        cen = wer_comparability(list(fake))
+        assert cen["excluded"] == ["brand-new-arm"], cen
+        assert "brand-new-arm" in cen["statement"], cen["statement"]
+    finally:
+        WER_INCOMPARABLE_ARMS.pop("brand-new-arm", None)
+    # restored: the refusal is a property of the registry, not of the code path
+    assert is_wer_comparable("brand-new-arm")
+    find_divergence_regions(fake, SPACE, n_bins=4)
+
+    # every registered exclusion must carry a substantive reason — an exclusion
+    # whose justification lives in a commit message gets "fixed" by the next
+    # person who reads the code.
+    for arm, reason in WER_INCOMPARABLE_ARMS.items():
+        assert isinstance(reason, str) and len(reason) > 120, (arm, reason)
+
+    # The chokepoint refuses to report on fewer than two SURVIVING arms. This is
+    # the case that defeats every other check: after the exclusion the remaining
+    # tables are internally consistent, equal-sized and perfectly well-formed —
+    # there is just nothing left to compare them to.
+    try:
+        wer_comparable_tables({"elevenlabs-scribe": [], "nova-3": []},
+                              exclude_incomparable=True)
+        assert False, "one surviving arm is not a comparison"
+    except WerIncomparableArmError as exc:
+        assert ">= 2" in str(exc) and "elevenlabs-scribe" in str(exc), exc
+    # NEGATIVE CONTROL: add a second comparable arm and the same call succeeds,
+    # so the raise is pinned to the survivor COUNT, not to the excluded arm
+    # merely being present.
+    kept, cen = wer_comparable_tables(
+        {"elevenlabs-scribe": [], "nova-3": [], "whisper-base": []},
+        exclude_incomparable=True)
+    assert set(kept) == {"nova-3", "whisper-base"}, sorted(kept)
+    assert cen["excluded"] == ["elevenlabs-scribe"], cen
+
+    print(f"ok 4f: WER comparability is a registry property — "
+          f"{sorted(WER_INCOMPARABLE_ARMS)} — and a planted arm is refused and "
+          f"un-refused by editing the registry alone")
+
+
 # ---- 5: the third adapter arm parses to the shared contract (offline) ------
 
 def test_vosk_parses_to_contract():
@@ -285,6 +579,10 @@ if __name__ == "__main__":
     test_nan_wer_never_dilutes_the_dead_zone_rate()
     test_wer_key_selects_the_estimand()
     test_ragged_region_coverage_raises()
+    test_divergence_over_three_arms_uses_every_arm()
+    test_wer_incomparable_arm_cannot_enter_a_cross_model_wer_comparison()
+    test_the_within_model_half_still_includes_the_excluded_arm()
+    test_comparability_is_a_registry_property_not_a_hardcoded_name()
     test_vosk_parses_to_contract()
     print("\nAll model-compare tests passed — cross-model dead-zone comparison "
           "works within-model (scale-free) and surfaces the planted weak region.")

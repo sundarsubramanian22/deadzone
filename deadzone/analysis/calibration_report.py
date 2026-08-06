@@ -68,8 +68,8 @@ if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
 from deadzone.analysis.layers import (                                    # noqa: E402
-    SPLIT_MODES, _as_int, _as_list, load_master_csv, run_l2_calibration,
-    usable_rows, word_records,
+    AlignmentError, SPLIT_MODES, _as_int, _as_list, load_master_csv,
+    run_l2_calibration, usable_rows, word_records,
 )
 from deadzone.audio_pipeline import _COMPOUNDS, _normalize_one            # noqa: E402
 from deadzone.design import DEFAULT_FACTOR_SPACE, FactorSpace             # noqa: E402
@@ -79,11 +79,29 @@ __all__ = [
     "legacy_split", "misalignment_causes", "alignment_recovery",
     "deletion_blindness", "seed_band", "build_report", "format_report",
     "write_report", "main",
+    "build_multi_model_report", "format_multi_report", "resolve_models",
 ]
 
 DEFAULT_TABLE = "results/master.csv"
 DEFAULT_MODEL = "nova-3"
 DEFAULT_SEEDS = (0, 1, 2, 3, 4)
+
+# L2 IS A WITHIN-MODEL LAYER, so every arm joins — including arms excluded from
+# the cross-model WER comparison (`model_compare.WER_INCOMPARABLE_ARMS`). ECE
+# asks "does THIS arm's confidence predict THIS arm's own word correctness";
+# nothing is subtracted across arms, and each arm's confidence never leaves its
+# own scale.
+#
+# THE ONE THING THAT DOES CARRY OVER, stated because it would otherwise be
+# assumed away: the word-level correctness LABEL comes from the same alignment
+# that produces WER (`match` -> 1, `sub`/`ins` -> 0). So an arm whose orthography
+# disagrees with the reference has some correctly-recognised words labelled
+# incorrect, which depresses its measured accuracy and therefore inflates its
+# apparent overconfidence. Its ECE is an UPPER BOUND, not a point estimate, and
+# the cross-arm ECE column is labelled accordingly. Within one arm the labels are
+# wrong in a fixed direction, so the BEFORE/AFTER calibration improvement — which
+# is what this layer is for — remains readable.
+PRIMARY_MODEL = DEFAULT_MODEL
 
 # Held-out CONDITIONS is the primary protocol: it is the strongest question you
 # can ask a calibrator ("generalize to an acoustic condition you have never
@@ -448,9 +466,14 @@ def build_report(table: str = DEFAULT_TABLE, model: str = DEFAULT_MODEL,
 def plain_language_statement(rep: Mapping) -> str:
     """The A.R5.8 DoD sentence — what the calibrator learned, in real numbers."""
     p, fit = rep["primary"], rep["primary"]["headline_fit"]
+    # The arm's name comes from the report, never from a literal. `--model` is a
+    # parameter, so a hardcoded "nova-3" here would attribute a THIRD arm's ECE
+    # to the spine — a sentence that is fluent, numerate and about the wrong
+    # model, with nothing in the output to contradict it.
+    model = rep.get("model") or "the model"
     parts = [
         f"On held-out {p['split_by']}s ({p['n_groups']} groups, "
-        f"{fit['n_test_words']} test words of {p['n_words']}), nova-3's raw word "
+        f"{fit['n_test_words']} test words of {p['n_words']}), {model}'s raw word "
         f"confidence has ECE {p['ece_raw']['median']:.3f} "
         f"[{p['ece_raw']['min']:.3f}, {p['ece_raw']['max']:.3f}]; temperature "
         f"scaling (T={p['temperature_T']['median']:.2f}) gives "
@@ -560,6 +583,183 @@ def format_report(rep: Mapping) -> str:
     return "\n".join(L)
 
 
+# ===========================================================================
+# EVERY ARM — L2 is within-model, so nothing is excluded here
+# ===========================================================================
+
+def resolve_models(table: str, spec: str,
+                   rows: Sequence[Mapping] | None = None) -> list[str]:
+    """`--model` -> the arm list. `all` discovers every arm in the table.
+
+    Discovery is the point: a fixed default is how the previously-published L2
+    stayed a one-arm result after a third arm had been paid for and run (the
+    same failure `model_arms.discover_arms` exists to prevent).
+    """
+    spec = str(spec or "").strip()
+    if spec and spec.lower() != "all":
+        return [m.strip() for m in spec.split(",") if m.strip()]
+    rows = list(rows) if rows is not None else load_master_csv(table)
+    found = sorted({str(r.get("model")) for r in rows if r.get("model")})
+    if not found:
+        raise ValueError(f"no `model` values in {table!r}; nothing to calibrate.")
+    return found
+
+
+def build_multi_model_report(table: str = DEFAULT_TABLE,
+                             models: Sequence[str] | None = None,
+                             seeds: Sequence[int] = DEFAULT_SEEDS,
+                             frac: float = 0.5,
+                             rows: Sequence[Mapping] | None = None) -> dict:
+    """
+    One L2 report per arm, plus the cross-arm ECE table, in ONE payload.
+
+    BACKWARD COMPATIBILITY IS DELIBERATE AND IS NOT COSMETIC. The primary arm's
+    payload is splatted at the top level, so every key the single-arm artifact
+    published (`primary`, `secondary`, `deletion_blindness`, `statement`, ...)
+    still resolves to exactly the same arm and exactly the same numbers. Adding
+    an arm must not silently redefine what `results/calibration.json`'s
+    top-level `ece_raw` refers to — that is a rename disguised as an addition,
+    and it is unreadable from the file itself. `models` / `by_model` are additive.
+    """
+    rows = list(rows) if rows is not None else load_master_csv(table)
+    models = list(models or resolve_models(table, "all", rows))
+
+    # ONE ARM MUST NOT ABORT THE LAYER, AND MUST NOT VANISH FROM IT EITHER.
+    # `build_report` runs `word_records` in its STRICT mode: a row whose
+    # hypothesis-word count disagrees with its confidence-list length after
+    # re-alignment raises rather than zipping (a zip would bind confidences to
+    # the wrong words — wrong invisibly). That is the correct behaviour and it
+    # is not relaxed here. But with N arms it means a defect in ONE arm takes
+    # the whole run down, and the tempting fix — falling back to
+    # `on_misalign="skip"` — would publish that arm's ECE next to the others as
+    # if it were the same measurement, when it was fit on a silently smaller
+    # set. So a raising arm is recorded as BLOCKED, with the count, and the
+    # arms that are clean are still reported.
+    by_model: dict[str, dict] = {}
+    blocked: list[dict] = []
+    for m in models:
+        try:
+            by_model[m] = build_report(table, m, seeds=seeds, frac=frac,
+                                       rows=rows)
+        except AlignmentError as exc:
+            mine = [r for r in usable_rows(rows)[0] if str(r.get("model")) == m]
+            skipped = word_records(mine, on_misalign="skip")
+            blocked.append({
+                "model": m,
+                "reason": "alignment",
+                "error": str(exc),
+                "n_rows": len(mine),
+                "n_misaligned_rows": skipped["n_misaligned_rows"],
+                "n_realigned_rows": skipped["n_realigned_rows"],
+                "frac_rows_misaligned": (skipped["n_misaligned_rows"] / len(mine)
+                                         if mine else float("nan")),
+                "n_words_under_skip_protocol": skipped["n_words"],
+                "note": ("This arm is NOT calibrated here. Its rows would fit "
+                         "only under the weaker `on_misalign='skip'` protocol, "
+                         "which drops the misaligned rows — a different "
+                         "estimand from the other arms', and printing it in the "
+                         "same column would be a silent protocol change. The "
+                         "skip-protocol word count is given so the size of the "
+                         "gap is visible, not so the number can be quoted."),
+            })
+    if not by_model:
+        raise AlignmentError(
+            f"every requested arm {models} failed word-level alignment; "
+            f"there is nothing to calibrate. Details: {blocked}")
+    models = list(by_model)
+    primary = PRIMARY_MODEL if PRIMARY_MODEL in by_model else models[0]
+
+    from deadzone.model_compare import is_wer_comparable, wer_comparability
+    census = wer_comparability(models)
+    cross = []
+    for m in models:
+        p = by_model[m]["primary"]
+        cross.append({
+            "model": m,
+            "n_words": p["n_words"], "n_groups": p["n_groups"],
+            "ece_raw": p["ece_raw"]["median"],
+            "ece_temperature": p["ece_temperature"]["median"],
+            "ece_feature": p["ece_feature"]["median"],
+            "temperature_T": p["temperature_T"]["median"],
+            "ece_reduction_feature": (p["ece_raw"]["median"]
+                                      - p["ece_feature"]["median"]),
+            # An arm whose orthography disagrees with the reference has some
+            # correct words labelled incorrect, so its ECE is an upper bound.
+            "ece_is_upper_bound": not is_wer_comparable(m),
+            "deleted_fraction_of_reference":
+                by_model[m]["deletion_blindness"]["deleted_fraction_of_reference"],
+        })
+    return {
+        **by_model[primary],
+        "primary_model": primary,
+        "models": models,
+        "models_requested": list(dict.fromkeys(list(models) + [b["model"] for b in blocked])),
+        "blocked_arms": blocked,
+        "by_model": by_model,
+        "cross_arm": cross,
+        "wer_comparability": census,
+        "multi_model_note": (
+            "L2 is WITHIN-MODEL: every arm joins, including arms excluded from "
+            "the cross-model WER comparison, because ECE never subtracts one "
+            "arm's number from another's. The top-level keys are "
+            f"{primary!r}'s, unchanged, so previously published values still "
+            "resolve; per-arm results are under `by_model`. CAVEAT on the "
+            "cross-arm ECE column: the word-level correctness label comes from "
+            "the same alignment as WER, so an arm with an orthography mismatch "
+            "has correct words labelled incorrect and its ECE reads HIGH — see "
+            "`ece_is_upper_bound`."),
+    }
+
+
+def format_multi_report(rep: Mapping) -> str:
+    """Cross-arm ECE table first, then each arm's full single-arm report."""
+    by_model = rep.get("by_model") or {}
+    if not by_model:
+        return format_report(rep)
+    L = ["L2 — LEARNED CONFIDENCE CALIBRATION, EVERY ARM",
+         "=" * 72, "",
+         f"arms: {', '.join(rep['models'])}   (primary, and the arm the "
+         f"top-level JSON keys describe: {rep['primary_model']})",
+         "",
+         "L2 is a WITHIN-MODEL layer. Each arm's confidence is calibrated "
+         "against its OWN",
+         "word correctness; nothing is subtracted across arms, so an arm "
+         "excluded from the",
+         "cross-model WER comparison is included here without qualification —",
+         "with ONE caveat, marked '^': the correctness LABEL comes from the "
+         "same alignment",
+         "as WER, so an arm whose orthography disagrees with the reference has "
+         "correct words",
+         "labelled incorrect. Its ECE is an UPPER BOUND. The raw->calibrated "
+         "IMPROVEMENT is",
+         "still readable, because within one arm the labels are wrong in a "
+         "fixed direction.",
+         "",
+         f"{'model':<20}{'words':>9}{'ECE raw':>10}{'+temp':>9}{'+feature':>10}"
+         f"{'T':>7}{'reduction':>11}",
+         ]
+    for c in rep.get("cross_arm") or []:
+        mark = "^" if c.get("ece_is_upper_bound") else " "
+        L.append(f"{c['model']:<20}{c['n_words']:>9}{c['ece_raw']:>9.4f}{mark}"
+                 f"{c['ece_temperature']:>9.4f}{c['ece_feature']:>10.4f}"
+                 f"{c['temperature_T']:>7.2f}{c['ece_reduction_feature']:>11.4f}")
+    L += ["", "NOTE: " + rep.get("multi_model_note", ""), ""]
+    for b in rep.get("blocked_arms") or []:
+        L += [f"ARM NOT CALIBRATED — {b['model']}  (reason: {b['reason']})",
+              f"  {b['n_misaligned_rows']} of {b['n_rows']} rows "
+              f"({b['frac_rows_misaligned']:.2%}) still have a hypothesis-word "
+              f"count that disagrees with the",
+              f"  confidence-list length after re-alignment "
+              f"({b['n_realigned_rows']} rows were recovered by "
+              f"align_confidences). word_records refuses to zip.",
+              f"  {b['note']}",
+              f"  first failure: {b['error'][:160]}",
+              ""]
+    for m in rep["models"]:
+        L += ["=" * 72, format_report(by_model[m]), ""]
+    return "\n".join(L)
+
+
 def write_report(rep: Mapping, out_json: str = "results/calibration.json",
                  out_txt: str = "results/calibration.txt") -> tuple[str, str]:
     for path in (out_json, out_txt):
@@ -569,7 +769,8 @@ def write_report(rep: Mapping, out_json: str = "results/calibration.json",
     with open(out_json, "w", encoding="utf-8") as fh:
         json.dump(rep, fh, indent=2, default=float)
     with open(out_txt, "w", encoding="utf-8") as fh:
-        fh.write(format_report(rep) + "\n")
+        fh.write((format_multi_report(rep) if rep.get("by_model")
+                  else format_report(rep)) + "\n")
     return out_json, out_txt
 
 
@@ -577,7 +778,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
         description="L2: learned confidence calibration on the real grid")
     ap.add_argument("--table", default=DEFAULT_TABLE)
-    ap.add_argument("--model", default=DEFAULT_MODEL)
+    ap.add_argument("--model", default="all",
+                    help="arm(s) to calibrate: 'all' (default — every arm in "
+                         "the table), or a comma-separated list. L2 is "
+                         "within-model, so no arm is excluded.")
     ap.add_argument("--seeds", default=",".join(str(s) for s in DEFAULT_SEEDS),
                     help="comma-separated grouped-split seeds")
     ap.add_argument("--frac", type=float, default=0.5)
@@ -586,8 +790,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = ap.parse_args(argv)
 
     seeds = tuple(int(s) for s in str(args.seeds).split(",") if s.strip() != "")
-    rep = build_report(args.table, args.model, seeds=seeds, frac=args.frac)
-    print(format_report(rep))
+    models = resolve_models(args.table, args.model)
+    if len(models) == 1:
+        rep = build_report(args.table, models[0], seeds=seeds, frac=args.frac)
+        print(format_report(rep))
+    else:
+        rep = build_multi_model_report(args.table, models, seeds=seeds,
+                                       frac=args.frac)
+        print(format_multi_report(rep))
     j, t = write_report(rep, args.out_json, args.out_txt)
     print(f"\nwrote {j} and {t}")
     return 0
