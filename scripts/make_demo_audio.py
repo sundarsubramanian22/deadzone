@@ -1445,7 +1445,7 @@ def n_primary(ordered: list[dict]) -> int:
     run-of-show that says three while the script plays two is SPEC J.7 in
     miniature.
     """
-    return len(ordered)   # MUTATION
+    return sum(1 for p in ordered if p["role"] == "primary")
 
 
 def _play_line(ordered: list[dict]) -> str:
