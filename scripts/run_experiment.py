@@ -39,6 +39,20 @@ Four things here exist because getting them wrong is expensive and silent:
      never 0.0 (which reads as a perfect transcription) and never NaN (which
      silently poisons a mean). Downstream MUST filter on `failed`.
 
+     ...BUT A CACHED FAILURE IS NOT A CACHED MEASUREMENT. Point 3 and point 4
+     collide: keeping failures as rows is right, and treating those rows as cache
+     HITS turns a fixable configuration error into a permanent one whose retry is
+     a silent no-op. See the RETRY POLICY block below — that collision is a real
+     defect this file used to have, not a hypothetical.
+
+  5. THE MASTER TABLE IS THE WHOLE TABLE, NOT THIS PLAN'S SLICE. One arm at a
+     time is the DESIGNED way to run this grid (nova-3 on 40 clips, the local and
+     cloud arms on the 10-clip AL subset, whisper forced to --workers 1 by
+     Numba). Writing only the running plan's rows to `master.csv` therefore
+     deletes every other arm — silently, totally, and while looking like a
+     successful run. `main()` composes the table from the cache instead, and
+     `write_master` refuses to shrink an existing table without being told to.
+
 Run:
     python3 scripts/run_experiment.py --dry-run                  # plan + cost, zero calls
     python3 scripts/run_experiment.py --clips smoke --limit 20   # small real run
@@ -151,14 +165,40 @@ _MEASUREMENT_COLUMNS = (
 # COST MODEL (R4.1) — used by --dry-run, never by the run itself
 # ============================================================================
 
-# Deepgram pre-recorded Nova-3 list price at time of writing. VENDOR RATES MOVE:
-# re-check before quoting a number in the write-up (R4.1's DoD says so).
+# Vendor list prices at time of writing. VENDOR RATES MOVE: re-check before
+# quoting a number in the write-up (R4.1's DoD says so).
 DEEPGRAM_USD_PER_MIN = 0.0043
+ELEVENLABS_USD_PER_MIN = 0.22 / 60.0    # Scribe batch, $0.22/hr
 EST_CLIP_SECONDS = 5.0          # corpus mean utterance length (SPEC measured ~4 s)
 
-# Which arms cost money. Whisper and Vosk run locally: $0, but ~1–2x realtime on
-# CPU, so for those the binding constraint is wall clock, not spend.
-BILLED_MODELS = frozenset({"nova-3", "nova-2", "nova-2-drivethru", "nova-3-medical"})
+# Which arms cost money, and which are known to be free. Whisper and Vosk run
+# locally: $0, but ~1–2x realtime on CPU, so for those the binding constraint is
+# wall clock, not spend.
+#
+# THE THIRD CATEGORY IS THE POINT. An arm in NEITHER set is a new vendor whose
+# price this file has never been told — and `model not in BILLED_MODELS` alone
+# reads that as free. A cloud arm added to the registry would then be planned at
+# $0.00 by --dry-run, which is the budget gate itself under-reporting the budget,
+# with no error and a perfectly plausible number. Unknown arms are counted and
+# named separately (`n_unpriced`) so the plan says "I do not know what this
+# costs" instead of "this costs nothing".
+#
+# AND THE RATE IS PER ARM, not one global number. Two cloud vendors do not charge
+# the same — Scribe batch is ~0.85x Nova-3 per minute — so pricing a second arm
+# at the first arm's rate is the other silent-failure direction: the plan still
+# prints a plausible dollar figure, just the wrong one. BILLED_MODELS is DERIVED
+# from this map, so an arm can never be classified "billed" without a rate behind
+# it; forgetting the rate lands it in `unknown`, which is loud.
+USD_PER_MIN: dict[str, float] = {
+    "nova-3": DEEPGRAM_USD_PER_MIN,
+    "nova-2": DEEPGRAM_USD_PER_MIN,
+    "nova-2-drivethru": DEEPGRAM_USD_PER_MIN,
+    "nova-3-medical": DEEPGRAM_USD_PER_MIN,
+    "elevenlabs-scribe": ELEVENLABS_USD_PER_MIN,
+}
+BILLED_MODELS = frozenset(USD_PER_MIN)
+LOCAL_MODELS = frozenset({"whisper-base", "whisper", "whisper-small",
+                          "whisper-medium", "vosk"})
 
 DEFAULT_WORKERS = 8             # R4.1: 8–16, bounded by the account's concurrency
 
@@ -483,6 +523,162 @@ class ResultCache:
 
 
 # ============================================================================
+# RETRY POLICY — which cached FAILURES may satisfy a lookup
+# ============================================================================
+#
+# THE DEFECT THIS EXISTS TO KILL (observed on this repo, 2026-08-05). A new arm
+# was run without its key exported. All 20 cells failed; the failure guard did
+# its job and printed `FAILED ROWS: 20/20 (100.00%)`. The cause was fixed and the
+# run repeated:
+#
+#     [grid] 20 cells | 20 cached | 0 to run          <- ZERO calls
+#     [grid] FAILED ROWS: 20/20 (100.00%)             <- the same error, replayed
+#
+# The retry was a no-op wearing the mask of a retry, and the only recovery was
+# hand-editing cache.jsonl. This is SPEC Appendix E's family — a guard whose
+# failure mode is silence — with the twist that the *cache*, whose whole job is
+# to make a resumed run free, is what makes the broken state permanent. A cached
+# failure and a reproducible failure are indistinguishable to a `key in dict`.
+#
+# THE ASYMMETRY DECIDES THE DEFAULT. Re-calling a cell that really is broken
+# costs one call and prints a loud failure line at the end of the run. NOT
+# re-calling a cell that has since been fixed prints a clean, complete-looking,
+# entirely wrong run. Those two mistakes are not the same size, so the default is
+# the loud one: **a cached failure does not satisfy a lookup unless it is
+# explicitly classified terminal.**
+#
+# WHY THE TERMINAL LIST IS ALMOST EMPTY, AND WHY THAT IS THE HONEST ANSWER.
+# R4.2 keeps failures as rows partly so a reproducibly-failing cell is not
+# re-billed forever. On this pipeline that argument is weaker than it looks:
+# every failure class the grid has actually produced fails BEFORE a billable
+# response exists — a missing key raises before the request is built, a missing
+# RIR/codec raises in `apply_condition`, a 4xx/timeout is not billed, and the
+# local arms cost $0 by construction. The measured cost of retrying every failed
+# row in the real 10,740-row cache is THREE local Whisper calls. So the money
+# argument buys almost nothing here and the silence costs a whole arm.
+#
+# One class does earn `terminal`: **the vendor rejected the audio payload
+# itself** (unsupported media, undecodable, out-of-range duration). That is
+# terminal for a project-specific and checkable reason — `apply_condition` is
+# seeded from `condition.name`, so the degraded audio is byte-reproducible, and
+# the payload that was rejected is PROVABLY the payload that would be re-sent.
+# Re-calling cannot produce a different answer. Any future addition to this list
+# needs an argument of that shape, written down; "it looked permanent" is not one.
+#
+# EVERYTHING UNRECOGNISED IS RETRYABLE. An unknown error string is the degenerate
+# input, and SPEC Appendix E's rule is to ask what the guard returns for the
+# degenerate input, not for the good one. Classifying the unknown as terminal
+# would restore the exact defect for every failure class not yet seen — including
+# the next vendor's auth message, which is how this one arrived.
+
+RETRY_MODES = ("auto", "all", "none")
+
+# Substrings matched against the LOWERCASED error text, first match wins — so
+# order matters: an ElevenLabs bad-key rejection arrives as `HTTP 400` with
+# `invalid_api_key` in the body, and must land in `auth`, not in a status-code
+# bucket. Note that no rule keys off a bare status code: a 400 whose body we do
+# not recognise stays `other`, i.e. retryable, i.e. loud.
+_FAILURE_PATTERNS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    # fixable by the operator; the whole reason this policy exists
+    ("auth", ("api_key", "api key", "unauthorized", "authentication",
+              "http 401", "http 403", "forbidden", "invalid token", "credential")),
+    # fixable by waiting or by topping up
+    ("rate_limit", ("rate limit", "ratelimit", "http 429", "too many requests",
+                    "quota", "insufficient", "payment", "billing")),
+    # transient by definition
+    ("network", ("timeout", "timed out", "connection", "ssl", "certificate",
+                 "http 500", "http 502", "http 503", "http 504", "unavailable",
+                 "temporarily", "dns", "socket", "remote end closed")),
+    # local environment: assets not downloaded, ffmpeg encoder missing
+    ("asset", ("missingasseterror", "codecunavailable", "filenotfounderror",
+               "no such file", "no such directory")),
+    # the ONE terminal class — see the block above for why
+    ("input_rejected", ("unsupported media", "unsupported file", "unsupported audio",
+                        "invalid audio", "corrupt", "could not decode",
+                        "decode error", "http 415", "file too short",
+                        "file too long", "duration exceeds")),
+)
+
+# Terminal == re-calling is PROVABLY unable to change the answer. Not "seems
+# permanent", not "failed twice". One entry, with its argument written above it.
+TERMINAL_CATEGORIES = frozenset({"input_rejected"})
+
+
+def failure_category(error: str | None) -> str:
+    """Bucket a failure's error text. 'unknown' = no text at all; 'other' = text
+    we do not recognise. BOTH are retryable — see the policy block."""
+    text = (error or "").lower()
+    if not text.strip():
+        return "unknown"
+    for name, needles in _FAILURE_PATTERNS:
+        if any(n in text for n in needles):
+            return name
+    return "other"
+
+
+def is_retryable_failure(row: Mapping) -> bool:
+    """True if this cached failure must NOT be allowed to satisfy a lookup."""
+    return failure_category(row.get("error")) not in TERMINAL_CATEGORIES
+
+
+def _check_retry_mode(mode: str) -> str:
+    if mode not in RETRY_MODES:
+        raise ValueError(f"retry_failed must be one of {RETRY_MODES}, got {mode!r}")
+    return mode
+
+
+def is_cache_hit(row: Mapping | None, retry_failed: str = "auto") -> bool:
+    """
+    Does this cached row satisfy the lookup, i.e. may we skip the call?
+
+    A SUCCESSFUL row always does — that is the crash contract and it is untouched.
+    A FAILED row depends on the mode:
+      auto (default) — hit only if the failure is classified terminal;
+      all            — never a hit (re-attempt every failure, terminal included);
+      none           — always a hit (the old behaviour: replay the cache exactly,
+                       which is what you want for an offline/deterministic
+                       reproduction of a past run, and nothing else).
+    """
+    _check_retry_mode(retry_failed)
+    if row is None:
+        return False
+    if not row.get("failed"):
+        return True
+    if retry_failed == "none":
+        return True
+    if retry_failed == "all":
+        return False
+    return not is_retryable_failure(row)
+
+
+def failure_census(rows: Sequence[Mapping]) -> dict:
+    """Count cached failures by category, with one example error per category.
+
+    The census is the point: '20 cached' and '20 cached, all of them auth
+    failures that are about to be re-attempted' are the same fact, and only the
+    second one is legible.
+    """
+    by_cat: dict[str, int] = {}
+    examples: dict[str, str] = {}
+    for r in rows:
+        cat = failure_category(r.get("error"))
+        by_cat[cat] = by_cat.get(cat, 0) + 1
+        examples.setdefault(cat, str(r.get("error"))[:150])
+    return {"n": len(rows), "by_category": dict(sorted(by_cat.items())),
+            "examples": examples}
+
+
+def format_failure_census(census: Mapping, headline: str, indent: str = "  ") -> list[str]:
+    """Render a failure census as printable lines (empty list if there is none)."""
+    if not census or not census.get("n"):
+        return []
+    L = [f"{indent}{headline}"]
+    for cat, n in census["by_category"].items():
+        L.append(f"{indent}    {cat:<16} {n:>6}   e.g. {census['examples'][cat]}")
+    return L
+
+
+# ============================================================================
 # ONE CELL — the unit of work
 # ============================================================================
 
@@ -659,7 +855,8 @@ def run_grid(clips: Mapping[str, np.ndarray], refs: Mapping[str, str],
              assets: AssetLibrary, fs: int = DEFAULT_FS,
              workers: int = DEFAULT_WORKERS, cache: ResultCache | None = None,
              run_id: str | None = None, limit: int | None = None,
-             progress_every: int = 25, stats: RunStats | None = None) -> dict:
+             progress_every: int = 25, stats: RunStats | None = None,
+             retry_failed: str = "auto") -> dict:
     """
     Run every (clip, condition, model) cell and return the rows for THIS plan.
 
@@ -667,10 +864,15 @@ def run_grid(clips: Mapping[str, np.ndarray], refs: Mapping[str, str],
     a resumed run must not relabel measurements it did not make, or the freeze
     manifest (R4.6) can no longer say which run produced which number.
 
+    `retry_failed` decides whether a cached FAILURE counts as a hit — see the
+    RETRY POLICY block. Default 'auto': retry everything except the one terminal
+    class, and say out loud what is being retried and why.
+
     Row order is the PLAN's order, not completion order — threads finish out of
     sequence, and a table whose row order changes run to run makes every diff and
     every "did anything move?" check useless.
     """
+    _check_retry_mode(retry_failed)
     model_fns = resolve_models(models)
     run_id = run_id or f"run-{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}-{uuid.uuid4().hex[:6]}"
     stats = stats if stats is not None else RunStats()
@@ -684,16 +886,41 @@ def run_grid(clips: Mapping[str, np.ndarray], refs: Mapping[str, str],
 
     rows: list[dict | None] = [None] * len(plan)
     todo: list[tuple[int, tuple[str, Condition, str]]] = []
+    retried: list[dict] = []            # cached failures we are re-attempting
+    kept: list[dict] = []               # cached failures we are honouring as hits
     for i, (clip_id, cond, model) in enumerate(plan):
         hit = cache.get((clip_id, cond.name, model)) if cache is not None else None
-        if hit is not None:
+        if is_cache_hit(hit, retry_failed):
             rows[i] = _ordered(hit)
             stats.bump("cached")
+            if hit.get("failed"):
+                kept.append(hit)
+                stats.bump("cached_failure_kept")
         else:
+            if hit is not None:         # a cached FAILURE, not a cache miss
+                retried.append(hit)
+                stats.bump("failure_retried")
             todo.append((i, (clip_id, cond, model)))
 
     print(f"[grid] {len(plan)} cells | {stats.get('cached')} cached | "
           f"{len(todo)} to run | {len(model_fns)} model(s) | {workers} workers")
+    # A re-run that silently skips the cells it was launched to fix is the defect
+    # this reporting exists to make impossible. Both directions get named: what is
+    # being re-attempted, and what is being honoured as a hit despite having
+    # failed.
+    for line in format_failure_census(
+            failure_census(retried),
+            f"RE-ATTEMPTING {len(retried)} cached failure(s) — recorded, not "
+            f"measured (--retry-failed {retry_failed}):", indent="[grid] "):
+        print(line)
+    for line in format_failure_census(
+            failure_census(kept),
+            f"KEEPING {len(kept)} cached failure(s) as cache hits "
+            f"(--retry-failed {retry_failed}); NOT re-called:", indent="[grid] "):
+        print(line)
+    if kept and retry_failed == "none":
+        print("[grid]     mode 'none' replays the cache exactly — a failure "
+              "fixed since it was recorded will NOT be re-attempted.")
 
     t0 = time.time()
     done = 0
@@ -756,7 +983,10 @@ def run_grid(clips: Mapping[str, np.ndarray], refs: Mapping[str, str],
 
     return {"rows": out, "run_id": run_id, "n_cached": stats.get("cached"),
             "n_called": len(todo), "n_failed": n_failed,
-            "fail_rate": fail_rate, "stats": stats}
+            "fail_rate": fail_rate, "stats": stats,
+            "n_failures_retried": len(retried), "n_failures_kept": len(kept),
+            "retry_census": failure_census(retried),
+            "kept_census": failure_census(kept), "retry_failed": retry_failed}
 
 
 # ============================================================================
@@ -768,7 +998,8 @@ def make_grid_wer_fn(clips: Mapping[str, np.ndarray], refs: Mapping[str, str],
                      fs: int = DEFAULT_FS, *, model: str = "nova-3",
                      cache: ResultCache | None = None, run_id: str | None = None,
                      held: Mapping | None = None,
-                     stats: RunStats | None = None) -> Callable[[dict], float]:
+                     stats: RunStats | None = None,
+                     retry_failed: str = "auto") -> Callable[[dict], float]:
     """
     Wrap the real chain into the EXACT callable shape design.py wants:
     ``wer_fn(sample: dict) -> float``, returning the MEAN WER over the clip set.
@@ -793,7 +1024,13 @@ def make_grid_wer_fn(clips: Mapping[str, np.ndarray], refs: Mapping[str, str],
     fabricated number: a wer_fn that quietly returns 0.0 (or NaN) in the harshest
     corner of the space is precisely how a sensitivity analysis ends up reporting
     that reverb doesn't matter.
+
+    `retry_failed` follows the same policy as run_grid — and it matters MORE here,
+    because a design run that inherits a cached auth failure for every clip in a
+    sample raises "every clip failed for condition X", which reads as a harsh-
+    corner acoustic result rather than as a stale credential.
     """
+    _check_retry_mode(retry_failed)
     held_all = dict(HELD_FACTOR_DEFAULTS)
     held_all.update(dict(held or {}))
     clip_ids = list(clips)
@@ -809,7 +1046,7 @@ def make_grid_wer_fn(clips: Mapping[str, np.ndarray], refs: Mapping[str, str],
         for clip_id in clip_ids:
             key = (clip_id, condition.name, model)
             row = cache.get(key) if cache is not None else None
-            if row is None:
+            if not is_cache_hit(row, retry_failed):
                 row = run_one(clip_id, clips[clip_id], refs[clip_id], condition,
                               assets, fs, transcribe_fn, model, run_id, stats=stats)
                 if cache is not None:
@@ -835,9 +1072,153 @@ def make_grid_wer_fn(clips: Mapping[str, np.ndarray], refs: Mapping[str, str],
 # ============================================================================
 # OUTPUT — parquet + csv mirror
 # ============================================================================
+#
+# THE DEFECT THIS SECTION EXISTS TO KILL (observed on this repo, 2026-08-05).
+#
+#     scripts/run_experiment.py --models elevenlabs-scribe --clips al
+#
+# ran 1 arm x 176 conditions x 10 clips, succeeded, and wrote a master.csv
+# containing exactly those rows — deleting the other 8,800. Nothing warned. The
+# run's own output was a clean success banner.
+#
+# One arm at a time is not a misuse, it is THE way this grid is run: nova-3 on
+# all 40 clips, the local and cloud arms on the 10-clip AL subset, whisper pinned
+# to --workers 1 because Numba's threading layer is not threadsafe. So the fix
+# cannot be "refuse partial plans". It is the split that was wrong: the PLAN is a
+# slice, the TABLE is the whole instrument's output, and the writer treated them
+# as the same thing.
+#
+# Two mechanisms, in the order they fire:
+#   1. `compose_master_rows` MERGES — cells the existing table had that this plan
+#      does not cover are carried over from the cache (the append-only source of
+#      truth), so a partial run adds an arm instead of replacing the table.
+#   2. `write_master` REFUSES to shrink — if, after the merge, cells would still
+#      be lost (they exist in the table and nowhere else), the write is refused
+#      rather than executed, because the file about to be truncated is then the
+#      only copy. `--overwrite-master` is the explicit way to mean it.
+# Either alone would have stopped the incident; both, because the guard belongs
+# at the artefact-creation site (the same argument the duplicate-cell guard below
+# makes) while the merge belongs where the cache is in scope.
+
+
+def _widen_csv_field_limit() -> None:
+    """`edits`/`word_confidences` are JSON blobs and can exceed csv's default
+    131072-char field cap. Without this a long row raises _csv.Error mid-read and
+    the census silently sees a TRUNCATED prior table — i.e. under-counts exactly
+    the rows it exists to protect."""
+    try:
+        csv.field_size_limit(10 ** 9)
+    except OverflowError:                                # 32-bit C long
+        csv.field_size_limit(2 ** 31 - 1)
+
+
+def master_census(rows: Sequence[Mapping] | Sequence[CacheKey]) -> dict:
+    """Row count + per-model breakdown, from rows or from bare cache keys."""
+    per_model: dict[str, int] = {}
+    for r in rows:
+        model = r[2] if isinstance(r, tuple) else str(r["model"])
+        per_model[model] = per_model.get(model, 0) + 1
+    return {"n_rows": len(rows), "per_model": dict(sorted(per_model.items()))}
+
+
+def _census_line(label: str, census: Mapping) -> str:
+    arms = "  ".join(f"{m}={n}" for m, n in census["per_model"].items()) or "-"
+    return f"[master]   {label:<22} {census['n_rows']:>6} rows   {arms}"
+
+
+def read_master_cells(path: str | Path) -> list[CacheKey]:
+    """The (clip_id, condition_name, model) cells already in a master CSV, in file
+    order. Three columns, not the whole table — this runs before every write.
+
+    A missing file is legitimately empty (first run). A file we cannot parse is
+    NOT: it means the shrink guard below is about to run blind, so it says so
+    instead of quietly returning [] and letting the write proceed unchecked.
+    """
+    p = Path(path)
+    if not p.exists():
+        return []
+    _widen_csv_field_limit()
+    out: list[CacheKey] = []
+    with open(p, newline="", encoding="utf-8") as f:
+        reader = csv.reader(f)
+        try:
+            header = next(reader)
+        except StopIteration:
+            return []
+        try:
+            idx = [header.index(c) for c in ("clip_id", "condition_name", "model")]
+        except ValueError:
+            print(f"[master] WARN: {p} has no clip_id/condition_name/model header "
+                  f"— the shrink check for this write is DISABLED and an existing "
+                  f"table could be replaced by a smaller one without a warning.")
+            return []
+        for rec in reader:
+            if len(rec) > max(idx):
+                out.append((rec[idx[0]], rec[idx[1]], rec[idx[2]]))
+    return out
+
+
+def compose_master_rows(plan_rows: Sequence[Mapping], cache: ResultCache | None,
+                        prior_cells: Sequence[CacheKey], *, merge: bool = True,
+                        quiet: bool = False) -> dict:
+    """
+    This plan's rows, plus every cell the existing table had that this plan does
+    not cover, pulled back from the cache.
+
+    Order: the plan's rows FIRST, in plan order (run_grid's documented contract),
+    then the carried-over cells in the existing table's order. A partial run is
+    therefore an append to the artefact, not a rewrite of it.
+
+    `merge=False` (--overwrite-master) skips the carry entirely and reports every
+    uncovered cell as a loss, which is what makes the refusal downstream fire.
+    """
+    plan_keys = {cache_key(r) for r in plan_rows}
+    uncovered: list[CacheKey] = []
+    seen: set[CacheKey] = set()
+    for k in prior_cells:
+        if k in plan_keys or k in seen:
+            continue
+        seen.add(k)
+        uncovered.append(k)
+
+    carried: list[dict] = []
+    unrecoverable: list[CacheKey] = []
+    for k in uncovered:
+        hit = cache.get(k) if cache is not None else None
+        if merge and hit is not None:
+            carried.append(_ordered(hit))
+        else:
+            unrecoverable.append(k)
+
+    rows = [_ordered(r) for r in plan_rows] + carried
+    census = {
+        "prior": master_census(list(prior_cells)),
+        "plan": master_census(list(plan_rows)),
+        "carried": master_census(carried),
+        "unrecoverable": master_census(unrecoverable),
+        "final": master_census(rows),
+        "merged": bool(merge),
+        "delta": len(rows) - len(prior_cells),
+    }
+    if not quiet:
+        print(_census_line("existing table", census["prior"]))
+        print(_census_line("this plan", census["plan"]))
+        if merge:
+            print(_census_line("carried from cache", census["carried"]))
+        print(_census_line("-> writing", census["final"])
+              + f"   ({census['delta']:+d} vs existing)")
+        if unrecoverable:
+            print(f"[master] !! {len(unrecoverable)} cell(s) are in the existing "
+                  f"table, NOT in this plan, and NOT in the cache: "
+                  f"{census['unrecoverable']['per_model']}")
+            print(f"[master]    They exist in {'no other file' if merge else 'the table only'}"
+                  f" — writing would destroy them.")
+    return {"rows": rows, "census": census, "unrecoverable": unrecoverable}
+
 
 def write_master(rows: Sequence[Mapping], results_dir: str | Path = "results",
-                 basename: str = "master") -> dict[str, str]:
+                 basename: str = "master", *, allow_shrink: bool = False,
+                 prior_cells: Sequence[CacheKey] | None = None) -> dict[str, str]:
     """
     Write results/<basename>.parquet AND results/<basename>.csv.
 
@@ -851,6 +1232,37 @@ def write_master(rows: Sequence[Mapping], results_dir: str | Path = "results",
     out_dir = Path(results_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     ordered = [_ordered(r) for r in rows]
+    csv_path = out_dir / f"{basename}.csv"
+
+    # THE SHRINK GUARD. Runs BEFORE the file is opened, because open(..., "w")
+    # truncates: a guard that fires after the open has already destroyed the
+    # thing it was guarding. `prior_cells` is read off the existing artefact
+    # unless a caller supplies it (tests, and `main()`, which has already read
+    # it for the merge).
+    prior = list(read_master_cells(csv_path)) if prior_cells is None else list(prior_cells)
+    new_keys = {cache_key(r) for r in ordered}
+    lost = [k for k in dict.fromkeys(prior) if k not in new_keys]
+    if prior:
+        before, after = master_census(prior), master_census(ordered)
+        print(f"[master] {csv_path}: {before['n_rows']} rows -> {after['n_rows']} "
+              f"rows ({after['n_rows'] - before['n_rows']:+d}); "
+              f"arms {before['per_model']} -> {after['per_model']}")
+    if lost and not allow_shrink:
+        lost_by_model = master_census(lost)["per_model"]
+        gone = sorted(m for m in master_census(prior)["per_model"]
+                      if m not in master_census(ordered)["per_model"])
+        raise ValueError(
+            f"refusing to write {csv_path}: it currently holds {len(prior)} cells "
+            f"and this write covers {len(new_keys)}, DROPPING {len(lost)} "
+            f"({lost_by_model}"
+            + (f"; arm(s) lost entirely: {gone}" if gone else "") + "). "
+            f"A partial plan is normal here — one arm at a time is how this grid "
+            f"is run — but the master table is the whole instrument's output, not "
+            f"the running plan's slice, and every reader (analysis/*, the "
+            f"dashboard) treats it as complete. Fixes, in order of preference: "
+            f"let main() merge from results/cache.jsonl (the default); "
+            f"`--rebuild --models <every arm>` to recompose; or "
+            f"`--overwrite-master` if you genuinely mean to discard them.")
 
     # THE ONE-ROW-PER-CELL INVARIANT, asserted at the only place the artefact is
     # created. Every downstream reader keys this table by (clip, condition,
@@ -877,7 +1289,6 @@ def write_master(rows: Sequence[Mapping], results_dir: str | Path = "results",
             f"cause: two plans' rows concatenated, or a --rebuild whose plan "
             f"listed a cell twice. Deduplicate on the cache key first.")
 
-    csv_path = out_dir / f"{basename}.csv"
     with open(csv_path, "w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=list(MASTER_COLUMNS), extrasaction="raise")
         w.writeheader()
@@ -901,36 +1312,88 @@ def write_master(rows: Sequence[Mapping], results_dir: str | Path = "results",
 # ============================================================================
 
 def is_billed(model: str) -> bool:
-    """True for cloud arms that cost money per minute of audio."""
+    """True for cloud arms whose per-minute price this file knows."""
     return model in BILLED_MODELS
+
+
+def pricing_class(model: str) -> str:
+    """'billed' | 'local' | 'unknown'.
+
+    'unknown' exists so a new vendor arm cannot be silently priced at zero. It
+    is not a synonym for free — it means nobody has told this file what the arm
+    costs, and the plan must say so rather than default to the flattering answer
+    (SPEC Appendix E: a guard whose failure mode is silence).
+    """
+    if model in BILLED_MODELS:
+        return "billed"
+    if model in LOCAL_MODELS:
+        return "local"
+    return "unknown"
 
 
 def build_plan(clip_ids: Sequence[str], conditions: Sequence[Condition],
                models: Sequence[str], cache: ResultCache | None = None,
-               limit: int | None = None) -> dict:
+               limit: int | None = None, retry_failed: str = "auto") -> dict:
     """Enumerate every planned call and price it. Touches no audio and no assets —
     so --dry-run works on a machine that has neither the recordings nor the RIRs
-    downloaded yet, which is exactly when you want to check the budget."""
+    downloaded yet, which is exactly when you want to check the budget.
+
+    Cache lookups go through `is_cache_hit`, i.e. the SAME predicate run_grid
+    uses. If the plan counted a retryable failure as cached while the run
+    re-called it, --dry-run would under-report the budget by exactly the number
+    of cells you are trying to fix — the budget gate failing in the direction
+    that costs money.
+    """
+    _check_retry_mode(retry_failed)
     calls = [(c, cond, m) for c in clip_ids for cond in conditions for m in models]
     if limit is not None:
         calls = calls[:limit]
 
-    cached = [c for c in calls
-              if cache is not None and cache.has((c[0], c[1].name, c[2]))]
-    remaining = [c for c in calls
-                 if cache is None or not cache.has((c[0], c[1].name, c[2]))]
+    cached, remaining, retry_rows, kept_rows = [], [], [], []
+    for c in calls:
+        row = cache.get((c[0], c[1].name, c[2])) if cache is not None else None
+        if is_cache_hit(row, retry_failed):
+            cached.append(c)
+            if row.get("failed"):
+                kept_rows.append(row)
+        else:
+            remaining.append(c)
+            if row is not None:
+                retry_rows.append(row)
 
     per_model = {m: sum(1 for c in remaining if c[2] == m) for m in models}
-    billed_calls = sum(n for m, n in per_model.items() if is_billed(m))
+    classes = {m: pricing_class(m) for m in models}
+    billed_calls = sum(n for m, n in per_model.items() if classes[m] == "billed")
+    unpriced = sorted(m for m in models if classes[m] == "unknown")
+    unpriced_calls = sum(n for m, n in per_model.items() if classes[m] == "unknown")
     minutes = billed_calls * EST_CLIP_SECONDS / 60.0
+    # Summed PER ARM at that arm's own rate (USD_PER_MIN), never at one global
+    # rate: a mixed-vendor plan priced off a single number is wrong by the ratio
+    # between the vendors and looks exactly as plausible as the right answer.
+    est_cost = sum(n * EST_CLIP_SECONDS / 60.0 * USD_PER_MIN[m]
+                   for m, n in per_model.items() if classes[m] == "billed")
 
     return {
         "clip_ids": list(clip_ids), "conditions": list(conditions),
         "models": list(models), "calls": calls,
         "n_total": len(calls), "n_cached": len(cached), "n_remaining": len(remaining),
         "per_model_remaining": per_model, "n_billed": billed_calls,
+        "pricing_class": classes,
+        # How much of `n_remaining` is a RE-ATTEMPT of a cached failure, and how
+        # much of `n_cached` is a failure being honoured as a hit. Both are
+        # priced (a retry is a real call) and both are printed.
+        "retry_failed": retry_failed,
+        "n_retry_failed": len(retry_rows), "retry_census": failure_census(retry_rows),
+        "n_failures_kept": len(kept_rows), "kept_census": failure_census(kept_rows),
+        # An arm this file has no price for. NOT folded into est_cost_usd: a
+        # number that silently omits an arm is worse than a number that says an
+        # arm is missing from it.
+        "unpriced_models": unpriced,
+        "n_unpriced": unpriced_calls,
         "est_audio_minutes": minutes,
-        "est_cost_usd": minutes * DEEPGRAM_USD_PER_MIN,
+        "est_cost_usd": est_cost,
+        "usd_per_min": {m: USD_PER_MIN[m] for m in models if classes[m] == "billed"},
+        "est_cost_complete": not unpriced,
     }
 
 
@@ -946,15 +1409,40 @@ def format_plan(plan: Mapping, verbose: bool = False) -> str:
     L += ["", f"total cells          : {plan['n_total']}",
           f"  already cached     : {plan['n_cached']}",
           f"  calls to make      : {plan['n_remaining']}"]
+    if plan.get("n_retry_failed"):
+        L.append(f"    of which RE-ATTEMPTS of cached failures: "
+                 f"{plan['n_retry_failed']}")
+        L += format_failure_census(plan.get("retry_census"), "", indent="  ")[1:]
+    if plan.get("n_failures_kept"):
+        L.append(f"    cached failures honoured as hits (NOT re-called): "
+                 f"{plan['n_failures_kept']}")
+        L += format_failure_census(plan.get("kept_census"), "", indent="  ")[1:]
+    tags = {"billed": "(billed)", "local": "(local, $0)",
+            "unknown": "(UNPRICED — not in the cost estimate)"}
+    classes = plan.get("pricing_class") or {}
     for m, n in plan["per_model_remaining"].items():
-        L.append(f"      {m:<20} {n:>7}  {'(billed)' if is_billed(m) else '(local, $0)'}")
+        L.append(f"      {m:<20} {n:>7}  "
+                 f"{tags[classes.get(m, pricing_class(m))]}")
     L += ["",
           f"billed calls         : {plan['n_billed']}",
           f"est. audio           : {plan['est_audio_minutes']:.1f} min "
           f"(@ {EST_CLIP_SECONDS:.0f}s/clip)",
           f"est. cost            : ${plan['est_cost_usd']:.2f} "
-          f"(@ ${DEEPGRAM_USD_PER_MIN}/min — RE-CHECK vendor pricing, R4.1)",
-          "",
+          f"(RE-CHECK vendor pricing, R4.1)"]
+    # Print the rate PER ARM. One global "@ $x/min" line under a mixed-vendor
+    # plan reads as though every call was priced at that rate, which is exactly
+    # the thing USD_PER_MIN exists to stop.
+    for m, rate in (plan.get("usd_per_min") or {}).items():
+        L.append(f"      {m:<20}   @ ${rate:.6f}/min")
+    if plan.get("unpriced_models"):
+        L += ["",
+              f"!! COST ESTIMATE IS INCOMPLETE. {plan['n_unpriced']} call(s) to "
+              f"{plan['unpriced_models']} are",
+              "   not priced by this file: the arm is in neither BILLED_MODELS nor",
+              "   LOCAL_MODELS, so it is NOT $0 — it is unknown. Add it to one of",
+              "   those sets (with its per-minute rate if it is a cloud arm) before",
+              "   treating the number above as the budget."]
+    L += ["",
           "note: local arms (whisper/vosk) are $0 but ~1-2x realtime on CPU; the",
           "      binding constraint there is wall clock, not spend.", "=" * 74]
     if verbose:
@@ -963,6 +1451,40 @@ def format_plan(plan: Mapping, verbose: bool = False) -> str:
             L.append(f"  {clip_id}  {cond.name}  {model}")
         L.append("=" * 74)
     return "\n".join(L)
+
+
+# ============================================================================
+# CREDENTIALS — read `.env` the way the probes already do
+# ============================================================================
+# THE ASYMMETRY THAT CAUSED THE INCIDENT. `scripts/probe_elevenlabs.py`,
+# `scripts/run_d3a.py` and `analysis/decoupling.py` all fall back to `.env`;
+# this runner did not, and read the env var only. So the day-one gate passed
+# (the probe found the key) and the grid run failed on all 20 cells with
+# "ELEVENLABS_API_KEY not set" — a failure produced entirely by which file was
+# being run, then cached as though it were a property of the audio.
+#
+# Same convention as run_d3a.load_env: os.environ WINS (an explicitly exported
+# value is a deliberate override, e.g. pointing one run at a different account),
+# `.env` only fills gaps, and the VALUE never touches stdout, a log line or an
+# error message. Only the variable NAMES are printed — that is the difference
+# between "the key was loaded" and "the key is in your scrollback".
+
+def load_env(path: str | Path = ".env") -> list[str]:
+    """Fill missing env vars from `.env`. Returns the NAMES it set — never values."""
+    p = Path(path)
+    if not p.exists():
+        return []
+    loaded: list[str] = []
+    for line in p.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, v = line.split("=", 1)
+        k = k.strip()
+        if k and k not in os.environ:
+            os.environ[k] = v.strip().strip('"').strip("'")
+            loaded.append(k)
+    return loaded
 
 
 # ============================================================================
@@ -997,11 +1519,43 @@ def build_argparser() -> argparse.ArgumentParser:
                    help="with --dry-run, list every individual call")
     p.add_argument("--rebuild", action="store_true",
                    help="rebuild the master table from the cache; make no calls")
+    p.add_argument("--retry-failed", default="auto", choices=list(RETRY_MODES),
+                   help="auto (default): re-attempt cached failures except the "
+                        "terminal class; all: re-attempt every cached failure; "
+                        "none: replay the cache exactly, including its failures")
+    p.add_argument("--overwrite-master", action="store_true",
+                   help="write ONLY this plan's rows, DISCARDING cells the "
+                        "existing master table has. Destructive and explicit; "
+                        "without it a partial run merges from the cache instead.")
+    p.add_argument("--env-file", default=".env",
+                   help="KEY=VALUE file used to fill MISSING env vars (an "
+                        "exported var always wins). Values are never printed.")
     return p
+
+
+def _finish_master(plan_rows: Sequence[Mapping], cache: ResultCache | None,
+                   args) -> dict[str, str]:
+    """Compose the master table from this plan + the cache, then write it.
+
+    The one place the plan/table distinction is resolved: `plan_rows` is a slice
+    (one arm, one clip subset), the artefact is the whole instrument's output.
+    """
+    master_csv = Path(args.results) / f"{args.basename}.csv"
+    prior = read_master_cells(master_csv)
+    comp = compose_master_rows(plan_rows, cache, prior,
+                               merge=not args.overwrite_master)
+    return write_master(comp["rows"], args.results, args.basename,
+                        allow_shrink=args.overwrite_master, prior_cells=prior)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_argparser().parse_args(argv)
+
+    loaded = load_env(args.env_file)
+    if loaded:
+        # NAMES only. A key printed once is a key leaked forever.
+        print(f"[env] filled {len(loaded)} unset variable(s) from "
+              f"{args.env_file}: {', '.join(sorted(loaded))} (values not printed)")
 
     manifest = load_manifest(args.manifest)
     clip_ids = select_clip_ids(args.clips, manifest)
@@ -1009,7 +1563,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     models = [m.strip() for m in args.models.split(",") if m.strip()]
     cache = ResultCache(Path(args.results) / "cache.jsonl")
 
-    plan = build_plan(clip_ids, conditions, models, cache=cache, limit=args.limit)
+    plan = build_plan(clip_ids, conditions, models, cache=cache, limit=args.limit,
+                      retry_failed=args.retry_failed)
     print(format_plan(plan, verbose=args.verbose))
     if args.dry_run:
         return 0
@@ -1017,7 +1572,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.rebuild:
         # Reconstruct the table for THIS plan from cached rows only. The point of
         # an append-only cache is that the expensive artefact survives the process
-        # that produced it.
+        # that produced it. A rebuild whose --models list is narrower than the
+        # table's arms is the SAME shrink hazard as a partial run, so it goes
+        # through the same composer.
         rows, missing = [], 0
         for clip_id, cond, model in plan["calls"]:
             hit = cache.get((clip_id, cond.name, model))
@@ -1026,7 +1583,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             else:
                 rows.append(_ordered(hit))
         print(f"[rebuild] {len(rows)} cached rows, {missing} planned cells missing")
-        paths = write_master(rows, args.results, args.basename)
+        n_fail = sum(1 for r in rows if r["failed"])
+        n_retryable = sum(1 for r in rows if r["failed"] and is_retryable_failure(r))
+        if n_fail:
+            print(f"[rebuild] {n_fail} of those rows are FAILURES ({n_retryable} "
+                  f"retryable) — they belong in the table (R4.2), but a re-run "
+                  f"will re-attempt the retryable ones rather than replay them.")
+        paths = _finish_master(rows, cache, args)
         print(f"[rebuild] wrote {paths}")
         return 0
 
@@ -1036,11 +1599,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     refs = {cid: manifest[cid] for cid in clip_ids}
 
     res = run_grid(clips, refs, conditions, models, assets, fs=args.fs,
-                   workers=args.workers, cache=cache, limit=args.limit)
+                   workers=args.workers, cache=cache, limit=args.limit,
+                   retry_failed=args.retry_failed)
     cache.close()
 
-    paths = write_master(res["rows"], args.results, args.basename)
-    print(f"[master] {len(res['rows'])} rows -> {paths}")
+    paths = _finish_master(res["rows"], cache, args)
+    print(f"[master] {len(res['rows'])} rows from this plan -> {paths}")
     print(f"[master] run_id={res['run_id']}  failed={res['n_failed']} "
           f"({100*res['fail_rate']:.2f}%)")
     # Non-zero exit on a bad run so a `nohup`'d overnight job is not mistaken for

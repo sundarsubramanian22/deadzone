@@ -33,6 +33,7 @@ if _REPO_ROOT not in _sys.path:
 import contextlib
 import io
 import json
+import os
 import sys
 import tempfile
 from pathlib import Path
@@ -46,8 +47,10 @@ from deadzone.conditions import AssetLibrary, Condition, NoiseAsset, RirAsset
 from deadzone.design import DEFAULT_FACTOR_SPACE, screen_factors
 from scripts.run_experiment import (
     AL_CLIPS, MASTER_COLUMNS, SMOKE_CLIP, SOBOL_CLIPS, ResultCache, RunStats,
-    _ordered, build_plan, format_plan, load_manifest, main, main_grid,
-    make_grid_wer_fn, run_grid, run_one, write_degraded_wav, write_master,
+    _ordered, build_plan, compose_master_rows, failure_category, format_plan,
+    is_cache_hit, load_env, load_manifest, main, main_grid, make_grid_wer_fn,
+    pricing_class, read_master_cells, run_grid, run_one, write_degraded_wav,
+    write_master,
 )
 
 FS = 16000
@@ -637,6 +640,309 @@ def test_grid_refuses_to_return_a_short_table():
             assert "survivorship-biased" in str(exc), exc
     print("OK 13: a planned cell that produced no row raises instead of "
           "shortening the table")
+
+
+def test_an_unknown_arm_is_named_unpriced_not_costed_at_zero():
+    """
+    `--dry-run` IS the budget gate, and `model not in BILLED_MODELS` reads a
+    brand-new cloud vendor as free. The plan then prints a clean, plausible
+    dollar figure that omits an entire arm — the budget check under-reporting
+    the budget, silently. Three classes, not two: billed / local / unknown.
+    """
+    grid = main_grid()[:2]
+    clips = ["u02"]
+    plan = build_plan(clips, grid, ["nova-3", "whisper-base", "brand-new-vendor"])
+
+    assert pricing_class("brand-new-vendor") == "unknown"
+    assert plan["unpriced_models"] == ["brand-new-vendor"], plan["unpriced_models"]
+    assert plan["n_unpriced"] == len(clips) * len(grid), plan["n_unpriced"]
+    assert plan["est_cost_complete"] is False
+    # the unknown arm is NOT quietly folded in as $0 of billed volume
+    assert plan["n_billed"] == len(clips) * len(grid), plan["n_billed"]
+    txt = format_plan(plan)
+    assert "UNPRICED" in txt and "COST ESTIMATE IS INCOMPLETE" in txt, txt
+
+    # NEGATIVE CONTROL: an arm KNOWN to be free must not be flagged, or the
+    # warning is just "more than one arm" and means nothing.
+    known = build_plan(clips, grid, ["nova-3", "whisper-base"])
+    assert pricing_class("whisper-base") == "local"
+    assert known["unpriced_models"] == [] and known["n_unpriced"] == 0
+    assert known["est_cost_complete"] is True
+    assert "UNPRICED" not in format_plan(known)
+    print("OK 14: an arm this file has no price for is named UNPRICED and kept "
+          "out of the estimate; a known-local arm is not flagged")
+
+
+# ---------------------------------------------------------------------------
+# 15: a cached CONFIG failure is re-attempted, not replayed as a silent no-op
+# ---------------------------------------------------------------------------
+
+_NO_KEY = "ELEVENLABS_API_KEY not set (pass api_key= or export the env var)"
+_BAD_MEDIA = ("HTTP 415 from https://api.vendor/v1/speech-to-text: "
+              "unsupported media type")
+
+
+def test_a_cached_config_failure_is_retried_not_replayed():
+    """
+    Verbatim reproduction of the 2026-08-05 incident. An arm was run without its
+    key exported; all cells failed with `ELEVENLABS_API_KEY not set` and the
+    failure guard correctly shouted `FAILED ROWS: 20/20`. The key was fixed and
+    the run repeated:
+
+        [grid] 20 cells | 20 cached | 0 to run     <- ZERO calls
+        [grid] FAILED ROWS: 20/20 (100.00%)        <- the same error, replayed
+
+    A retry that makes no calls and replays the error it was launched to fix is a
+    no-op wearing the mask of a retry, and the only recovery was hand-editing
+    cache.jsonl. `key in dict` cannot tell a configuration failure from a
+    reproducible one, so the cache made the first kind permanent.
+
+    Three properties, and the SECOND is what stops this from being "just disable
+    the cache for failures":
+      (a) a retryable cached failure is re-attempted, and it is announced;
+      (b) a TERMINAL cached failure (the vendor rejected the audio payload — and
+          `apply_condition` is seeded, so the identical bytes would be re-sent)
+          is still honoured as a hit;
+      (c) a cached SUCCESS is still a hit, i.e. the crash contract is untouched.
+    """
+    import shutil
+
+    lib = make_library()
+    conds = [Condition(0.2, 25.0, "babble", "none", 0.0)]
+    n_cells = len(CLIPS)                                       # 3 clips, 1 condition
+
+    def broken_arm(path):
+        """u17's failure is TERMINAL (payload rejected); the rest are auth."""
+        if Path(path).stem.split("__", 1)[0] == "u17":
+            raise RuntimeError(_BAD_MEDIA)
+        raise ValueError(_NO_KEY)
+
+    with tempfile.TemporaryDirectory() as td:
+        path = Path(td) / "cache.jsonl"
+        cache = ResultCache(path)
+        with quiet():
+            broken = run_grid(CLIPS, REFS, conds, {"arm": broken_arm}, lib, fs=FS,
+                              workers=1, cache=cache, progress_every=0)
+        cache.close()
+        assert broken["n_failed"] == n_cells and broken["fail_rate"] == 1.0
+        cats = sorted(failure_category(r["error"]) for r in broken["rows"])
+        assert cats == ["auth", "auth", "input_rejected"], cats
+        shutil.copy(path, Path(td) / "cache_frozen.jsonl")      # the broken state
+
+        # --- the BUDGET must agree with the runner, or --dry-run under-reports
+        #     by exactly the cells you are trying to fix -----------------------
+        with quiet():
+            frozen = ResultCache(path)
+        plan = build_plan(list(CLIPS), conds, ["arm"], cache=frozen)
+        assert plan["n_remaining"] == 2 and plan["n_retry_failed"] == 2, plan
+        assert plan["retry_census"]["by_category"] == {"auth": 2}
+        assert plan["n_cached"] == 1 and plan["n_failures_kept"] == 1
+        assert plan["kept_census"]["by_category"] == {"input_rejected": 1}
+        assert "RE-ATTEMPTS of cached failures" in format_plan(plan)
+        # the two explicit modes are real, not decorative
+        assert build_plan(list(CLIPS), conds, ["arm"], cache=frozen,
+                          retry_failed="none")["n_remaining"] == 0
+        assert build_plan(list(CLIPS), conds, ["arm"], cache=frozen,
+                          retry_failed="all")["n_remaining"] == n_cells
+
+        # --- ESCAPE HATCH: --retry-failed none reproduces the OLD behaviour
+        #     exactly, on a pristine copy of the broken cache ------------------
+        replay_path = Path(td) / "cache_replay.jsonl"
+        shutil.copy(Path(td) / "cache_frozen.jsonl", replay_path)
+        never_called = FakeASR()
+        with quiet():
+            replay = run_grid(CLIPS, REFS, conds, {"arm": never_called}, lib, fs=FS,
+                              workers=1, cache=ResultCache(replay_path),
+                              progress_every=0, retry_failed="none")
+        assert never_called.calls == 0 and replay["n_failed"] == n_cells
+
+        # --- (a)+(b): the fix, then the re-run. EXACTLY the two retryable cells
+        #     are called; the terminal one is not ------------------------------
+        fixed = FakeASR()
+        with quiet():
+            cache2 = ResultCache(path)
+        with quiet() as out:
+            res = run_grid(CLIPS, REFS, conds, {"arm": fixed}, lib, fs=FS,
+                           workers=1, cache=cache2, progress_every=0)
+        assert fixed.calls == 2, (
+            f"the retry made {fixed.calls} calls, expected 2 — 0 means the "
+            f"incident is back, 3 means the terminal class is not honoured")
+        assert res["n_called"] == 2 and res["n_failures_retried"] == 2
+        assert res["n_failures_kept"] == 1
+        assert res["retry_census"]["by_category"] == {"auth": 2}
+        assert "RE-ATTEMPTING 2 cached failure" in out.getvalue(), out.getvalue()
+        assert "KEEPING 1 cached failure" in out.getvalue(), out.getvalue()
+
+        recovered = {r["clip_id"]: r for r in res["rows"]}
+        assert recovered["u02"]["failed"] is False and recovered["u02"]["wer"] is not None
+        assert recovered["u05"]["failed"] is False
+        assert recovered["u17"]["failed"] is True and _BAD_MEDIA in recovered["u17"]["error"]
+
+        # --- (c) NEGATIVE CONTROL: the cache is not defeated wholesale. The now-
+        #     successful rows are hits, so a third run makes ZERO calls ---------
+        again = FakeASR()
+        with quiet():
+            third = run_grid(CLIPS, REFS, conds, {"arm": again}, lib, fs=FS,
+                             workers=1, cache=cache2, progress_every=0)
+        cache2.close()
+        assert again.calls == 0, "a cached SUCCESS stopped being a cache hit"
+        assert third["n_cached"] == n_cells and third["n_failures_retried"] == 0
+
+    # and the predicate itself, pinned directly on both sides
+    assert is_cache_hit({"failed": False}) is True
+    assert is_cache_hit({"failed": True, "error": f"ValueError: {_NO_KEY}"}) is False
+    assert is_cache_hit({"failed": True, "error": f"RuntimeError: {_BAD_MEDIA}"}) is True
+    assert is_cache_hit({"failed": True, "error": "something nobody has seen"}) is False
+    assert is_cache_hit(None) is False
+    print("OK 15: a cached auth failure is RE-ATTEMPTED (2 calls) while a "
+          "terminal payload rejection is honoured (0), a cached success stays a "
+          "hit, and --dry-run prices the retries")
+
+
+# ---------------------------------------------------------------------------
+# 16: a one-arm run cannot silently shrink the master table
+# ---------------------------------------------------------------------------
+
+def test_a_partial_arm_run_cannot_shrink_the_master_table():
+    """
+    `--models elevenlabs-scribe --clips al` wrote a 20-row master.csv over the
+    8,800-row table. It succeeded, printed a clean banner, and destroyed every
+    other arm. Recoverable only because cache.jsonl is append-only — but nothing
+    warned, and a `--rebuild` with an incomplete --models list does the same.
+
+    Running ONE ARM AT A TIME IS THE DESIGNED PATTERN here (nova-3 on 40 clips,
+    the cloud/local arms on the 10-clip AL subset, whisper pinned to --workers 1
+    by Numba), so the fix cannot be "refuse partial plans". The plan is a slice;
+    the table is the instrument's output. Merge from the cache, and refuse to
+    write a table that would drop cells existing nowhere else.
+    """
+    lib = make_library()
+    conds = [Condition(0.2, 25.0, "babble", "none", 0.0),
+             Condition(0.9, 0.0, "engine", "none", 0.5)]
+
+    with tempfile.TemporaryDirectory() as td:
+        cache = ResultCache(Path(td) / "cache.jsonl")
+        with quiet():
+            both = run_grid(CLIPS, REFS, conds,
+                            {"arm-a": FakeASR(), "arm-b": FakeASR()}, lib, fs=FS,
+                            workers=1, cache=cache, progress_every=0)
+            write_master(both["rows"], td)
+        n_full = len(both["rows"])                       # 3 clips x 2 conds x 2 arms
+        master = Path(td) / "master.csv"
+        assert len(read_master_cells(master)) == n_full == 12
+
+        with quiet():                                    # the incident: one arm
+            one = run_grid(CLIPS, REFS, conds, {"arm-b": FakeASR()}, lib, fs=FS,
+                           workers=1, cache=cache, progress_every=0)
+        assert len(one["rows"]) == n_full // 2
+
+        # (a) the raw writer REFUSES instead of truncating, and names what is lost
+        try:
+            with quiet():
+                write_master(one["rows"], td)
+            raise AssertionError("a one-arm plan silently replaced the master table")
+        except ValueError as exc:
+            assert "DROPPING 6" in str(exc), exc
+            assert "arm(s) lost entirely: ['arm-a']" in str(exc), exc
+            assert "--overwrite-master" in str(exc), exc
+        # the guard must run BEFORE open(..., 'w') — a guard that fires after the
+        # truncate has already destroyed the thing it was guarding
+        assert len(read_master_cells(master)) == n_full, "the existing table was truncated"
+
+        # (b) PINNED TO CELLS, NOT ROW COUNT. A same-size write that swaps one arm
+        #     for another is still a total loss of arm-a, and a count-based guard
+        #     would wave it straight through.
+        swapped = one["rows"] + [dict(r, model="arm-c") for r in one["rows"]]
+        assert len(swapped) == n_full
+        try:
+            with quiet():
+                write_master(swapped, td)
+            raise AssertionError("a same-size write dropped an arm unnoticed")
+        except ValueError as exc:
+            assert "arm(s) lost entirely: ['arm-a']" in str(exc), exc
+
+        # (c) the composer makes the DESIGNED workflow work: merge from the cache
+        prior = read_master_cells(master)
+        comp = compose_master_rows(one["rows"], cache, prior, quiet=True)
+        assert comp["unrecoverable"] == []
+        assert comp["census"]["carried"]["per_model"] == {"arm-a": 6}
+        assert comp["census"]["plan"]["per_model"] == {"arm-b": 6}
+        assert comp["census"]["delta"] == 0
+        with quiet():
+            write_master(comp["rows"], td, prior_cells=prior)
+        assert len(read_master_cells(master)) == n_full
+        assert {k[2] for k in read_master_cells(master)} == {"arm-a", "arm-b"}
+
+        # (d) NEGATIVE CONTROL 1 — the guard must not fire on the good input.
+        #     A plan covering everything, and a plan ADDING an arm, both write
+        #     cleanly with nothing carried and no refusal.
+        with quiet():
+            write_master(both["rows"], td, prior_cells=prior)          # exact cover
+            grown = both["rows"] + [dict(r, model="arm-c") for r in one["rows"]]
+            write_master(grown, td)                                    # strict superset
+        assert len(read_master_cells(master)) == n_full + 6
+        full_cover = compose_master_rows(both["rows"], cache, prior, quiet=True)
+        assert full_cover["census"]["carried"]["n_rows"] == 0, "spurious carry-over"
+        assert len(full_cover["rows"]) == n_full
+
+        # (e) NEGATIVE CONTROL 2 — the escape hatch is real. --overwrite-master
+        #     writes the smaller table on purpose, and merge=False reports every
+        #     uncovered cell as a loss rather than silently carrying it.
+        prior_now = read_master_cells(master)
+        forced = compose_master_rows(one["rows"], cache, prior_now, merge=False,
+                                     quiet=True)
+        assert len(forced["unrecoverable"]) == len(prior_now) - len(one["rows"])
+        assert len(forced["rows"]) == len(one["rows"])
+        with quiet():
+            write_master(forced["rows"], td, allow_shrink=True, prior_cells=prior_now)
+        assert len(read_master_cells(master)) == len(one["rows"])
+        cache.close()
+    print("OK 16: a one-arm run merges from the cache instead of replacing the "
+          "table; a write that would drop cells (even at equal row count) is "
+          "refused before the file is opened; --overwrite-master still works")
+
+
+# ---------------------------------------------------------------------------
+# 17: the runner reads .env like the probes do — and never prints a value
+# ---------------------------------------------------------------------------
+
+def test_load_env_fills_gaps_without_printing_values():
+    """
+    The asymmetry that caused defect 1: probe_elevenlabs.py / run_d3a.py fall
+    back to `.env`, this runner read only the environment. So the day-one gate
+    passed and the grid failed on every cell with 'not set' — a failure produced
+    by which FILE was run, then cached as if it were a property of the audio.
+    """
+    secret = "sk_do_not_print_me_0123456789"
+    with tempfile.TemporaryDirectory() as td:
+        env = Path(td) / ".env"
+        env.write_text(
+            "# a comment\n\n"
+            f"DEADZONE_TEST_NEW_KEY={secret}\n"
+            'DEADZONE_TEST_QUOTED="quoted-value"\n'
+            "DEADZONE_TEST_EXISTING=from-the-file\n"
+            "not-a-kv-line\n", encoding="utf-8")
+        os.environ["DEADZONE_TEST_EXISTING"] = "from-the-environment"
+        for k in ("DEADZONE_TEST_NEW_KEY", "DEADZONE_TEST_QUOTED"):
+            os.environ.pop(k, None)
+        try:
+            loaded = load_env(env)
+            assert sorted(loaded) == ["DEADZONE_TEST_NEW_KEY", "DEADZONE_TEST_QUOTED"]
+            assert os.environ["DEADZONE_TEST_NEW_KEY"] == secret
+            assert os.environ["DEADZONE_TEST_QUOTED"] == "quoted-value"
+            # NEGATIVE CONTROL: an exported var WINS — .env fills gaps, it does
+            # not override a deliberate `export KEY=... ` for one run
+            assert os.environ["DEADZONE_TEST_EXISTING"] == "from-the-environment"
+            assert "DEADZONE_TEST_EXISTING" not in loaded
+            # the return value is NAMES; a key printed once is a key leaked forever
+            assert all(secret not in str(x) for x in loaded)
+            assert load_env(Path(td) / "nope.env") == []
+        finally:
+            for k in ("DEADZONE_TEST_NEW_KEY", "DEADZONE_TEST_QUOTED",
+                      "DEADZONE_TEST_EXISTING"):
+                os.environ.pop(k, None)
+    print("OK 17: .env fills only UNSET vars (an exported value wins) and "
+          "load_env returns names, never values")
 
 
 if __name__ == "__main__":
