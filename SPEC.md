@@ -2683,3 +2683,60 @@ the degenerate input produced not an error but a *plausible value* — and in tw
 cases the plausible value was the more flattering one (no dead zone; no destroyed
 words). When writing a guard, ask what it returns for the degenerate input, not
 just for the good one.
+
+---
+
+# Appendix F: Closing decisions (2026-08-05)
+
+## F.1 Write-up length — SETTLED at ~14 min. Do not relitigate.
+
+`report/writeup.md` main body is **3,595 prose words (~14 min)** against an
+original "under 10 minutes" target. **The user reviewed this and accepted it as
+is.** Three compression passes took it 5,810 → 3,595 (−38 %), relocating ~1,135
+words into appendices rather than deleting them.
+
+**Why 3,000 was not reachable, measured rather than asserted.** 1,828 of the
+3,595 words are protected content: the 16 limitations (393), the headline +
+survivor-bias counter-argument (311), the DRR block + "which RIRs were curated"
+(253), the trap-function paragraph (239), the AL null + its control (200), both
+Jaccards + "cannot borrow someone else's dead-zone map" (101), the no-novelty
+lineage (96), the two closing honest sentences (94), the pre-registration
+blockquote (88), the abstract headline (53). The remaining 1,767 carry the
+method, the factor table, and every claim's number-and-interval. Reaching 3,000
+would mean cutting ~600 from *that* — a third of the surviving results text.
+Saturation was tested by rewriting §6.1, §6.3 and §6.6 from a blank page instead
+of editing; each fresh attempt yielded only 15–20 words.
+
+**The general finding:** "under 10 minutes" and "every claim keeps its number and
+interval, plus 16 limitations in the body" are **incompatible constraints**, not
+an editing failure. If a future session wants it shorter, the honest move is a
+**one-page executive summary prepended** to the existing document (the fast
+reader stops there, the full text survives intact) — *not* another compression
+pass. A fourth pass will only delete numbers.
+
+## F.2 `grid-v1` tag — HELD pending the listening pass
+
+The tree is clean at **`46614d4`** and `results/MANIFEST.json` records that SHA
+with `dirty: false` (11,086 Deepgram calls, ~$3.26, all assets SHA-256'd). The
+tag is deliberately **not** placed yet: `grid-v1` should mark a *validated* grid,
+and A.R3.5 — the listening pass — is the only check that the degraded audio is
+physically plausible. The unit tests prove the maths, not the result. Tag once
+the listening pass returns clean.
+
+## F.3 State at close
+
+**8 commits, clean tree, 21/21 suites green.**
+
+| piece | commit |
+|---|---|
+| conventional package layout (pure renames) | `a5d39f6` |
+| D4 clip matching — 7.8 pts of confound | `a5527aa` |
+| analysis layers (exact Sobol, L1, L2/L3) | `8893a97` |
+| demo kit, dep lock, ElevenLabs gate | `6061b9a` |
+| path/invocation references | `06ba022` |
+| invariant hardening + 3 more defects | `a3f92f2` |
+| SPEC appendices C/D/E | `7b587c0` |
+| the write-up | `46614d4` |
+
+**Open, and each needs a human:** the ElevenLabs `sk_` key (Appendix D — probe
+ready, zero spent), the listening pass, and then the tag.
