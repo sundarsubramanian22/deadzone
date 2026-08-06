@@ -22,10 +22,19 @@
 >
 > **What changed in the prose, and why:** `DEMO_SCRIPT.md` section 7 closed on
 > *a conclusion about what listening can and cannot establish about an ASR*.
-> One listener, on three pairs selected **because** the model tied on them,
-> cannot carry a conclusion — so the segment is now framed as the **motivating
-> hook**, and section 7 closes on the question instead. `demos/demo_listen.py`
-> was changed the same way in `ff1eb28` and the two must not diverge again.
+> One listener, judging a three-clip set selected **because** the model tied on
+> it, cannot carry a conclusion — so the segment is now framed as the
+> **motivating hook**, and section 7 closes on the question instead.
+> `demos/demo_listen.py` was changed the same way in `ff1eb28` and the two must
+> not diverge again.
+>
+> **Two pairs is the beat; the third is a reserve.** That number is now derived
+> rather than written — `n_primary()` counts the pairs the recorded listener
+> called confidently, sections 2 and 6 and `KEY.md` all say it out loud, and
+> `tests/test_make_demo_audio.py` pins it to `demos/demo_listen.py`'s
+> `DEFAULT_N_PAIRS`. The clip **set** is three and the beat **plays** two; those
+> are different numbers and a reader will conflate them unless every sentence
+> says which one it means.
 > The retracted line and the reasoning are in `report/_demo_internal_notes.md`.
 > The `blind/BLIND_SHEET.md` residual closed with it: its rows had been left in
 > pair order (1, 2, 3) while the derived play order is 2, 3, 1, and they are now

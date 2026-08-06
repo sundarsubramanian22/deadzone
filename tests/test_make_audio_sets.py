@@ -534,7 +534,20 @@ class NoFlagUnlocksDocumentsByAccident(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="deadzone-listen-force-") as td:
             sb = _sandbox(td)
             doc = sb / "results" / "audio" / "listen" / DOC_NAME
-            before = doc.read_bytes()
+
+            # PLANT the hand edit rather than relying on the live document
+            # already differing from the template. It used to, because the live
+            # copy was stale; regenerating it made the two agree and this test
+            # failed -- asserting "force changed the bytes" when there was
+            # nothing left to change. A test whose premise is that a file on
+            # disk has drifted stops testing anything the moment someone fixes
+            # the drift, and it fails in the direction that looks like a
+            # regression. The planted marker makes the overwrite observable
+            # whatever the live document happens to say.
+            before = b"# HAND-EDITED\n\nnotes from an actual listening pass\n"
+            doc.write_bytes(before)
+            pre_existing = {p.name for p in
+                            doc.parent.glob("WHAT_TO_LISTEN_FOR.superseded-*.md")}
 
             r = subprocess.run([PY, "scripts/make_audio_sets.py",
                                 "--listen", "--force-docs"],
@@ -544,7 +557,16 @@ class NoFlagUnlocksDocumentsByAccident(unittest.TestCase):
             self.assertNotEqual(doc.read_bytes(), before,
                                 "--force-docs did not overwrite, so the set is not "
                                 "rebuildable")
-            backups = list(doc.parent.glob("WHAT_TO_LISTEN_FOR.superseded-*.md"))
+            self.assertNotIn(b"HAND-EDITED", doc.read_bytes(),
+                             "--force-docs left the planted edit in place, so the "
+                             "overwrite did not actually happen")
+            # Count backups THIS RUN made, not backups in the directory. The
+            # sandbox is a copy of the live tree, so any .superseded-* file a
+            # human left lying around there was being counted as one of ours --
+            # a second real failure this test produced today, and one that
+            # accuses the generator of a bug in someone else's housekeeping.
+            backups = [p for p in doc.parent.glob("WHAT_TO_LISTEN_FOR.superseded-*.md")
+                       if p.name not in pre_existing]
             self.assertEqual(len(backups), 1,
                              "--force-docs overwrote without keeping a copy")
             self.assertEqual(backups[0].read_bytes(), before)
