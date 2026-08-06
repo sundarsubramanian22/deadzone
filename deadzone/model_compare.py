@@ -44,18 +44,23 @@ from deadzone.design import DEFAULT_FACTOR_SPACE, FactorSpace
 def _registry() -> dict[str, Callable[[str], dict]]:
     from deadzone.audio_pipeline import (
         transcribe_deepgram, transcribe_whisper, transcribe_vosk,
+        transcribe_elevenlabs,
     )
     return {
         "nova-3":        lambda path: transcribe_deepgram(path, model="nova-3"),
         "whisper-base":  lambda path: transcribe_whisper(path, model_name="base"),
         "vosk":          lambda path: transcribe_vosk(path),
+        # Second commercial arm exposing per-word confidence. BATCH, like the
+        # nova-3 arm — scribe_v2_realtime is the streaming literal and is a
+        # different call, so this one is labelled batch and not sold as streaming.
+        "elevenlabs-scribe": lambda path: transcribe_elevenlabs(path, model="scribe_v2"),
         # add a model HERE, one line:
         # "my-model":    lambda path: transcribe_mymodel(path),
     }
 
 
 # Names only — importable/inspectable without resolving the adapters (no SDKs).
-MODEL_REGISTRY = ("nova-3", "whisper-base", "vosk")
+MODEL_REGISTRY = ("nova-3", "whisper-base", "vosk", "elevenlabs-scribe")
 
 
 def get_model(name: str) -> Callable[[str], dict]:
@@ -64,6 +69,135 @@ def get_model(name: str) -> Callable[[str], dict]:
     if name not in reg:
         raise KeyError(f"unknown model {name!r} (registry: {sorted(reg)})")
     return reg[name]
+
+
+# ---------------------------------------------------------------------------
+# WER COMPARABILITY — an arm property, not a special case
+# ---------------------------------------------------------------------------
+# Confidence is never comparable across arms; that is handled by
+# `within_model_conf_percentile` and has been true since day one. WER is
+# *usually* comparable — same reference, same scorer, same normalization — so
+# every cross-arm WER path in this project silently assumed it always is.
+#
+# It is not. An arm whose ORTHOGRAPHY does not match the corpus injects a WER
+# offset that has nothing to do with acoustics, and the question is whether that
+# offset is a CONSTANT (characterize once, subtract, keep comparing) or a DRAW
+# (nothing to subtract).
+#
+#   * whisper-base's offset is a constant: it always writes numbers as digits,
+#     measured at +0.090 on this grid, and `cross_model_norm.py` removes it
+#     symmetrically. It stays in the WER comparison.
+#   * elevenlabs-scribe's offset is a per-call draw. See the reason string below.
+#     It is excluded.
+#
+# WHY THIS IS A REGISTRY AND NOT `if model == "elevenlabs-scribe"`: the next arm
+# with unstable formatting must be handled by adding one line here, and the line
+# must carry the evidence — an exclusion whose reason lives in a commit message
+# gets "fixed" by the next person who reads the code.
+WER_INCOMPARABLE_ARMS: dict[str, str] = {
+    "elevenlabs-scribe": (
+        "orthography is NON-DETERMINISTIC across identical calls. Four repeat "
+        "calls on byte-identical audio returned different transcripts on 5 of 6 "
+        "probe clips: `A7X42` vs `A seven X four two`, `Q9J05.` vs "
+        "`Q nine J zero five.`, and u33 flips the OTHER way (`one Z nine nine A "
+        "W five.` 3x, `1Z99AW5.` 1x). Worth up to 0.727 strict WER on identical "
+        "input. Whisper's formatting offset is a CONSTANT (+0.090) — measure it "
+        "once and subtract it, which is what cross_model_norm.py does. A "
+        "per-call draw cannot be subtracted: it is variance, not bias, and it "
+        "also defeats the two residuals cross_model_norm.py documents (the "
+        "leading zero in Q9J05; the letter run AW), which turn from "
+        "fixed-per-arm into run-to-run. A WER difference that is a coin flip on "
+        "identical input is not a measurement of the model, and the controlled- "
+        "isolation premise (SPEC 1) cannot absorb it."),
+}
+
+
+class WerIncomparableArmError(ValueError):
+    """
+    A cross-model WER comparison was asked to rank an arm whose WER is not
+    comparable to the others'.
+
+    Loud, and with no bypass. The alternative — a quiet filter — is exactly the
+    failure this project studies: the report would come out complete,
+    well-formed, correctly shaped, and about a different set of arms than the one
+    that was run. `exclude_incomparable=True` is the ONLY way past this, it must
+    be typed at the call site, and every path that takes it publishes the census
+    saying which arms it dropped and why.
+    """
+
+
+def is_wer_comparable(model: str) -> bool:
+    """May this arm's WER be ranked against another arm's? (See the registry.)"""
+    return str(model) not in WER_INCOMPARABLE_ARMS
+
+
+def wer_comparability(models: Sequence[str]) -> dict:
+    """
+    Census: which of `models` may enter a cross-model WER comparison, which may
+    not, and the stated reason for each exclusion.
+
+    `statement` is the paragraph a report prints verbatim. It is built here
+    rather than at each call site so the wording cannot drift between the JSON
+    payload, the terminal report and the dashboard.
+    """
+    models = [str(m) for m in models]
+    comparable = [m for m in models if is_wer_comparable(m)]
+    excluded = [m for m in models if not is_wer_comparable(m)]
+    reasons = {m: WER_INCOMPARABLE_ARMS[m] for m in excluded}
+    if excluded:
+        statement = (
+            "CROSS-MODEL WER COMPARISON — arms IN: "
+            + ", ".join(comparable) + ".  arms EXCLUDED: "
+            + ", ".join(excluded) + ".\n"
+            + "\n".join(f"  {m}: {reasons[m]}" for m in excluded)
+            + "\nThe excluded arms are still measured WITHIN themselves "
+              "(dead-zone rate, confidence-vs-WER shape, calibration): those are "
+              "computed against each arm's own distribution and never touch a "
+              "cross-arm WER.")
+    else:
+        statement = ("CROSS-MODEL WER COMPARISON — arms IN: "
+                     + ", ".join(comparable) + ".  arms EXCLUDED: none.")
+    return {
+        "arms": models,
+        "comparable": comparable,
+        "excluded": excluded,
+        "reasons": reasons,
+        "n_excluded": len(excluded),
+        "statement": statement,
+    }
+
+
+def wer_comparable_tables(tables: dict[str, Sequence[dict]], *,
+                          exclude_incomparable: bool) -> tuple[dict, dict]:
+    """
+    THE CHOKEPOINT. Every cross-model WER path goes through here.
+
+    Returns `(tables_to_compare, census)`. With `exclude_incomparable=False`
+    (the default everywhere) an incomparable arm RAISES; with it True the arm is
+    dropped and named in the census, which the caller is expected to print.
+
+    Refuses to proceed on fewer than two surviving arms, because "these arms
+    diverge" over one arm is not a statement about anything.
+    """
+    census = wer_comparability(list(tables))
+    if census["excluded"] and not exclude_incomparable:
+        raise WerIncomparableArmError(
+            f"cross-model WER comparison includes arm(s) {census['excluded']} "
+            f"whose WER is not comparable to the others'.\n"
+            + "\n".join(f"  {m}: {r}" for m, r in census["reasons"].items())
+            + f"\nPass exclude_incomparable=True to drop {census['excluded']} "
+              f"and compare {census['comparable']} — the exclusion is then "
+              f"printed in the report's WER-comparability block. There is no "
+              f"option to include them: the number would be a formatting draw "
+              f"wearing an acoustic result's name.")
+    keep = census["comparable"] if exclude_incomparable else list(tables)
+    if len(keep) < 2:
+        raise WerIncomparableArmError(
+            f"after excluding {census['excluded']} for WER incomparability only "
+            f"{keep} remains, and a cross-model WER comparison needs >= 2 arms. "
+            f"Run a second WER-comparable arm, or read the within-model "
+            f"sections instead — those include every arm.")
+    return {m: tables[m] for m in keep}, census
 
 
 # ---------------------------------------------------------------------------
@@ -184,22 +318,41 @@ def _region_rows(rows: Sequence[dict], factor: str, kind, spec, b: int):
 def find_divergence_regions(tables: dict[str, Sequence[dict]],
                             space: FactorSpace = DEFAULT_FACTOR_SPACE,
                             n_bins: int = 4, wer_hi: float = 0.3,
-                            conf_pct_hi: float = 0.6) -> list[dict]:
+                            conf_pct_hi: float = 0.6,
+                            exclude_incomparable: bool = False) -> list[dict]:
     """
     Scan every factor axis for the regions where the models diverge MOST — i.e.
     where one model's WER (and dead-zone rate) is much worse than another's in the
     same acoustic cell. Returns regions ranked by the max pairwise WER gap.
 
+    THIS IS A CROSS-MODEL WER PATH — `wer_gap` subtracts one arm's WER from
+    another's — so it is gated by `wer_comparable_tables`. An arm listed in
+    `WER_INCOMPARABLE_ARMS` raises unless the caller types
+    `exclude_incomparable=True`, and every region then carries the census under
+    `wer_comparability` so the restriction travels with the number.
+
     Each region: {factor, span, worse_model, better_model, wer_gap,
-    wer_by_model, dead_zone_rate_by_model}. Because dead zones use within-model
-    confidence, a region can be flagged even when the worse model's RAW confidence
-    is numerically lower than the better model's.
+    wer_by_model, dead_zone_rate_by_model, n_by_model, models_compared,
+    models_absent}. Because dead zones use within-model confidence, a region can
+    be flagged even when the worse model's RAW confidence is numerically lower
+    than the better model's.
+
+    N ARMS, NOT TWO. `wer_gap` is max(wer) - min(wer) over the arms present in
+    the region, which IS the maximum pairwise gap; `worse_model` and
+    `better_model` name the two extremes. With three or more arms the middle
+    arms are not in those two fields — they are in `wer_by_model`, which is the
+    complete answer and is what any consumer should iterate. And an arm with no
+    rows in a region is named in `models_absent` rather than dropped silently:
+    "these arms diverge here" means something different when a third arm was
+    never measured in that slice.
     """
-    names = list(tables.keys())
-    if len(names) < 2:
+    if len(tables) < 2:
         raise ValueError(
             f"find_divergence_regions needs >= 2 model tables to compare, got "
-            f"{names}. With one arm every region reports a gap of nothing.")
+            f"{list(tables)}. With one arm every region reports a gap of nothing.")
+    tables, wer_census = wer_comparable_tables(
+        tables, exclude_incomparable=exclude_incomparable)
+    names = list(tables.keys())
     # Dead-zone flags are computed over each model's WHOLE distribution (that is
     # where the within-model confidence percentile is meaningful), then aggregated
     # per region. Never recompute the percentile inside a bin — if confidence is
@@ -250,6 +403,18 @@ def find_divergence_regions(tables: dict[str, Sequence[dict]],
                 "worse_model": worse, "better_model": better,
                 "wer_gap": gap, "wer_by_model": wer_by,
                 "dead_zone_rate_by_model": dz_by,
+                # Coverage, so a region computed over a SUBSET of the arms says
+                # so. With two arms `models_absent` is always empty and this is
+                # free; with three it is the difference between "these arms
+                # diverge" and "these arms diverge and a third was never here".
+                "n_by_model": n_by,
+                "models_compared": list(valid),
+                "models_absent": [m for m in names if m not in valid],
+                # Travels with EVERY region, not just the payload header: a
+                # region dict is what gets copied into a slide, and a WER gap
+                # over a restricted arm set must say so wherever it lands.
+                "wer_comparability": wer_census,
+                "models_excluded_wer_incomparable": wer_census["excluded"],
             })
     regions.sort(key=lambda r: r["wer_gap"], reverse=True)
     return regions
@@ -258,7 +423,8 @@ def find_divergence_regions(tables: dict[str, Sequence[dict]],
 def compare_models(tables: dict[str, Sequence[dict]],
                    space: FactorSpace = DEFAULT_FACTOR_SPACE,
                    n_bins: int = 4, wer_hi: float = 0.3,
-                   conf_pct_hi: float = 0.6) -> dict:
+                   conf_pct_hi: float = 0.6,
+                   exclude_incomparable: bool = False) -> dict:
     """
     Full cross-model comparison over per-model results tables.
 
@@ -266,6 +432,15 @@ def compare_models(tables: dict[str, Sequence[dict]],
     SHAPE (within-model, scale-free). Across models: the factor-space regions where
     they diverge most, ranked. The headline is *where the dead zones differ*, not
     whose confidence number is higher.
+
+    THE TWO HALVES HAVE DIFFERENT ARM SETS, and that is deliberate. `per_model`
+    is within-model throughout — every arm is ranked against its own confidence
+    distribution — so EVERY arm appears there, including ones whose WER is not
+    cross-comparable. `divergence_regions` subtracts one arm's WER from
+    another's, so it is restricted to the WER-comparable arms and the restriction
+    is published under `wer_comparability`. Reading `models` as the arm set of
+    both is the mistake this docstring exists to prevent; `models_within` and
+    `models_wer_compared` name them separately.
     """
     per_model: dict[str, dict] = {}
     for m, rows in tables.items():
@@ -276,9 +451,15 @@ def compare_models(tables: dict[str, Sequence[dict]],
             "dead_zone_rows": [rows[i] for i in np.where(flags)[0]],
             "shape": confidence_wer_shape(rows),
         }
+    census = wer_comparability(list(tables))
     return {
         "per_model": per_model,
         "divergence_regions": find_divergence_regions(
-            tables, space, n_bins, wer_hi, conf_pct_hi),
+            tables, space, n_bins, wer_hi, conf_pct_hi,
+            exclude_incomparable=exclude_incomparable),
         "models": list(tables.keys()),
+        "models_within": list(tables.keys()),
+        "models_wer_compared": (census["comparable"] if exclude_incomparable
+                                else list(tables)),
+        "wer_comparability": census,
     }

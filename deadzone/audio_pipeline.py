@@ -670,3 +670,262 @@ def transcribe_vosk(audio_path: str, model_path: str | None = None,
                 rec.AcceptWaveform(data)
             _result = json.loads(rec.FinalResult())
     return _parse_vosk_result(_result)
+
+
+# ---------------------------------------------------------------------------
+# ElevenLabs Scribe (a SECOND commercial arm that exposes per-word confidence)
+# ---------------------------------------------------------------------------
+# Deepgram is the spine because it returns word confidence; Scribe is the only
+# other vendor arm here that does, so it is a full arm (dead-zone map, L2
+# calibration, confidence-shape comparison) rather than a WER-only one. The
+# day-one gate that established this is scripts/probe_elevenlabs.py.
+#
+# Scribe reports confidence as a LOG-probability (`logprob`, <= 0). That scale is
+# its own — exp(logprob) is NOT commensurate with Deepgram acoustic confidence or
+# Whisper's decoder softmax, so it goes through model_compare's within-model
+# percentile like every other arm, and is never pooled across vendors.
+
+ELEVENLABS_ENDPOINT = "https://api.elevenlabs.io/v1/speech-to-text"
+
+# The `type` vocabulary Scribe uses in words[]. Every entry, including the ones
+# that are not words, carries a `logprob` — see _parse_elevenlabs_response for
+# why enumerating them here (rather than filtering only for "word" and shrugging
+# at the rest) is the point.
+_SCRIBE_WORD_TYPE = "word"
+_SCRIBE_TOKEN_TYPES = frozenset({"word", "spacing", "audio_event"})
+
+# Clip bound for a confidence leaving this adapter. Scribe's scale TOPS OUT AT
+# EXACTLY 0.0, so exp(logprob) is exactly 1.0 — observed live, not hypothesised
+# (u02, the word "at", logprob 0.0). A confidence of exactly 1.0 is a perfectly
+# fine number right up until it reaches a logit, where log(p/(1-p)) is +inf: the
+# L2 calibrator's _logit already clips for this reason (SPEC A.R5.8 records that
+# "vendors DO return exactly 1.0"). We clip HERE as well, because the calibrator
+# is not the only consumer and a +inf that only some consumers defuse is a bug
+# waiting for the first consumer that doesn't. Deepgram's adapter does NOT clip —
+# its confidences are model-emitted probabilities that happen not to saturate, so
+# the issue never arose there; Scribe saturates BY CONSTRUCTION, which is the
+# difference. Value deliberately equals calibration._EPS (duplicated rather than
+# imported: audio_pipeline is the base layer and must not depend on an analysis
+# module that pulls sklearn). tests/test_adapters.py pins the two together.
+_CONF_EPS = 1e-6
+
+
+class ScribeSchemaError(ValueError):
+    """Raised when a Scribe response does not have the schema we parse."""
+
+
+def _elevenlabs_form(model: str, language_code: str | None) -> dict:
+    """
+    The exact multipart form fields sent to the Scribe endpoint.
+
+    Factored out for the same reason as _deepgram_kwargs: so a test can assert,
+    offline, that the request actually disables the things that would otherwise
+    silently pollute the measurement. Every field here is load-bearing.
+
+      * ``tag_audio_events`` is Scribe's analogue of Deepgram's smart_format, and
+        turning it OFF matters far more than it sounds. With tagging on (the
+        vendor default) a heavily degraded clip comes back as the literal text
+        "[background noise]" carried by a single ``audio_event`` entry — measured
+        on results/audio/u02__rt60-1_snr-0_babble_g726_roll-1.wav. Scored, that is
+        two INSERTIONS of words nobody said, in exactly the harsh cells the study
+        cares about; worse, it destroys the empty-transcript signal that the
+        `mute_zone` category is defined by (a condition that emits nothing is a
+        distinct failure class from one that emits wrong words, and a confidence
+        monitor is structurally blind to it). Off, the same clip returns "".
+      * ``language_code`` pins language detection. Left to auto-detect, Scribe
+        reported language_probability 0.468 on a CLEAN clip (u17) and rendered the
+        very same audio-event tag in FRENCH ("[bruit de fond]") on a noise-only
+        file. An arm that silently switches output language under degradation
+        would post a wall of substitutions that reads as an acoustic effect. This
+        is also the matched choice: Deepgram's nova-3 is called on its English
+        default. Pass language_code=None to restore auto-detection deliberately.
+      * ``timestamps_granularity`` must be "word". At "character" granularity the
+        words[] array holds CHARACTERS under the same field names, so the headline
+        per-word confidence would quietly become a per-character one.
+      * ``diarize`` off: one speaker per clip by construction (SPEC §8), and
+        speaker-split output would change the response shape for no gain.
+    """
+    form = {
+        "model_id": model,
+        "tag_audio_events": "false",
+        "timestamps_granularity": "word",
+        "diarize": "false",
+    }
+    if language_code:
+        form["language_code"] = language_code
+    return form
+
+
+def _prob_from_logprob(logprob: float) -> float:
+    """
+    exp() a Scribe logprob into a probability, clipped to (0, 1) — see _CONF_EPS.
+
+    A POSITIVE logprob RAISES rather than clipping. exp(x) > 1 is not a
+    probability, so a positive value means the field is no longer a
+    log-probability. Clipping it would map every such value to ~1.0 and report a
+    supremely confident model: the vendor swapping `logprob` for a 0-1 score
+    would sail through as "confidence went up", which is the exact silent failure
+    this project exists to measure. exactly 0.0 is legal and common (it is the
+    top of the scale), so the test is > 0, not >= 0.
+    """
+    lp = float(logprob)
+    if lp > 0.0:
+        raise ScribeSchemaError(
+            f"Scribe logprob {lp!r} is positive; exp() of it exceeds 1 and is not "
+            "a probability. The field is documented as a log-probability in "
+            "[-inf, 0]. If the vendor changed the scale, fix the transform — do "
+            "NOT clip, or every confidence saturates at 1.0 and the arm reports "
+            "perfect self-knowledge it does not have."
+        )
+    # math.exp underflows to 0.0 for very negative logprobs (no exception); the
+    # lower clip is what keeps that out of a logit too.
+    return float(min(max(math.exp(lp), _CONF_EPS), 1.0 - _CONF_EPS))
+
+
+def _parse_elevenlabs_response(wire: dict) -> dict:
+    """
+    Pure: an ElevenLabs Scribe wire JSON -> the adapter contract dict.
+
+    Shape (live-verified against scribe_v2, 2026-08-05):
+        {"text": str, "language_code": str, "language_probability": float,
+         "audio_duration_secs": float, "transcription_id": str,
+         "words": [{"text": str, "start": float, "end": float,
+                    "type": "word"|"spacing"|"audio_event", "logprob": float}]}
+
+    THREE TRAPS, all of which produce a clean-looking number with no error.
+
+    1. ONLY ``type == "word"`` ENTRIES ARE WORDS. words[] interleaves the word
+       tokens with ``spacing`` entries (the literal " " between them), and every
+       spacing entry carries a ``logprob`` of its own. Averaging the array as it
+       comes would fold whitespace into the headline confidence signal — and not
+       as harmless noise: measured on u02, 9 of the 10 spacing logprobs are
+       IDENTICAL to the logprob of the word that follows them, so an unfiltered
+       mean double-counts most words and single-counts the rest (0.988016 over
+       all 21 entries vs 0.986885 over the 11 real ones). A weighting nobody
+       chose, on the project's headline signal, off by a plausible-looking
+       amount. ``audio_event`` entries are excluded for a different reason: they
+       are not speech at all (see _elevenlabs_form on why we also switch them off
+       at the source).
+
+    2. PUNCTUATION IS GLUED TO THE WORD TOKEN, and that is why it needs no
+       special case. Scribe emits "seven.", "Avenue,", "Berkeley." as single
+       ``word`` entries; there is no punctuation token type and no option to
+       suppress punctuation. So normalize_text strips the marks IN PLACE without
+       changing the token count, and the word entries stay 1:1 with the
+       transcript's whitespace tokens (verified exactly on all six probe clips:
+       " ".join(word entries) reproduces `text` byte for byte). That is what
+       keeps this arm comparable to Deepgram, which runs with punctuate=False and
+       so has no punctuation at all: both canonicalize to the same token stream.
+       Had punctuation arrived as its own entry the decision would have gone the
+       other way — it would have had to be dropped from word_confidences, and the
+       transcript would then carry a token with no confidence behind it.
+
+    3. ``language_probability`` IS NOT CONFIDENCE. It is a document-level
+       LANGUAGE-DETECTION score on a 0-1 scale (it read 0.725 on a clean English
+       clip). It is deliberately NOT surfaced: it would give every word in a clip
+       the same value, which is a perfectly smooth fake confidence signal that no
+       test can catch, and with language_code pinned it is a constant 1.0 anyway.
+
+    An UNKNOWN ``type`` raises. Silently filtering for "word" and ignoring the
+    rest means the day a vendor renames the type, word_confidences comes back
+    empty, mean_conf comes back nan, and the arm loses its headline signal
+    without a single error — a guard whose failure mode is silence.
+    """
+    entries = wire.get("words") or []
+
+    unknown = sorted({str(w.get("type")) for w in entries
+                      if isinstance(w, dict) and w.get("type") not in _SCRIBE_TOKEN_TYPES})
+    if unknown:
+        raise ScribeSchemaError(
+            f"unrecognized Scribe words[] type(s) {unknown} (known: "
+            f"{sorted(_SCRIBE_TOKEN_TYPES)}). Decide explicitly whether each new "
+            "type is a word before parsing it: an unhandled type either silently "
+            "leaves its confidence out of the headline signal or silently folds a "
+            "non-word into it."
+        )
+
+    confs = [_prob_from_logprob(w["logprob"]) for w in entries
+             if isinstance(w, dict) and w.get("type") == _SCRIBE_WORD_TYPE
+             and w.get("logprob") is not None]
+    mean_conf = float(np.mean(confs)) if confs else float("nan")
+    return {
+        # The vendor's own text field, unedited. An EMPTY string is a real result
+        # (Scribe returns "" on a clip it cannot transcribe) and must not be
+        # confused with the failure sentinel, which uses transcript=None.
+        "transcript": wire.get("text") or "",
+        "word_confidences": confs,
+        "mean_conf": mean_conf,
+        # Scribe exposes no separate utterance-level aggregate, so this reuses the
+        # per-word mean — the same documented choice the Vosk arm makes, and for
+        # the same reason: never fabricate a second signal. language_probability
+        # is NOT it (trap 3 above). nan when there are no words.
+        "utterance_conf": mean_conf,
+    }
+
+
+def transcribe_elevenlabs(audio_path: str, api_key: str | None = None,
+                          model: str = "scribe_v2",
+                          language_code: str | None = "eng",
+                          max_retries: int = 3, backoff_base: float = 1.0,
+                          _transcribe_fn=None) -> dict:
+    """
+    Transcribe one file with ElevenLabs Scribe, returning the SAME adapter
+    contract dict as transcribe_deepgram (see banner) so the arms compare.
+
+    Robustness matches the Deepgram arm: key from the ELEVENLABS_API_KEY env var
+    (or the api_key arg, never hardcoded), `max_retries` attempts with
+    exponential backoff, and the skip-me sentinel (transcript=None) on persistent
+    failure instead of an exception that would kill a multi-hundred-clip run.
+
+    `model` is the vendor literal and is configurable; "scribe_v2" is the current
+    batch flagship (scribe_v1 was removed 2026-07-09, so there is deliberately no
+    fallback). "scribe_v2_realtime" is the websocket variant and carries the same
+    per-word schema, but it is a streaming call this adapter does not make.
+
+    CONFIDENCE CAVEAT (read before comparing to Deepgram). exp(logprob) is on
+    Scribe's own scale. Compare it WITHIN Scribe across conditions, or via
+    model_compare.within_model_conf_percentile — never as an absolute number
+    against another vendor's confidence.
+
+    `_transcribe_fn` is a test seam: a zero-arg callable returning the wire dict.
+    Left None, the real HTTP call is built.
+    """
+    api_key = api_key if api_key is not None else os.environ.get("ELEVENLABS_API_KEY")
+    if not api_key:
+        raise ValueError(
+            "ELEVENLABS_API_KEY not set (pass api_key= or export the env var)"
+        )
+
+    if _transcribe_fn is None:
+        def _transcribe_fn():
+            import requests                               # lazy import
+            with open(audio_path, "rb") as f:
+                resp = requests.post(
+                    ELEVENLABS_ENDPOINT,
+                    headers={"xi-api-key": api_key},
+                    files={"file": (os.path.basename(audio_path), f, "audio/wav")},
+                    data=_elevenlabs_form(model, language_code),
+                    timeout=180,
+                )
+            if resp.status_code != 200:
+                # Echo the vendor's own body: a 401 vs a 422 vs an unknown
+                # model_id are three different problems and only the body says
+                # which. The request headers (and so the key) are never echoed.
+                raise RuntimeError(
+                    f"HTTP {resp.status_code} from {ELEVENLABS_ENDPOINT}: "
+                    f"{resp.text[:300]}"
+                )
+            return resp.json()
+
+    last_err = None
+    for attempt in range(max_retries):
+        try:
+            return _parse_elevenlabs_response(_transcribe_fn())
+        except Exception as e:          # noqa: BLE001 — grid resilience by design
+            last_err = e
+            if attempt < max_retries - 1:
+                time.sleep(backoff_base * (2 ** attempt))
+
+    return _empty_confidence_result(
+        error=f"elevenlabs failed after {max_retries} attempts: {last_err!r}"
+    )
