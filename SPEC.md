@@ -1606,20 +1606,20 @@ independent of each other — do them in any order, or in parallel.
 | **R1** corpus | ✅ done | `check_recordings.py` → 40/40 OK; clean-condition WER **1.65 %** (6 errors / 363 ref words), 35/40 clips exact, every non-zero row adjudicated by ear |
 | **R2** assets | ✅ done | 16 curated RIRs, 12 noise clips (4/type, 300 s), G.726 codec verified |
 | **R3** JOIN-1 gate | ✅ PASSED | 9/9 gates on u02/u17/u36; SNR calibration exact to 0.01 dB on real audio |
-| **R4** grid | ✅ done | 176 conditions × 40 clips × nova-3 = **7040 rows, 0 failures**, + the 1760-row whisper arm = **8800 rows, 3 failures (0.03 %)**, well under the 2 % gate; `results/master.parquet` now written too (pyarrow installed — it was silently falling back to CSV only) |
+| **R4** grid | ✅ done — ⚠️ **runner defects, see Appendix J.4/J.5** | 176 conditions × 40 clips × nova-3 = **7040 rows, 0 failures**, + the 1760-row whisper arm = **8800 rows, 3 failures (0.03 %)**, well under the 2 % gate; `results/master.parquet` now written too (pyarrow installed — it was silently falling back to CSV only). Now **10,560 rows / 3 arms** with the Scribe arm (Appendix I). J.5: a one-arm run once overwrote the 8,800-row table with 20 rows; J.4: a cached auth failure made a fixed config error replay forever |
 | **R4.3/4.5** screen + sensitivity | ✅ **done, and better than planned** | exact functional-ANOVA decomposition of the real factorial — see B.3 |
 | **R4.7 / R5.5** active learning | ✅ done — **a null, and it is robust** | see B.4; the null's own obvious fix (reparameterise reverb to DRR) was tested and **failed** — see Appendix H |
 | **R5.1** D1 headline | ✅ real — ⚠️ **SUPERSEDED by Appendix G** | then: ρ = −0.957, 6/176 dead zones. **Now: ρ = −0.980 paired / −0.952 all-clips (n = 169), 2/176 dead zones** — the estimand mismatch |
 | **R5.3** D2 fingerprints | ✅ real | deletions dominate; entity error 0.633 vs WER 0.511 |
 | **R5.4** D3a interactions | ✅ real — **pre-registration CONFIRMED**, report reconciled | see B.3 |
 | **R5.6** D4 sim2real | ✅ real | sim underestimates WER by 12.1 pts; Spearman 0.873; **dead-zone Jaccard 0.00** |
-| **R5.7** L1 multi-model | ✅ **UNBLOCKED AND DONE** | whisper arm 1760/1760; `results/model_arms.{json,txt}` written — see B.9 |
+| **R5.7** L1 multi-model | ✅ **UNBLOCKED AND DONE** — now **3 arms**, see Appendix I | whisper arm 1760/1760; `results/model_arms.{json,txt}` written — see B.9. ⚠️ **Appendix J.6**: `matched_arms` defaulted to a hardcoded pair, so the Scribe arm would have vanished from a complete-looking two-arm report; 8 more two-arm assumptions fixed alongside it. Both published arms' numbers are bit-identical after the fix |
 | **R5.8** L2 calibration | ✅ **re-run and final** | see B.4 |
 | **R5.9** L3 decoupling | ✅ **real, two quotable verdicts** | see B.4 |
-| **R6** dashboard | ✅ **done** — all 8 panels `ok`, rebuilt on the full table | see B.6 |
+| **R6** dashboard | ✅ **done** — all 8 panels `ok`, rebuilt on the full table | see B.6. ⚠️ **Appendix J.7**: the sensitivity panel served nova-3's Sobol artifact under **every** arm toggle — G's estimand mismatch on the page whose subject is that mismatch |
 | **R7** live agent | ⬜ **deliberately out of scope** | user-scoped out; `agent_eval.py` remains a synthetic-validated scaffold |
 | **R8** write-up | 🟡 **compressed version being written** | see B.5 |
-| **R9** demo kit | ✅ **done** — every `make` target passes offline, 21/21 suites green | see B.6 |
+| **R9** demo kit | ✅ **done** — every `make` target passes offline, 21/21 suites green | see B.6. ⚠️ **Appendix J** is mostly about this row: J.1/J.2 two generators overwriting hand-authored records (one of them driven by `make test` itself), J.3 a credential printed in full because wrapping split it past the redactor, J.7 a rehearsal finding the 3-minute script narrates a verdict the panel contradicts and an SNR level the grid never ran |
 | **audit** sensitivity | ✅ **independently re-derived** | every headline Sobol number reproduced to 1e-16 without importing the module — see B.10 |
 
 ---
@@ -2818,9 +2818,29 @@ are unaffected):
 | piece | commit |
 |---|---|
 | D3b: the DRR reparameterisation test + its permutation control — **Appendix H** | `3652409` |
+| ElevenLabs Scribe adapter + the three vendor traps — **Appendix I** | `477a683` |
+| runner: a cached failure is not a result; a partial run is not a table — **J.4, J.5** | `4672b43` |
+| provenance: both gap intervals, D2 frozen, every arm costed | `2ae92db` |
+| docs: retract the superseded headline where it was still published | `f7b999f` |
+| the listening prediction was tested, and it FAILED — recorded | `c082b04` |
+| the demo generator ate a scientific record, and a green test did it — **J.1** | `aea58e2` |
+| Scribe is rank-only; `matched_arms` stops defaulting to a pair — **I.5, J.6** | `238edbf` |
+| write-up + SPEC Appendix I; the ≥4.5× → 3.58× correction — **J.8** | `d291cea` |
+| hazard note: the guard landed, and the trigger was a test | `0d7d8f5` |
+| freeze the experiment: MANIFEST on a clean tree, 3 arms costed (~$3.70) | `bfd2d78` |
+| guard the sibling generator: the destructive default — **J.2** | `278c282` |
+| optional live beat, and the credential a line-wrap leaked — **J.3** | `9934eac` |
+| pin the prose to the artifacts; delete the precis that had drifted — **J.7** | `ae8af34` |
+| runbook: the arm has run, and the confidence signal is wrong both ways | `b33c40a` |
 
 **Open, and each needs a human:** the ElevenLabs `sk_` key (Appendix D — probe
 ready, zero spent), the listening pass, and then the tag.
+
+> **Update 2026-08-06:** the ElevenLabs key is **resolved** (Appendix I.1 — it was
+> a Key ID, not the secret; the arm is run, 1760 rows, 0 failures). The listening
+> pass is **done** (Appendix G). The tag is still held, now for a third reason —
+> **Appendix J.7**: the demo script, the dashboard and the write-up must agree
+> before a tag ratifies them, and J.7 found three places where they do not.
 
 > **Update:** the listening pass is **done** — see Appendix G. It cost the
 > headline finding and bought a better one. Remaining: reconcile the write-up,
@@ -3628,3 +3648,449 @@ artifact-backed one, and running it against **all three arms** would settle
 whether non-determinism is this vendor's or the category's. Cost is negligible
 (24 calls ≈ $0.005 on Scribe). **Until it exists, the scope of the claim is
 "measured on one arm, unmeasured on the others."**
+
+---
+
+# Appendix J: the defects moved out of the measurement code (2026-08-06)
+
+> Continues E, G and H. Supersedes nothing — every number those appendices
+> publish is unchanged, and the L1 figures J.6 touches were re-read off
+> `results/model_arms.json` for this appendix rather than copied forward (C.7's
+> process note). Six defects, one rehearsal result, and a change in **where** the
+> defects live that is the reason this appendix exists at all.
+
+## J.0 The spine: the instrument is now more reliable than the apparatus around it
+
+E named the family — **a guard whose failure mode is silence.** G added **two
+averages over different populations, subtracted.** H added **a parameter accepted
+and silently discarded** and argued, correctly, against inflating E's count to
+make a pattern. All three found their defects in the same place: the measurement
+code. `_check_partition`, `confidence_gap.per_condition_table`,
+`sim2real`'s unenforced clip premise, `load_factorial`'s duplicate overwrite,
+`split_robustness`'s dropped `space` — arithmetic, loaders, joins.
+
+This session's six are somewhere else. **Five of six are outside the measurement
+code entirely:** two document generators (`scripts/make_demo_audio.py`,
+`scripts/make_audio_sets.py`), the live-demo credential path
+(`demos/demo_live.py`), and the runner that produces the master table and the
+cache (`scripts/run_experiment.py`, twice). The sixth is in
+`deadzone/analysis/model_arms.py`, and it is the exception that fixes the shape:
+it is not an arithmetic error at all but a failure to **discover what was in the
+table** — a provenance defect wearing analysis clothes. A seventh, found by
+rehearsal rather than by testing, sits in `dashboard/build.py`.
+
+The uncomfortable statement, and it should be made plainly rather than softened:
+**the parts of this project that measure things are now better defended than the
+parts built to make the measurements trustworthy.** The trap functions have
+tests that construct the violating input and a negative control. The analysis
+layers have census blocks, estimand names at the call site and refusal-to-write
+guards. The tooling had none of that, and it is the tooling that destroyed a
+record, leaked a credential, cached a configuration error as a property of the
+audio, and overwrote the master table. Every one of them was reachable by a
+plain command with no flags, and three of them ran with a green test suite.
+
+## J.1 A green test suite was deleting a scientific record — `aea58e2`
+
+`scripts/make_demo_audio.py` wrote **five** documents unconditionally on every
+build: `PREREGISTERED_PREDICTION.md`, `DEMO_SCRIPT.md`, `KEY.md`,
+`WHAT_TO_LISTEN_FOR.md`, `blind/BLIND_SHEET.md`. An agent hand-recorded a
+pre-registered prediction's outcome — the verbatim listener response, the
+scoring, the verdict (it **failed**, `c082b04`) and an analysis of a flaw in the
+pre-registration's own rubric — and a regeneration erased it minutes later. It
+was caught only because an edit tool happened to report that the file had changed
+underneath it.
+
+**The trigger is the part worth recording.** `tests/test_demo.py` invokes this
+generator with `--force` against the **live tree** (`cwd=REPO`) on every
+`make test`. The safety mechanism was the delivery mechanism. Advice of the form
+"don't run the generator" was never sufficient, because nobody was running it.
+
+*(Repo-vs-note discrepancy: `aea58e2`'s message and this session's working notes
+both cite `tests/test_demo.py:398`. On disk 398 is the `def` line of
+`test_it_regenerates_with_no_key_and_no_outbound_socket`; the `--force`
+invocation is at **line 414**. Same test, different line — corrected here rather
+than propagated.)*
+
+The defect is **not** the overwrite. It is that regenerable output and
+unrecoverable record were handed to the same writer. The wavs are a pure function
+of `master.csv` and the asset library and rebuild in minutes; the listener's words
+derive from no artifact and exist nowhere else. Aggravating context: `results/`
+is gitignored, so the only copy lived in an untracked directory until `c082b04`
+force-added it.
+
+**The guard, and the one decision inside it that is not obvious.** Refuse to
+overwrite a document whose SHA-256 does not match what this generator last wrote
+(`results/audio/demo/generated_docs.json`). Hash, never mtime — mtime does not
+survive a checkout, a `cp` without `-p`, or a restore, and a test pins that an
+mtime guard would see nothing. `--force` no longer unlocks documents;
+`--force-docs` does, and copies each file aside first, so the one irreversible
+operation is not the one without an undo.
+
+**The sidecar is deliberately not seeded from the current files.** Recording
+today's hand-edited bytes as "what the generator last wrote" would certify them
+generator-owned, and the very next default run would erase them — the guard would
+have shipped the bug it exists to prevent. So a **missing** record reads as
+unknown provenance and **refuses**, which is E.5's rule applied to its own
+degenerate input: a first run against an already-populated kit is precisely the
+state where "no record means safe to overwrite" is wide open. It also covers
+anything restored from backup or predating the guard.
+
+`TheGuard` is 11 tests; `NoWriterBypassesTheGuard` walks the AST so a sixth
+document added out of habit with `.write_text()` reintroduces the defect loudly.
+Mutation-checked twice at the time of the fix (not persisted): restoring the
+naive writer fails 8 of the 11 and the 3 survivors are exactly the negative
+controls. `2 files changed, 625 insertions, 24 deletions.`
+
+## J.2 The sibling was worse: its destructive path was the DEFAULT — `278c282`
+
+`scripts/make_audio_sets.py` rewrote `results/audio/listen/WHAT_TO_LISTEN_FOR.md`
+unconditionally — listening instructions, sitting in the directory where the
+listening pass happens, which in this project is the pass that invalidated the
+published headline (Appendix G). The file is already hand-edited.
+
+**It has no `--force` at all.** Its pre-fix flags were `--listen` and `--sweep`,
+both *selectors*, combined as `do_listen = a.listen or not (a.listen or a.sweep)`
+— so a plain no-flag run did everything, including the rewrite. J.1's version at
+least required someone (or a test) to type a destructive-sounding word. Here
+there was **no flag to blame**. Nothing invokes it automatically today (verified:
+`test_demo` imports `LADDER` only; the Makefile never calls it), so there is no
+green-suite delivery mechanism *yet* — but `--listen` is exactly the flag a future
+`make listen-prep` would reach for, and that is disclaimed in the module rather
+than left ambiguous.
+
+Same mechanism, deliberately: content-hash sidecar, hash never mtime, fail closed
+on a missing record, backup before force. It is a **sibling rather than an
+import** for two mechanical reasons written at the call site — `make_demo_audio`
+imports `LADDER`/`LISTEN_CLIP` from this module so importing back cycles, and a
+refusal must name *this* script's flag or it points the reader at the wrong door.
+
+Two guards for one hazard is worse than one, and the way that happens is drift.
+So `BothGuardsAgree` drives both implementations through a single seven-step
+scenario matrix (`absent` → `own output` → `hand-edited` → `corrupt sidecar` →
+`absent sidecar` → `forced` → `touched only`) and requires identical
+`(status, write-result, bytes-on-disk)` at every step. **With a control**, because
+parity alone would also hold if both were no-ops:
+`test_the_agreed_answers_are_the_protective_ones` pins *what* they agree on —
+`hand-edited` must be `(AUTHORED, "skipped")` with the human's text still in the
+file, `forced` must leave exactly one `.superseded-*` backup, and `touched only`
+(an `os.utime`, not an edit) must still be `GENERATED`.
+`2 files changed, 823 insertions, 9 deletions.`
+
+## J.3 A credential leaked because a line was wrapped — `9934eac`
+
+`demos/demo_live.py` is the optional live beat: one clip through nova-3 clean,
+the same clip degraded to the measured #1 dead zone, per-word confidences as they
+come back. Two real calls, ~2.5 s, $0.00087. It is the **only** code path in the
+repo that puts a credential-adjacent string on a screen, and the only one that
+runs while screen-sharing.
+
+Redaction started out at **print time**: one `say()` that scrubbed known secret
+values out of everything it printed. `fallback_notice` builds a long sentence
+around the vendor's error string so a presenter can read it aloud, and wraps it
+with `textwrap.wrap` before printing. **Wrapping inserted a newline into the
+middle of the API key.** Each wrapped line then held only half the secret, no line
+matched the value being searched for, and the credential printed in full across
+two lines. Clean output, no error, nothing to notice.
+
+Fix: redaction happens where untrusted text **enters** — `LiveCallFailed.__init__`
+redacts at construction, plus the two catch-all handlers — so the raw value never
+exists downstream and no later transform can split it back into view. The
+print-time pass stays as a backstop, with the incident written into its docstring
+rather than into a commit message.
+
+**The test is the good part, twice over.** It asserts on
+`"".join(out.split())` — all whitespace stripped — because a secret split across a
+line break is still a leaked secret and a substring test on raw text cannot see
+it. And it carries `DECOY`, a same-shaped non-secret that must survive to the
+screen **untouched**, so a redactor that simply blanked everything cannot pass.
+`3 files changed, 1640 insertions.`
+
+## J.4 The cache made a configuration error permanent — `4672b43`
+
+A new arm was run without its key exported. The asymmetry that caused it:
+`scripts/probe_elevenlabs.py`, `scripts/run_d3a.py` and `analysis/decoupling.py`
+all fall back to `.env`; the **runner** read the environment variable only. So the
+day-one gate passed (the probe found the key) and the grid run failed on all
+**20 cells** with `ELEVENLABS_API_KEY not set` — a failure produced entirely by
+*which file was being run*, then cached as though it were a property of the audio.
+
+The failure guard did its job and printed `FAILED ROWS: 20/20 (100.00%)`. The
+cause was fixed, the run repeated:
+
+```
+[grid] 20 cells | 20 cached | 0 to run          <- ZERO calls
+[grid] FAILED ROWS: 20/20 (100.00%)             <- the same error, replayed
+```
+
+**The retry was a no-op wearing the mask of a retry.** Recovery required
+hand-editing `cache.jsonl`. This is E's family with a twist: the cache, whose
+whole job is to make a resumed run free, is what makes a broken state permanent —
+a cached failure and a reproducible failure are indistinguishable to a
+`key in dict`.
+
+**The policy argument decides the default, and it is worth recording in full.**
+Re-calling a cell that really is broken costs one call and prints a loud line at
+the end of the run. *Not* re-calling a cell that has since been fixed prints a
+clean, complete-looking, entirely wrong run. Those two mistakes are not the same
+size, so the default is the loud one: a cached failure does not satisfy a lookup
+unless explicitly classified terminal.
+
+R4.2's money argument turns out near-vacuous here. Every failure class this grid
+has produced fails *before* a billable response exists — a missing key raises
+before the request is built, a missing RIR or codec raises in `apply_condition`, a
+4xx/timeout is not billed, and the local arms are $0 by construction. Measured on
+the real cache (**10,740 rows, 3 failures**), retrying every failed row costs
+**three local Whisper calls**.
+
+`TERMINAL_CATEGORIES` therefore holds exactly one entry — `input_rejected`, the
+vendor rejecting the audio payload itself — and it earns it for a
+project-specific, checkable reason: `apply_condition` is seeded from
+`condition.name`, so the degraded audio is byte-reproducible and the rejected
+payload is **provably** the payload that would be re-sent. Everything
+unrecognised, including `unknown` (no error text) and `other`, stays retryable:
+classifying the unknown as terminal restores the exact defect for every failure
+class not yet seen, **which is how this one arrived**.
+
+## J.5 `--models X` silently shrank the master table — `4672b43`
+
+`scripts/run_experiment.py --models elevenlabs-scribe --clips al` wrote a
+**20-row** `master.csv` over the **8,800-row** table, succeeded, and printed a
+clean success banner. Recoverable only because `cache.jsonl` is append-only —
+but nothing warned, and `--rebuild` with an incomplete `--models` list does the
+same thing.
+
+*(Repo-vs-repo discrepancy, recorded because it is exactly the kind of drift this
+log exists to catch: `tests/test_run_experiment.py:807` says "wrote a 20-row
+master.csv over the 8,800-row table", while `scripts/run_experiment.py:1080`
+describes the same incident as "1 arm x 176 conditions x 10 clips … deleting the
+other 8,800" — which would be 1,760 rows. The 20-cell figure is corroborated
+twice elsewhere in the same file (lines 530 and 1462, the auth incident of J.4,
+which was the same run). **20 is the number; the 1,760 gloss is the generic form
+of the command, not the incident.**)*
+
+Running **one arm at a time is the designed pattern** here — nova-3 on 40 clips,
+the cloud and local arms on the 10-clip AL subset, Whisper pinned to
+`--workers 1` by Numba's non-threadsafe workqueue layer — so the fix cannot be
+"refuse partial plans". The split was wrong: **the plan is a slice, the table is
+the whole instrument's output**, and the writer treated them as one thing.
+
+Two mechanisms, in firing order. `compose_master_rows` **merges** — cells the
+existing table holds that this plan does not cover are carried back from the
+cache, so a partial run *appends* an arm. Then `write_master` **refuses to
+shrink** if cells would still be lost. Either alone would have stopped the
+incident; both, because the merge belongs where the cache is in scope and the
+guard belongs at the artefact-creation site.
+
+Two details that are the actual engineering:
+
+- **The guard fires on CELLS, not row counts.** A same-size write that swaps one
+  arm for another is still a total loss, and a row-count check passes it.
+- **It runs BEFORE `open(..., "w")`**, because that call truncates. A guard that
+  fires after the truncate has already destroyed the thing it was guarding. The
+  same argument the duplicate-cell invariant makes at the same site (E.3).
+
+`--overwrite-master` is the explicit way to mean it, and when passed it says so:
+the shrink check for that write is disabled and prints that it is.
+`2 files changed, 902 insertions, 32 deletions.`
+
+## J.6 `matched_arms` defaulted to a hardcoded pair — `238edbf`
+
+`deadzone/analysis/model_arms.py:matched_arms` defaulted `models` to
+`(SPINE_MODEL, BASELINE_MODEL)`. A third arm sitting in `master.csv` would have
+been dropped **before a single number was computed**, and the L1 report would have
+come out complete, well-formed, two-armed, and about a different set of models
+than the one that was paid for and run. No raise, no NaN, no count out of place,
+nothing a reader could see.
+
+The fix is `discover_arms` — every model id present in the table — with
+`arm_intersection` publishing the census of what was compared, what was excluded
+and why. Naming a model that has **no rows** now raises rather than being quietly
+skipped.
+
+**Eight more assumptions of the same shape were found alongside it**, all now
+per-arm or all-pairs:
+
+| # | site | the two-arm assumption |
+|---|---|---|
+| 1 | `model_arms.dead_zone_overlap` | one hardcoded pair → all-pairs **plus** an all-arm Jaccard (bit-identical to the pairwise value at N = 2, so grid-v1's published overlap is unchanged) |
+| 2 | `model_arms.hallucination_report` | ran on `arms[BASELINE_MODEL]` only → `hallucination_by_model`, computed for every arm |
+| 3 | `model_arms.rescore_cross_model` | "both arms are re-scored" → **every** arm, including the ones expected not to move |
+| 4 | `model_compare.find_divergence_regions` | `wer_gap` as a two-model difference → `max − min` over the arms present, plus `models_absent` naming an arm with no rows in a region |
+| 5 | `dashboard/build.py` `default_model` | `models[0]`, i.e. **alphabetical** — adding `elevenlabs-scribe` silently changed which arm the page opens on, onto an empty panel → pinned to `SPINE_MODEL`, imported so the two cannot disagree |
+| 6 | `dashboard/build.py` panel-7 gate | "both arms are in the master table" → "at least two arms … it compares every arm it finds, not a fixed pair" |
+| 7 | `analysis/calibration_report.py` | the verdict sentence interpolated the spine's name as a literal → `rep["model"]`; run on a third arm it produced a fluent, numerate sentence about the wrong model with nothing in the output to contradict it |
+| 8 | `tests/test_model_compare.py::test_registry` | pinning `MODEL_REGISTRY`'s exact membership was itself a two-arm-era assumption — it turns "an arm was added" into a failure that reads like a regression, which trains the next person to edit the assertion. Now asserted as a **contract** (resolvable, no duplicates, spine and baseline present) that fails for a broken arm and passes for a working new one |
+
+**The evidence the fix was scoped correctly is that nothing moved.** Scribe ran
+the *same* 10 clips as Whisper, so the L1 intersection did not shrink
+(`n_common_cells` 1757, `n_common_clips` 10), and re-read from
+`results/model_arms.json` today the two previously published arms are
+bit-identical to Appendix G.8: nova-3 dead-zone rate **0.5682 % (1/176)**,
+shape n = **164**; whisper-base **39.2045 % (69/176)**, shape n = **171**. A
+fix that changes some numbers and provably not others is the good case (G.8).
+`10 files changed, 1847 insertions, 124 deletions.`
+
+## J.7 A rehearsal, not a test, found what tests could not
+
+An agent ran the demo path end to end **as a presenter would**, and returned
+*"no, not cold."*
+
+**The machinery was fine.** Offline behaviour was verified structurally rather
+than by unsetting keys — HTTP was pointed at a black hole so any outbound call
+would hang or fail rather than silently succeed on a machine that happens to have
+credentials — and every target passed; `make demo` completed in **39.5 s**; the
+dashboard built correctly on all three arms (payload `n_rows` 12,320, of which
+10,560 real and 1,760 sim). *(That verification left **no artifact on disk**,
+which is the same weaker standing I.9 flags for the repeat-call probe. Recorded as
+a rehearsal result, not as a repo fact.)*
+
+**The words were wrong.** In `dashboard/DEMO.md`'s 3-minute script:
+
+- Line 106–109 instructs the presenter to *"read the status word out loud,
+  especially if it says NOT CONFIRMED"* and then scripts the sentence
+  *"It says NOT CONFIRMED — the point estimates go the right way but the CI
+  doesn't clear the threshold."* **The panel says CONFIRMED.** The verdict has
+  been CONFIRMED since B.3 and the built page renders it that way — the only
+  occurrences of "NOT CONFIRMED" in `deadzone.html` are a caption
+  (*"NOT CONFIRMED is a result"*) and a JS status branch.
+- Line 74 describes the hero dead zone as *"rt60 one second, SNR twenty-five
+  decibels — a quiet room, just a reverberant one."* The two real nova-3 dead
+  zones are `rt60-0.45_snr-0_engine_g726_roll-0` (conf 0.829, WER 0.306, 0/40
+  silent) and `rt60-0.2_snr-0_babble_opus-lowrate_roll-0.5` — **both at 0 dB**.
+  And **no 25 dB level exists in this grid at all**: `snr_db` is capped at 20
+  (`b54faee`), and the measured levels in `master.csv` are {0, 5, 10, 20}. The
+  script narrates a condition that was never run, on the panel the project is
+  built around.
+- `demos/demo_break.py` printed `SNR 0 dB` and then, four lines later,
+  *"Note the SNR: 20 dB is a QUIET room."* A literal written for the exemplar
+  that ranked #1 **before** Appendix G's estimand mismatch was found. Nothing
+  failed; the slide just said two things. The narration is now derived from the
+  condition being demoed and ranked against the level set the grid actually ran,
+  so it cannot contradict the factor line above it.
+- `dashboard/build.py:build_sensitivity` loaded `results/sobol.json` for
+  **every** arm. That artifact is an exact functional ANOVA of the complete
+  4×4×3×3 babble factorial with 40 clips in every cell — 144 cells, **5,760**
+  transcriptions — which only nova-3 ran. So the whisper and scribe toggles
+  served nova-3's indices, nova-3's ST−S1 gaps and nova-3's pre-registration
+  verdict, asserting *"N = 144, 5,760 model evaluations"* for arms that ran
+  **1,760** rows. **Two quantities computed over different rows, presented as
+  one — Appendix G's exact defect class, on the page whose subject is that defect
+  class.** The remedy follows `build_sim2real` rather than inventing a second
+  convention: an explained empty state naming the arm the decomposition belongs
+  to, this arm's actual row and clip counts, what it would cost to produce, and
+  where to read the nova-3 result instead.
+
+**This is the third arrival of the same lesson.** A.R3.5 said from the beginning
+that the unit tests prove the maths and only listening proves the result.
+Appendix G demonstrated it — the listening pass invalidated the headline and no
+test caught it. The project then wrote that lesson down twice, in G.2 and in F.2,
+and it still took a **human-shaped pass** — someone reading the script aloud
+against the screen — to find that the demo narrated a verdict the page contradicts
+and a condition the grid never ran. The tests were green throughout. Every one of
+these four is a *claim about a number*, and this repo had no test category for
+claims: prose is not executable, so nothing pinned a sentence to an artifact.
+
+**The partial answer landed the same day** — `ae8af34` adds
+`tests/test_report_numbers.py` (1,499 lines): every load-bearing figure in
+`report/writeup.md` is re-read from the artifact that produced it, each check is
+proven able to fail, the `dead_zones.csv` column trap (C.5) is checked by the
+`gap = mean_conf − (1 − wer)` **identity** rather than by column position,
+retracted figures are asserted absent, and
+`test_the_pin_covers_every_report_document` fails if a new prose file appears in
+`report/` unpinned — the drift that got `report/SUMMARY.md` folded into §1 and
+deleted rather than shipped alongside.
+
+**Its scope is `report/`, and that is the honest statement of what remains
+uncovered.** `dashboard/DEMO.md` — the document a presenter reads aloud, and the
+one J.7 found wrong in two places — is not under the pin, nor is any narration
+string in `demos/`. The generalisable form: *a claim is only pinned where someone
+wrote a pin*, and the surfaces most likely to drift are the ones nobody thinks of
+as deliverables.
+
+*(Fixes for the `demo_break.py` narration and the `build_sensitivity` panel were
+present in the working tree and uncommitted when this was written; `DEMO.md` was
+still wrong on both counts. Concurrent agents own those files.)*
+
+## J.8 What I got wrong this session
+
+Several of the above were introduced or relayed **by me**, and the appendix is
+worth less if it reads as a list of other people's mistakes.
+
+1. **A "≥ 4.5×" clearance figure for the pre-registration that is rt60-only.**
+   The decision rule requires both registered factors' ST−S1 gaps to clear 0.020
+   with the 95 % bootstrap CI entirely above it. Under the **quadrature** interval
+   the code deliberately publishes (C.4: conservative, because the S1/ST bootstrap
+   correlation is strongly positive), the lower bounds are `rt60` **0.09147**
+   → 4.57× and `snr_db` **0.07155** → **3.58×**. The binding case is `snr_db`, and
+   quoting the looser factor's margin as *the* margin overstates the test's
+   clearance by 28 %. Corrected in `d291cea`; the per-factor values are now
+   persisted in `results/sobol.json` (`gap_ci_forms`, `gap_ci_lo_quadrature`,
+   `s1_st_bootstrap_corr`, `gap_conf_ratio_quadrature_over_direct`) so they need
+   never be quoted from a log again — which is how they drifted. Same commit fixed
+   two more of mine: the S1/ST correlations
+   (+0.843 / +0.871 / +0.854 / +0.646) whose **ordering** differed from the log's,
+   so a naive substitution would have reassigned values to the wrong factors; and
+   "~2.5× wider", which actually ranges 2.70× down to **1.27×** for codec.
+2. **An n = 3 comparison table that mixed a 40-clip population with a 10-clip
+   one.** I handed over a silent-row table reading nova-3 `31.4 % / 7 mute` beside
+   Scribe `4.4 % / 2` and Whisper `19.1 % / 5`. The nova-3 row is the **40-clip D1**
+   population; the other two are the **10-clip L1** population. Matched, nova-3 is
+   **24.5 % / 12 mute** and the headline ratio is **5.5×, not 7×**. That is
+   Appendix G's own defect — two quantities over different populations, put in one
+   table and compared — committed in a table presented as a finding, by the person
+   relaying G's correction. Caught while writing I.4 and recorded there.
+
+Both have the same cause and it is C.7's: **quoting a summary instead of the
+artifact.** Four of C.7's five stale numbers survived multiple reviews for exactly
+that reason. The log is a summary, not a source.
+
+## J.9 The rule this earns
+
+E.5: *ask what a guard returns for the degenerate input.* G.11: *when two
+quantities are compared, assert they were computed over the same rows, name the
+estimand at the call site, and publish both pairings.* H.8: *when a function takes
+a configuration object, grep every call it makes for that object.*
+
+The line J adds:
+
+> **Before a component overwrites, replays, defaults or emits, name what its
+> input is a function OF — and enforce it at the boundary rather than assuming
+> it.**
+
+Every one of the six is that assumption, unchecked:
+
+| defect | assumed its input was a function of | it was actually a function of |
+|---|---|---|
+| J.1 / J.2 | `master.csv` + the asset library (regenerable) | a listener's words, existing nowhere else |
+| J.3 | the string being scrubbed is the string that prints | an intermediate, later wrapped |
+| J.4 | the audio, so a cached failure is reproducible | the environment (which `.env` the caller parsed) |
+| J.5 | the running plan | the whole instrument's output |
+| J.6 | a constant arm set | data in the table |
+
+Operationally: **a writer that cannot distinguish regenerable output from
+irreplaceable record must refuse** (and must not seed its own baseline from the
+files it is about to protect — J.1); **a cache keyed on inputs must not store
+outcomes caused by the environment**, and where it cannot tell, the default is the
+loud one, chosen by asking which of the two mistakes is bigger (J.4); **a redactor
+belongs at ingestion, not at emission**, because any transform between the two can
+defeat it (J.3); **any set the code iterates — arms, clips, conditions — is
+discovered from the data, never defaulted** (J.6); and **a partial write is
+refused before the file is truncated, on identity not on size** (J.5).
+
+And the one that has now arrived three times, which is not a code rule at all:
+**prose is not covered by any test in this repo.** The maths is proven, the result
+is not, and a claim written in a script or a caption is a claim nothing checks.
+It took a listening pass to find G and a rehearsal to find J.7. Budget for both.
+
+## J.10 State
+
+Commits this session, in topological order: `477a683` (Scribe adapter),
+`4672b43` (J.4 + J.5), `2ae92db`, `f7b999f`, `c082b04` (the failed prediction,
+recorded), `aea58e2` (J.1), `238edbf` (J.6), `d291cea` (write-up + Appendix I),
+`0d7d8f5`, `bfd2d78` (MANIFEST on a clean tree: 14,606 calls, 3 arms, ~998 min
+audio, ~$3.70), `278c282` (J.2), `9934eac` (J.3), `ae8af34` (the prose pin,
+J.7), `b33c40a` (runbook).
+
+`grid-v1` remains **untagged**, for F.2's reason plus J.7's: the demo script, the
+dashboard and the write-up must agree before a tag ratifies them. J.7's four
+narration defects are exactly the disagreement F.2 warned against.

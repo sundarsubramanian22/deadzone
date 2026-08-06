@@ -1077,9 +1077,16 @@ def make_grid_wer_fn(clips: Mapping[str, np.ndarray], refs: Mapping[str, str],
 #
 #     scripts/run_experiment.py --models elevenlabs-scribe --clips al
 #
-# ran 1 arm x 176 conditions x 10 clips, succeeded, and wrote a master.csv
-# containing exactly those rows — deleting the other 8,800. Nothing warned. The
-# run's own output was a clean success banner.
+# plans 1 arm x 176 conditions x 10 clips = 1,760 rows, succeeds, and writes a
+# master.csv containing exactly those rows — deleting every other arm. Nothing
+# warned. The run's own output was a clean success banner.
+#
+# What actually happened was smaller and worse: the run that triggered this was
+# a `--limit 20` smoke test, so the table went from 8,800 rows to TWENTY. The
+# generic form above deletes 8,800 and leaves 1,760; the observed form deleted
+# 8,800 and left 20. Both are total losses of every other arm, which is why the
+# guard fires on CELLS rather than on row counts — a same-size write that swaps
+# one arm for another loses just as much and would pass any count-based check.
 #
 # One arm at a time is not a misuse, it is THE way this grid is run: nova-3 on
 # all 40 clips, the local and cloud arms on the 10-clip AL subset, whisper pinned
