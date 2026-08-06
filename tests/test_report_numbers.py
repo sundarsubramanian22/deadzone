@@ -2694,25 +2694,25 @@ def checks_interview_internal():
 
     return [
         C("IIL D1 spearman, paired",
-          [r"\*\*ρ = (−[\d.]+)\*\* \| Spearman rank correlation"],
+          [r"Lead with the \*\*continuous\*\* result — ρ = (−[\d.]+)"],
           float(_grab(b, r"global spearman\(conf_pct, WER_spoke\) = (-?[\d.]+)")),
           TOL3, cg + " global spearman(conf_pct, WER_spoke)"),
         C("IIL D1 non-mute conditions",
-          [r"\*\* \| Spearman rank correlation, confidence vs error \| \*\*(\d+)\*\* non-mute"], n_cond - n_mute, EXACT,
+          [r"overconfident in \d+ of (\d+)"], n_cond - n_mute, EXACT,
           cg + " conditions - mute conditions"),
         # The population trap, pinned as a PAIR: the rule is that neither rate may
         # be written without its clip count, so each pattern requires the count to
         # be adjacent. A doc that drops "on 40 clips" fails here rather than
         # reading as a different, wrong number.
         C("IIL dead-zone rate, 40-clip population, stated WITH its clip count",
-          [r"\*\*([\d.]+) % \(2/176\)\*\* \| nova-3 dead-zone rate \*\*on 40 clips\*\*"],
+          [r"dead-zone rate is \*\*([\d.]+) %\n\(2/176\) on 40 clips\*\*"],
           float(_grab(b, r"categories: \d+ dead zone \(([\d.]+)%\)")), TOL2,
           cg + " categories: N dead zone (P%)"),
         C("IIL headline dead zone: confidence",
-          [r"\*\*(0\.\d+)\*\* confidence"], float(dz["mean_conf"]), TOL3,
+          [r"mean word confidence \*\*(0\.\d+)\*\* whi"], float(dz["mean_conf"]), TOL3,
           "results/dead_zones.csv [nova-3 #1] mean_conf"),
         C("IIL headline dead zone: WER",
-          [r"conf \*\*0\.829\*\* at WER \*\*(0\.\d+)\*\*"], float(dz["wer_spoke"]), TOL3,
+          [r"confidence \*\*0\.829\*\* while WER is \*\*(0\.\d+)\*\*"], float(dz["wer_spoke"]), TOL3,
           "results/dead_zones.csv [nova-3 #1] wer_spoke"),
         # The one place in the repo where the DOCUMENT is right and the ARTIFACT
         # is stale. Pinned to figures.json's strict alignment, never to
