@@ -1237,10 +1237,75 @@ def tag_artifact(res: Mapping, doc: Mapping, path: str | None = None) -> dict:
 # SERIALIZATION
 # ============================================================================
 
+# ---------------------------------------------------------------------------
+# NON-FINITE ENCODING — why this file emits `null` and not `NaN`
+# ---------------------------------------------------------------------------
+# `json.dump` writes a bare `NaN` token by default. That is a Python extension,
+# NOT JSON: RFC 8259 has no NaN literal, so `JSON.parse`, `serde_json`,
+# `encoding/json` and most other parsers REJECT the file outright. Only Python's
+# own `json` reads it back. This module's artifacts are advertised as `quotable`
+# and are read by the write-up, the dashboard and `analysis.interactions`, so
+# shipping a file that half the world cannot open is a defect regardless of who
+# happens to be reading it today.
+#
+# The NaNs are not errors, which is exactly why this went unnoticed: S2 is a
+# strictly-upper-triangular matrix (only i<j is a defined pair), so its diagonal
+# and lower triangle are *meaningfully absent* — 10 of 16 entries for a 4-factor
+# block, 30 of 50 for the 5-factor one.
+#
+# Three options were available and the trade is real:
+#   omit the key        loses the matrix SHAPE; `S2[i][j]` stops being indexable
+#                       and every consumer needs a second code path.
+#   numeric sentinel    a real number that means "not a number" is the exact
+#                       silent-failure pattern this project exists to study.
+#   null  <- CHOSEN     valid JSON, keeps the shape, and round-trips EXACTLY:
+#                       `normalize_sobol_result` does
+#                       `np.asarray(v, dtype=float)`, and numpy maps None -> nan,
+#                       so its `np.isnan(S2[i, j])` skip-test is bit-identical to
+#                       what it was before. No consumer changes.
+#
+# `null` alone would still be lossy in one direction: nan, +inf and -inf all
+# collapse to the same token. So every substitution is recorded losslessly in a
+# `nonfinite_encoding` block (path + original value), which is emitted ONLY when
+# a substitution actually happened. That makes the encoding auditable instead of
+# implicit, and keeps files with no non-finite values byte-unchanged.
+#
+# `write_sobol_json` then passes `allow_nan=False`, so this can never silently
+# regress: if a future field escapes the conversion, the write RAISES instead of
+# quietly producing an invalid file again.
+
+_NONFINITE_NAMES = {float("inf"): "inf", float("-inf"): "-inf"}
+
+
+def _nonfinite_name(v: float) -> str:
+    return _NONFINITE_NAMES.get(v, "nan")
+
+
+def _strip_nonfinite(obj, path: str, log: list) -> object:
+    """Recursively replace non-finite floats with None, logging each one."""
+    if isinstance(obj, float):
+        if math.isnan(obj) or math.isinf(obj):
+            log.append({"path": path, "was": _nonfinite_name(obj)})
+            return None
+        return obj
+    if isinstance(obj, dict):
+        return {k: _strip_nonfinite(v, f"{path}/{k}", log) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_strip_nonfinite(v, f"{path}[{i}]", log) for i, v in enumerate(obj)]
+    return obj
+
+
 def to_json(res: Mapping) -> dict:
-    """JSON-safe view. NaN is preserved (json emits `NaN`) because the S2 matrix's
-    lower triangle is *meaningfully* absent and `normalize_sobol_result` skips it
-    via np.isnan; replacing it with null would break that check."""
+    """
+    Strict-JSON-safe view of a decomposition payload.
+
+    Non-finite floats become `null` (see the block comment above): valid JSON,
+    shape-preserving, and `np.asarray(..., dtype=float)` maps it straight back to
+    `nan` for `normalize_sobol_result`'s `np.isnan` skip-test. Every substitution
+    is itemised under `nonfinite_encoding`, which is present only when something
+    was actually substituted — so a payload with no non-finite values (e.g. the
+    Plackett-Burman screen) is unchanged, key for key.
+    """
     out = {}
     for kk, v in res.items():
         if isinstance(v, np.ndarray):
@@ -1252,13 +1317,41 @@ def to_json(res: Mapping) -> dict:
                        for a, b in v.items()}
         else:
             out[kk] = v
+
+    log: list = []
+    out = _strip_nonfinite(out, "", log)
+    if log:
+        out["nonfinite_encoding"] = {
+            "encoded_as": None,
+            "note": ("RFC 8259 has no NaN/Infinity literal, so non-finite values "
+                     "are written as `null` to keep this file parseable by every "
+                     "JSON reader, not just Python's. `null` round-trips to `nan` "
+                     "through numpy (`np.asarray(v, dtype=float)`), which is how "
+                     "analysis.interactions.normalize_sobol_result already reads "
+                     "it. Nothing here is a measurement that went missing."),
+            "why_present": ("S2/S2_conf are strictly upper triangular — only i<j "
+                            "names a defined factor pair — so the diagonal and "
+                            "lower triangle are absent BY CONSTRUCTION, not by "
+                            "failure."),
+            "n_substituted": len(log),
+            "substitutions": log,
+        }
     return out
 
 
 def write_sobol_json(res: Mapping, path: str) -> str:
+    """
+    Write a decomposition payload as STRICT JSON.
+
+    `allow_nan=False` is the guard, not the docstring: if any value escapes
+    `to_json`'s conversion this raises `ValueError` rather than writing a file
+    that only Python can read. An invalid artifact that parses locally and fails
+    everywhere else is precisely the silent failure this repo studies.
+    """
     os.makedirs(os.path.dirname(os.path.abspath(path)) or ".", exist_ok=True)
+    payload = to_json(res)
     with open(path, "w", encoding="utf-8") as f:
-        json.dump(to_json(res), f, indent=2)
+        json.dump(payload, f, indent=2, allow_nan=False)
     return path
 
 
@@ -1405,8 +1498,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     print(report)
     write_sobol_json(tag_artifact(sob, PRIMARY_BLOCK_DOC, args.out), args.out)
     print(f"[wrote] {args.out}")
-    with open(args.screen_out, "w", encoding="utf-8") as f:
-        json.dump(to_json(screen), f, indent=2)
+    # Same strict-JSON writer as the Sobol blocks. The screen payload happens to
+    # carry no non-finite values today, so this changes its bytes not at all —
+    # which is the point: the guard belongs on the writer, not on the one file
+    # currently known to need it.
+    write_sobol_json(screen, args.screen_out)
     print(f"[wrote] {args.screen_out}")
 
     # --- secondary block: noise_type crossed, coarser elsewhere -------------

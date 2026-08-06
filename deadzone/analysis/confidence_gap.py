@@ -68,6 +68,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 import os
 import sys
 from typing import Sequence
@@ -85,8 +86,8 @@ from deadzone.analysis import (                       # noqa: E402  (after the p
 )
 from deadzone.design import DEFAULT_FACTOR_SPACE, FactorSpace  # noqa: E402
 from deadzone.model_compare import (                  # noqa: E402
-    confidence_wer_shape, dead_zone_flags, within_model_conf_percentile,
-    _bins_for, _region_rows,
+    WER_INCOMPARABLE_ARMS, confidence_wer_shape, dead_zone_flags,
+    within_model_conf_percentile, _bins_for, _region_rows,
 )
 from scipy.stats import rankdata, spearmanr  # noqa: E402
 
@@ -584,6 +585,324 @@ def raw_conf_threshold(cond_rows: Sequence[dict],
     conf = np.array([as_float(r.get("mean_conf")) for r in cond_rows], dtype=float)
     sel = np.isfinite(conf) & (pct >= conf_pct_hi)
     return float(conf[sel].min()) if sel.any() else float("nan")
+
+
+# ===========================================================================
+# 3b. IS THE COUNT REAL, OR IS IT THE OPERATING POINT?
+#     (threshold sensitivity — the robustness check on the headline deliverable)
+# ===========================================================================
+#
+# "2 of 176 conditions are dead zones" is D1's headline, and it is produced by
+# two hardcoded numbers: `WER_HI = 0.3` and `CONF_PCT_HI = 0.6`. Neither was
+# derived from anything. They are a reasonable operating point, and a reasonable
+# operating point is not a measurement.
+#
+# The obvious challenge, and it is a fair one: the #1 nova-3 dead zone sits at
+# mean confidence 0.829, which is the 64th percentile of nova-3's OWN confidence
+# distribution — against 0.962 on the mildest cell in the grid. A production
+# system would very plausibly treat 0.83 as low confidence already, i.e. would
+# set `conf_pct_hi` well above 0.6 and see no dead zone at all. If the count
+# collapses under that reading, then "2" describes the threshold rather than the
+# model, and quoting it as a property of the model is the same estimand error
+# SPEC Appendix G documents — a number whose population is chosen rather than
+# measured.
+#
+# So sweep both thresholds over the range a defensible reader might pick and
+# report what the count does. Three things are computed and none of them is
+# optional:
+#
+#   THE SURFACE      count(wer_hi, conf_pct_hi) over the whole box, so the reader
+#                    sees the operating point in context instead of alone.
+#   MEMBERSHIP       per-condition PERSISTENCE = the fraction of the box where
+#                    that condition is flagged. Size moving is one failure; the
+#                    identity of the flagged set moving is a different and worse
+#                    one, and a count-only sweep cannot tell them apart.
+#   THRESHOLD-FREE   the continuous quantities (mean gap, fraction overconfident,
+#                    spearman) that need no threshold at all, reported beside the
+#                    count so the comparison is unavoidable.
+#
+# NESTEDNESS, and why it decides what "membership changed" can even mean.
+# The flag is `(wer_spoke >= wer_hi) & (conf_pct >= conf_pct_hi)` — a conjunction
+# of two monotone tests against percentiles computed ONCE over the whole table
+# (see `condition_flags`). Loosening either threshold can therefore only ADD
+# conditions, never swap one for another: the flagged sets are totally ordered by
+# inclusion. So membership never *churns*; it accretes. That makes persistence
+# the right membership statistic — "how much of the defensible box does this
+# condition survive" — and it makes the count a rank statistic of the operating
+# point rather than a property of the model. Both facts are asserted, not
+# assumed: `_assert_monotone_surface` would fire if, for instance, the confidence
+# percentile were ever recomputed per grid cell (which would manufacture a "top
+# 40%" inside every slice and destroy the ordering).
+
+# The swept box. Chosen for defensibility, not to produce an answer:
+#   wer_hi      0.10 is about where a voice agent's task success starts falling
+#               over; 0.50 is "half the words are wrong", past which nobody would
+#               argue the condition is fine. 0.30 (the default) sits mid-range.
+#   conf_pct_hi 0.30 = "top 70% of this model's confidence range" is the loosest
+#               reading of 'confident' anyone would defend; 0.90 = "top 10%" is
+#               the strictest. 0.60 (the default) again sits mid-range.
+# The default operating point is a member of both grids on purpose, so the
+# published number is a cell OF the surface rather than a point beside it.
+SWEEP_WER_HI = (0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40, 0.45, 0.50)
+SWEEP_CONF_PCT_HI = (0.30, 0.40, 0.50, 0.60, 0.70, 0.80, 0.90)
+
+# Verdict constants — FIXED HERE, ahead of any arm being run, for the same reason
+# SPEC §5's pre-registration decision rule was: a stability threshold chosen after
+# seeing the surface is not a test, it is a description.
+#   fold_range = (max_count + 1) / (min_count + 1). The +1 keeps it finite when
+#   the count reaches 0 (which it does) and keeps a 0 -> 2 move from reading as
+#   an infinite blow-up. fold_range == 1.0 means the count never moved anywhere
+#   in the box.
+STABLE_FOLD_MAX = 2.0            # count at most doubles across the whole box
+FRAGILE_FOLD_MIN = 4.0           # count quadruples or more
+STABLE_PERSISTENCE_MIN = 0.75    # the published members survive most of the box
+FRAGILE_PERSISTENCE_MAX = 0.40   # the published members are a minority artifact
+
+VERDICT_STABLE = "STABLE"
+VERDICT_MODERATE = "MODERATE"
+VERDICT_FRAGILE = "FRAGILE"
+
+
+def _assert_monotone_surface(counts: np.ndarray) -> None:
+    """
+    The count must be non-increasing along BOTH threshold axes. This is a
+    structural consequence of the flag being a conjunction of two monotone tests
+    against percentiles computed once over the whole table — not a property of
+    any particular arm, so a violation is a bug in the sweep, never a finding.
+
+    It is a real guard, not decoration: recomputing `within_model_conf_percentile`
+    inside each grid cell (the natural-looking mistake, and the one
+    `gap_distribution` carries an explicit warning about) would re-rank a subset
+    against itself, break the ordering, and produce a surface that still looks
+    like a plausible smooth function of the thresholds.
+    """
+    bad_w = np.argwhere(np.diff(counts, axis=0) > 0)
+    bad_c = np.argwhere(np.diff(counts, axis=1) > 0)
+    if bad_w.size or bad_c.size:
+        raise ValueError(
+            f"threshold_sweep: the dead-zone count INCREASED as a threshold was "
+            f"tightened ({len(bad_w)} violations along wer_hi, {len(bad_c)} along "
+            f"conf_pct_hi). The flag is a conjunction of two monotone tests, so "
+            f"the flagged sets must be nested and the count must be non-increasing "
+            f"in both. Usual cause: the confidence percentile being recomputed "
+            f"per grid cell instead of once over the whole table, which re-ranks "
+            f"a subset against itself and manufactures a 'top band' inside every "
+            f"slice.")
+
+
+def _flag_cube(cond_rows: Sequence[dict], wer_grid: Sequence[float],
+               conf_grid: Sequence[float]) -> np.ndarray:
+    """(n_wer, n_conf, n_conditions) boolean dead-zone flags over the whole box."""
+    cube = np.zeros((len(wer_grid), len(conf_grid), len(cond_rows)), dtype=bool)
+    for i, w in enumerate(wer_grid):
+        for j, c in enumerate(conf_grid):
+            cube[i, j] = condition_flags(cond_rows, float(w), float(c), "wer_spoke")
+    return cube
+
+
+def threshold_sweep(cond_rows: Sequence[dict],
+                    wer_grid: Sequence[float] = SWEEP_WER_HI,
+                    conf_grid: Sequence[float] = SWEEP_CONF_PCT_HI,
+                    wer_hi: float = WER_HI,
+                    conf_pct_hi: float = CONF_PCT_HI) -> dict:
+    """
+    Sweep both dead-zone thresholds over `wer_grid` x `conf_grid` for ONE model's
+    per-condition table, and report how the count AND the membership move.
+
+    Returns the count surface, the two marginals through the default operating
+    point, per-condition persistence, the threshold-free gap statistics, and a
+    verdict from the constants above.
+
+    The default operating point must lie on both grids — otherwise the published
+    number is not a cell of the surface it is being judged against, and the
+    comparison is between two different things.
+    """
+    rows = ([dict(r) for r in cond_rows] if cond_rows and "gap_spoke" in cond_rows[0]
+            else add_gap_metrics(cond_rows))
+    wer_grid = [float(w) for w in wer_grid]
+    conf_grid = [float(c) for c in conf_grid]
+    if wer_hi not in wer_grid or conf_pct_hi not in conf_grid:
+        raise ValueError(
+            f"threshold_sweep: the default operating point "
+            f"(wer_hi={wer_hi}, conf_pct_hi={conf_pct_hi}) is not on the swept "
+            f"grid (wer {wer_grid}, conf {conf_grid}). The whole point is to "
+            f"locate the PUBLISHED count on the surface; if the default is off "
+            f"the grid, `count_at_default` is computed at one operating point "
+            f"and compared against a box that does not contain it.")
+    if not rows:
+        return {"n_conditions": 0, "verdict": VERDICT_STABLE,
+                "verdict_reason": "no conditions"}
+
+    names = [str(r["condition_name"]) for r in rows]
+    conf = np.array([as_float(r.get("mean_conf")) for r in rows], dtype=float)
+    wsp = np.array([as_float(r.get("wer_spoke")) for r in rows], dtype=float)
+    # Exactly the rows `condition_flags` can ever flag. A mute condition has no
+    # confidence, so it can never be a dead zone at any threshold, and leaving it
+    # in the denominator would understate every rate — SPEC Appendix G's point,
+    # applied to the rate rather than to the gap.
+    eligible = np.isfinite(conf) & np.isfinite(wsp)
+    n_elig = int(eligible.sum())
+
+    cube = _flag_cube(rows, wer_grid, conf_grid)
+    counts = cube.sum(axis=2)
+    _assert_monotone_surface(counts)
+
+    di, dj = wer_grid.index(wer_hi), conf_grid.index(conf_pct_hi)
+    c0 = int(counts[di, dj])
+    n_pts = counts.size
+
+    # --- membership -------------------------------------------------------
+    persistence = cube.mean(axis=(0, 1))            # per condition, over the box
+    default_idx = [k for k in range(len(rows)) if cube[di, dj, k]]
+    ever_idx = [k for k in range(len(rows)) if cube[:, :, k].any()]
+    core_idx = [k for k in range(len(rows)) if cube[:, :, k].all()]
+    default_persistence = (float(np.mean([persistence[k] for k in default_idx]))
+                           if default_idx else float("nan"))
+
+    # --- the count as a pure percentile readout ---------------------------
+    # If the dead-zone criterion is satisfied by essentially every condition on
+    # the WER axis, then `count ~= n_eligible * (1 - conf_pct_hi)` exactly, and
+    # the "dead-zone count" is reporting the threshold back to the reader with no
+    # information about the model in it at all. The ratio makes that testable:
+    # ~1.0 across the conf sweep means the WER half of the criterion is inert.
+    readout = []
+    for j, c in enumerate(conf_grid):
+        expect = n_elig * (1.0 - c)
+        readout.append({
+            "conf_pct_hi": c,
+            "count": int(counts[di, j]),
+            "count_if_wer_test_were_vacuous": float(expect),
+            "ratio": float(counts[di, j] / expect) if expect > 0 else float("nan"),
+        })
+
+    fold = float((counts.max() + 1) / (counts.min() + 1))
+    stable = (fold <= STABLE_FOLD_MAX
+              and (not default_idx or default_persistence >= STABLE_PERSISTENCE_MIN))
+    fragile = (fold >= FRAGILE_FOLD_MIN
+               or (bool(default_idx) and default_persistence < FRAGILE_PERSISTENCE_MAX))
+    verdict = (VERDICT_STABLE if stable else
+               VERDICT_FRAGILE if fragile else VERDICT_MODERATE)
+    reasons = []
+    if fold >= FRAGILE_FOLD_MIN:
+        reasons.append(f"the count spans {int(counts.min())}-{int(counts.max())} "
+                       f"across the defensible box (fold-range {fold:.1f}x, "
+                       f"threshold {FRAGILE_FOLD_MIN:.1f}x)")
+    elif fold <= STABLE_FOLD_MAX:
+        reasons.append(f"the count spans only {int(counts.min())}-{int(counts.max())} "
+                       f"across the box (fold-range {fold:.1f}x)")
+    if default_idx and default_persistence < FRAGILE_PERSISTENCE_MAX:
+        reasons.append(f"the published members are flagged in only "
+                       f"{default_persistence * 100:.0f}% of the box")
+    elif default_idx and default_persistence >= STABLE_PERSISTENCE_MIN:
+        reasons.append(f"the published members survive "
+                       f"{default_persistence * 100:.0f}% of the box")
+
+    gaps = gap_summary(rows)
+    corr = overall_correlation(rows, "wer_spoke")
+    return {
+        "n_conditions": len(rows),
+        "n_eligible": n_elig,
+        "n_mute": int(len(rows) - n_elig),
+        "wer_grid": wer_grid,
+        "conf_grid": conf_grid,
+        "default": {"wer_hi": wer_hi, "conf_pct_hi": conf_pct_hi,
+                    "conf_hi_raw": raw_conf_threshold(rows, conf_pct_hi)},
+        "count_at_default": c0,
+        "rate_at_default": float(c0 / len(rows)),
+        # surface[i][j] = count at (wer_grid[i], conf_grid[j])
+        "surface": counts.astype(int).tolist(),
+        "count_stats": {
+            "min": int(counts.min()), "max": int(counts.max()),
+            "median": float(np.median(counts)), "fold_range": fold,
+            "n_grid_points": int(n_pts),
+            "frac_points_equal_to_default": float(np.mean(counts == c0)),
+        },
+        "marginal_wer_hi": [{"wer_hi": w, "count": int(counts[i, dj])}
+                            for i, w in enumerate(wer_grid)],
+        "marginal_conf_pct_hi": [{"conf_pct_hi": c, "count": int(counts[di, j])}
+                                 for j, c in enumerate(conf_grid)],
+        # one grid step in every direction around the published point — the
+        # fairest possible reading, in case the full box is called too wide
+        "neighborhood": {
+            "wer_hi": [wer_grid[i] for i in range(max(di - 1, 0), min(di + 2, len(wer_grid)))],
+            "conf_pct_hi": [conf_grid[j] for j in range(max(dj - 1, 0), min(dj + 2, len(conf_grid)))],
+            "counts": counts[max(di - 1, 0):di + 2, max(dj - 1, 0):dj + 2].astype(int).tolist(),
+            "min": int(counts[max(di - 1, 0):di + 2, max(dj - 1, 0):dj + 2].min()),
+            "max": int(counts[max(di - 1, 0):di + 2, max(dj - 1, 0):dj + 2].max()),
+        },
+        "membership": {
+            "nested": True,   # asserted by _assert_monotone_surface
+            "default_members": [names[k] for k in default_idx],
+            "default_member_persistence": default_persistence,
+            "n_ever_flagged": len(ever_idx),
+            "n_core_all_points": len(core_idx),
+            "core_all_points": [names[k] for k in core_idx],
+            "persistence": {names[k]: float(persistence[k])
+                            for k in sorted(ever_idx,
+                                            key=lambda k: (-persistence[k], names[k]))},
+        },
+        "percentile_readout": readout,
+        # The claims that survive because they never needed a threshold.
+        "threshold_free": {
+            "mean_gap": gaps["mean"],
+            "sd_gap": gaps.get("sd", float("nan")),
+            "median_gap": gaps.get("quantiles", {}).get("median", float("nan")),
+            "frac_overconfident": gaps["frac_overconfident"],
+            "n_overconfident": int(round(gaps["frac_overconfident"] * gaps["n"])),
+            "n_scored": gaps["n"],
+            "spearman_confpct_vs_wer_spoke": corr.get("spearman_confpct_vs_wer",
+                                                      float("nan")),
+            "pairing": gaps["pairing"],
+        },
+        "verdict": verdict,
+        "verdict_reason": "; ".join(reasons) if reasons else "no clause fired",
+        "verdict_rule": (
+            f"STABLE iff fold_range <= {STABLE_FOLD_MAX} AND default-member "
+            f"persistence >= {STABLE_PERSISTENCE_MIN}; FRAGILE iff fold_range >= "
+            f"{FRAGILE_FOLD_MIN} OR persistence < {FRAGILE_PERSISTENCE_MAX}; "
+            f"MODERATE otherwise. Constants fixed in the module ahead of any arm "
+            f"being swept."),
+    }
+
+
+def orthography_threshold_probe(rows: Sequence[dict], refs: dict,
+                                model: str,
+                                wer_hi: float = WER_HI,
+                                conf_pct_hi: float = CONF_PCT_HI) -> dict:
+    """
+    How much of an arm's dead-zone count is ORTHOGRAPHY rather than acoustics.
+
+    `dead_zone_flags` thresholds an ABSOLUTE WER, so any arm carrying a constant
+    formatting offset against the reference has that offset pushed straight
+    through the `wer_hi` test. Re-score the same rows under the cross-model
+    normalizer (`cross_model_norm`, the transform L1 already uses for exactly this
+    reason) and recount. A count that moves is a count that was partly measuring
+    spelling.
+
+    This is not a correction to apply — `wer` stays the spine and the cross-model
+    WER is L1-only by decision (SPEC B.2 item 8). It is a MAGNITUDE: it says how
+    much of the published number the threshold is willing to absorb from a
+    non-acoustic source.
+    """
+    from deadzone.analysis.model_arms import rescore_cross_model  # local: L1-only dep
+    scored = rescore_cross_model({model: list(rows)}, refs)[model]
+    swapped = [{**r, "wer": r["wer_xm"], "n_ref": r["n_ref_xm"], "n_sub": r["n_sub_xm"],
+                "n_del": r["n_del_xm"], "n_ins": r["n_ins_xm"]} for r in scored]
+    strict = classify_conditions(per_condition_table(list(rows), model=model),
+                                 wer_hi, conf_pct_hi)["counts"]
+    norm = classify_conditions(per_condition_table(swapped, model=model),
+                               wer_hi, conf_pct_hi)["counts"]
+    sw = float(np.nanmean([as_float(r["wer"]) for r in scored]))
+    nw = float(np.nanmean([as_float(r["wer_xm"]) for r in scored]))
+    return {
+        "model": model,
+        "n_dead_zones_strict_wer": int(strict["n_dead_zones"]),
+        "n_dead_zones_crossmodel_wer": int(norm["n_dead_zones"]),
+        "delta": int(norm["n_dead_zones"]) - int(strict["n_dead_zones"]),
+        "mean_wer_strict": sw,
+        "mean_wer_crossmodel": nw,
+        "mean_shift": sw - nw,
+    }
 
 
 # ===========================================================================
@@ -1100,6 +1419,248 @@ def format_report(report: dict) -> str:
 
 
 # ===========================================================================
+# 6b. THE THRESHOLD-SENSITIVITY ARTIFACT
+# ===========================================================================
+
+SENSITIVITY_DOC = {
+    "purpose": (
+        "Robustness of D1's headline deliverable to its two hardcoded thresholds "
+        "(model_compare.dead_zone_flags: wer_hi=0.3, conf_pct_hi=0.6). Sweeps both "
+        "over a defensible box and reports what the dead-zone COUNT and the "
+        "dead-zone MEMBERSHIP do, beside the threshold-free gap statistics that "
+        "make the same claim without an operating point."),
+    "question": "Is the published dead-zone count a measurement, or an operating point?",
+    "consumed_by": [
+        "report/writeup.md (the D1 robustness paragraph)",
+        "results/dead_zone_sensitivity.txt (the prose rendering of this file)",
+    ],
+    "quotable": True,
+    "reproducible": ("Deterministic and byte-reproducible: a pure function of "
+                     "results/master.csv and the module constants. No timestamp, "
+                     "no seed, no network."),
+}
+
+
+def threshold_sensitivity_report(rows: Sequence[dict],
+                                 wer_grid: Sequence[float] = SWEEP_WER_HI,
+                                 conf_grid: Sequence[float] = SWEEP_CONF_PCT_HI,
+                                 wer_hi: float = WER_HI,
+                                 conf_pct_hi: float = CONF_PCT_HI,
+                                 refs: dict | None = None) -> dict:
+    """One threshold sweep per model arm. Arms are never merged (see the module
+    docstring): the confidence percentile is within-model by construction, so a
+    pooled sweep would rank one vendor's confidences against another's."""
+    per_model: dict[str, dict] = {}
+    probes: dict[str, dict] = {}
+    for m, sub in sorted(split_by_model(rows).items()):
+        ok, _ = split_failures([coerce_row(r) for r in sub])
+        per_model[m] = threshold_sweep(per_condition_table(ok, model=m),
+                                       wer_grid, conf_grid, wer_hi, conf_pct_hi)
+        if refs:
+            try:
+                probes[m] = orthography_threshold_probe(ok, refs, m, wer_hi, conf_pct_hi)
+            except Exception as e:                     # noqa: BLE001 - reported, not raised
+                probes[m] = {"model": m, "error": f"{type(e).__name__}: {e}"}
+    verdicts = {m: r["verdict"] for m, r in per_model.items()}
+    return {
+        "artifact": "results/dead_zone_sensitivity.json",
+        **SENSITIVITY_DOC,
+        "params": {
+            "wer_hi_grid": [float(w) for w in wer_grid],
+            "conf_pct_hi_grid": [float(c) for c in conf_grid],
+            "default_wer_hi": wer_hi,
+            "default_conf_pct_hi": conf_pct_hi,
+            "wer_key": "wer_spoke",
+            "box_rationale": (
+                "wer_hi 0.10-0.50: 0.10 is roughly where voice-agent task success "
+                "starts to fall over, 0.50 is 'half the words are wrong'. "
+                "conf_pct_hi 0.30-0.90: 'top 70%' is the loosest defensible "
+                "reading of confident, 'top 10%' the strictest. Both defaults sit "
+                "mid-range and are members of their grid."),
+            "verdict_rule": next(iter(per_model.values()))["verdict_rule"]
+            if per_model else None,
+        },
+        "per_model": per_model,
+        "verdicts": verdicts,
+        "orthography_probe": probes,
+        "incomparable_arms": sorted(WER_INCOMPARABLE_ARMS),
+    }
+
+
+def _bar(counts: Sequence[int], width: int = 6) -> str:
+    return "".join(f"{c:>{width}d}" for c in counts)
+
+
+def format_threshold_sensitivity(res: dict) -> str:
+    """Prose rendering. The framing is deliberate and is the finding: lead with
+    what the count does under the sweep, then with the claim that never needed a
+    threshold."""
+    p = res["params"]
+    L = ["DEAD-ZONE THRESHOLD SENSITIVITY — is the count a measurement or an "
+         "operating point?",
+         "=" * 78, "",
+         "D1's headline count comes from two hardcoded numbers in "
+         "model_compare.dead_zone_flags:",
+         f"  wer_hi = {p['default_wer_hi']}   conf_pct_hi = {p['default_conf_pct_hi']}"
+         "   (neither derived from anything; both a reasonable operating point)",
+         "",
+         "Swept box: wer_hi " + ", ".join(f"{w:g}" for w in p["wer_hi_grid"]),
+         "           conf_pct_hi " + ", ".join(f"{c:g}" for c in p["conf_pct_hi_grid"]),
+         "  " + p["box_rationale"], "",
+         "The flag is (wer_spoke >= wer_hi) AND (conf_pct >= conf_pct_hi), with the",
+         "confidence percentile computed ONCE over the whole table. Both tests are",
+         "monotone, so the flagged sets are NESTED: loosening a threshold can only",
+         "ADD conditions, never swap one for another. Membership therefore does not",
+         "churn, it accretes — which is why the membership statistic below is",
+         "PERSISTENCE (what fraction of the box a condition survives) and why the",
+         "count is a rank statistic of the operating point.", ""]
+
+    for m, s in res["per_model"].items():
+        cs, mem, tf = s["count_stats"], s["membership"], s["threshold_free"]
+        L += ["-" * 78,
+              f"ARM: {m}    ({s['n_conditions']} conditions, {s['n_eligible']} "
+              f"eligible, {s['n_mute']} mute — a mute condition has no confidence "
+              f"and can never be flagged at any threshold)", ""]
+        L.append(f"  PUBLISHED COUNT (wer_hi={p['default_wer_hi']}, "
+                 f"conf_pct_hi={p['default_conf_pct_hi']}): "
+                 f"{s['count_at_default']} of {s['n_conditions']} "
+                 f"({s['rate_at_default'] * 100:.2f}%)")
+        L.append(f"  ACROSS THE BOX:  min {cs['min']}   max {cs['max']}   "
+                 f"median {cs['median']:.0f}   fold-range {cs['fold_range']:.1f}x   "
+                 f"({cs['frac_points_equal_to_default'] * 100:.0f}% of "
+                 f"{cs['n_grid_points']} grid points give the published count)")
+        nb = s["neighborhood"]
+        L.append(f"  ONE STEP EITHER WAY: {nb['min']}-{nb['max']}   "
+                 f"(the fairest possible reading, if the full box is called too wide)")
+        L += ["",
+              "  count surface  (rows = wer_hi, cols = conf_pct_hi)",
+              "        conf_pct_hi:" + _bar([int(c * 100) for c in s["conf_grid"]])]
+        for i, w in enumerate(s["wer_grid"]):
+            mark = " <-- default row" if w == p["default_wer_hi"] else ""
+            L.append(f"    wer_hi {w:>5.2f}:" + _bar(s["surface"][i]) + mark)
+        L += ["", "  MEMBERSHIP (does the set's identity move, not just its size?)"]
+        L.append(f"    published members flagged across {mem['default_member_persistence'] * 100:.0f}% "
+                 f"of the box"
+                 if np.isfinite(mem["default_member_persistence"])
+                 else "    published members: none at the default operating point")
+        L.append(f"    conditions flagged SOMEWHERE in the box: {mem['n_ever_flagged']}")
+        L.append(f"    conditions flagged at EVERY point (the robust core): "
+                 f"{mem['n_core_all_points']}")
+        if mem["default_members"]:
+            # Ranked most- to least-persistent and capped: the tail of a 69-member
+            # list is noise, and the LEAST persistent members are the ones that
+            # decide whether the published set survives, so both ends are shown.
+            ranked = sorted(mem["default_members"],
+                            key=lambda n: (-mem["persistence"][n], n))
+            L.append(f"    per-member persistence ({len(ranked)} members, "
+                     f"most to least persistent):")
+            show = ranked if len(ranked) <= 12 else ranked[:6] + [None] + ranked[-4:]
+            for name in show:
+                if name is None:
+                    L.append(f"      {'...':<52} ({len(ranked) - 10} more)")
+                    continue
+                L.append(f"      {name[:52]:<52} {mem['persistence'][name] * 100:5.1f}%")
+        # the readout diagnostic
+        ratios = [r["ratio"] for r in s["percentile_readout"] if np.isfinite(r["ratio"])]
+        if ratios and min(ratios) > 0.9 and max(ratios) < 1.1:
+            L += ["", "    !! The count on the default row equals n_eligible x "
+                       "(1 - conf_pct_hi) to within",
+                  f"       {max(abs(r - 1) for r in ratios) * 100:.0f}% at every "
+                  "confidence level. The WER half of the criterion is",
+                  "       INERT for this arm — essentially every condition clears "
+                  "it — so the",
+                  "       'dead-zone count' is reporting the confidence threshold "
+                  "back, with no",
+                  "       information about the model in it at all."]
+        L += ["", f"  VERDICT: {s['verdict']} — {s['verdict_reason']}", ""]
+
+    L += ["-" * 78, "",
+          "THE CLAIM THAT NEEDS NO THRESHOLD.",
+          "Every number above moves when the operating point moves, because a count",
+          "is a thresholded view of a continuous quantity. The continuous quantity",
+          "itself does not move — it has no threshold to move with:", ""]
+    for m, s in res["per_model"].items():
+        tf = s["threshold_free"]
+        L.append(f"  {m:<20} mean gap {tf['mean_gap']:+.3f}   overconfident in "
+                 f"{tf['n_overconfident']} of {tf['n_scored']} conditions "
+                 f"({tf['frac_overconfident'] * 100:.0f}%)   "
+                 f"spearman(conf_pct, WER_spoke) = "
+                 f"{tf['spearman_confpct_vs_wer_spoke']:+.3f}")
+    L += ["",
+          "  Pairing: " + next(iter(res["per_model"].values()))["threshold_free"]["pairing"]
+          if res["per_model"] else "",
+          "",
+          "  So the defensible headline is the CONTINUOUS one — 'the model is",
+          "  systematically overconfident, by this much, in this many conditions' —",
+          "  and the dead-zone count is best read as an ILLUSTRATION at a stated",
+          "  operating point, never as a property of the model. Any quoted count",
+          "  must travel with both of its thresholds.", ""]
+
+    # EVERY arm is shown, including the ones that do not move. An arm already in
+    # word form (nova-3) should shift ~0 and hold its count — that is the control
+    # that makes the arms which DO move a measurement rather than noise, exactly
+    # as model_arms.normalization_shift runs the audit for every arm.
+    probes = {m: d for m, d in res.get("orthography_probe", {}).items()
+              if "error" not in d}
+    if probes and any(d.get("delta") for d in probes.values()):
+        L += ["-" * 78, "",
+              "A SECOND FRAGILITY: THE WER THRESHOLD IS ABSOLUTE, SO ORTHOGRAPHY "
+              "PUSHES THROUGH IT.",
+              "`dead_zone_flags` thresholds a raw WER. An arm carrying a constant "
+              "formatting",
+              "offset against the reference has that offset counted as error and "
+              "pushed straight",
+              "through the wer_hi test. Re-scoring the SAME rows under the "
+              "cross-model normalizer",
+              "(cross_model_norm, the transform L1 already applies for exactly this "
+              "reason) and",
+              "recounting:", ""]
+        for m, d in probes.items():
+            L.append(f"  {m:<20} {d['n_dead_zones_strict_wer']:>3d} -> "
+                     f"{d['n_dead_zones_crossmodel_wer']:>3d} dead zones   "
+                     f"(mean WER {d['mean_wer_strict']:.3f} -> "
+                     f"{d['mean_wer_crossmodel']:.3f}, shift "
+                     f"{d['mean_shift']:+.3f})")
+        L += ["",
+              "  This is NOT a correction to apply — `wer` stays the spine and the",
+              "  cross-model WER is L1-only by decision (SPEC B.2 item 8). It is a",
+              "  MAGNITUDE: it says how much of a published count the threshold is",
+              "  willing to absorb from a non-acoustic source. For any arm whose",
+              "  count goes to zero under it, the count was not claimable in",
+              "  absolute terms to begin with — and that instability is itself",
+              "  evidence about the threshold, which is why the arm is reported",
+              "  here rather than dropped.", ""]
+    return "\n".join(L)
+
+
+def write_threshold_sensitivity(res: dict, json_path: str, txt_path: str) -> tuple[str, str]:
+    """Sibling .json/.txt pair, matching calibration.{json,txt} / model_arms.{json,txt}."""
+    for p in (json_path, txt_path):
+        os.makedirs(os.path.dirname(os.path.abspath(p)) or ".", exist_ok=True)
+    with open(json_path, "w", encoding="utf-8") as fh:
+        # allow_nan=False for the same reason analysis/sensitivity.py uses it: a
+        # bare NaN token is a Python extension, not JSON, and an artifact only
+        # Python can open is a defect regardless of who reads it today.
+        json.dump(_json_safe(res), fh, indent=2, allow_nan=False)
+    with open(txt_path, "w", encoding="utf-8") as fh:
+        fh.write(format_threshold_sensitivity(res) + "\n")
+    return json_path, txt_path
+
+
+def _json_safe(obj):
+    """Non-finite floats -> null (valid JSON; numpy reads it straight back as nan)."""
+    if isinstance(obj, float):
+        return None if (np.isnan(obj) or np.isinf(obj)) else obj
+    if isinstance(obj, (np.floating, np.integer, np.bool_)):
+        return _json_safe(obj.item())
+    if isinstance(obj, dict):
+        return {str(k): _json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_json_safe(v) for v in obj]
+    return obj
+
+
+# ===========================================================================
 # CLI
 # ===========================================================================
 
@@ -1114,6 +1675,15 @@ def main(argv: Sequence[str] | None = None) -> int:
                     help="terminal report, saved verbatim as a citable artifact")
     ap.add_argument("--wer-hi", type=float, default=WER_HI)
     ap.add_argument("--conf-pct-hi", type=float, default=CONF_PCT_HI)
+    # The threshold sweep is written by DEFAULT, not behind a flag. The count it
+    # qualifies is this module's headline, and a robustness check that has to be
+    # asked for is one that will not be run.
+    ap.add_argument("--sensitivity-out", default="results/dead_zone_sensitivity.json",
+                    help="threshold-sensitivity artifact (.txt sibling written "
+                         "alongside); empty string to skip")
+    ap.add_argument("--manifest", default="recording_manifest.csv",
+                    help="ground truth, used only for the orthography probe in "
+                         "the sensitivity artifact")
     args = ap.parse_args(argv)
 
     rows = load_master_table(args.table)
@@ -1142,6 +1712,21 @@ def main(argv: Sequence[str] | None = None) -> int:
         with open(args.report_out, "w", encoding="utf-8") as fh:
             fh.write("\n\n".join(texts) + "\n")
         print(f"wrote report -> {args.report_out}")
+
+    if args.sensitivity_out:
+        refs = None
+        try:
+            from deadzone.analysis.model_arms import load_refs
+            refs = load_refs(args.manifest)
+        except Exception as e:                          # noqa: BLE001
+            print(f"[sensitivity] no orthography probe: {type(e).__name__}: {e}")
+        sens = threshold_sensitivity_report(
+            rows, wer_hi=args.wer_hi, conf_pct_hi=args.conf_pct_hi, refs=refs)
+        txt_out = os.path.splitext(args.sensitivity_out)[0] + ".txt"
+        jp, tp = write_threshold_sensitivity(sens, args.sensitivity_out, txt_out)
+        print(format_threshold_sensitivity(sens))
+        print(f"wrote {jp} and {tp}   verdicts: " +
+              ", ".join(f"{m}={v}" for m, v in sens["verdicts"].items()))
     return 0
 
 

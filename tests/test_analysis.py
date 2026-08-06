@@ -1192,6 +1192,158 @@ def test_sentence_names_its_own_denominator():
     print(f"OK 23: the DoD sentence states its denominator ->\n      {s}")
 
 
+# ===========================================================================
+# 24. IS THE DEAD-ZONE COUNT A MEASUREMENT, OR AN OPERATING POINT?
+# ===========================================================================
+# D1's headline ("2 of 176") is produced by two hardcoded numbers, WER_HI = 0.3
+# and CONF_PCT_HI = 0.6. `threshold_sweep` exists to say whether that count
+# survives a defensible reader moving them.
+#
+# THE TEST THAT MATTERS IS THE PAIR. A sweep that always answers "FRAGILE" pins
+# nothing at all — and since all three real arms come back FRAGILE, "it reported
+# FRAGILE on the real grid" is exactly zero evidence that it can tell. So two
+# tables are planted, differing ONLY in how the conditions are arranged in
+# (confidence, WER) space, and the sweep must separate them:
+#
+#   SEPARATED  bimodal — 5 conditions deep in the dead-zone corner (WER 0.90 at
+#              the top of the confidence range) and 60 far away in the safe
+#              corner (WER 0.02, low confidence). No condition sits near either
+#              cut, so every threshold in the box returns the same 5. Genuinely
+#              stable, and the sweep must SAY so.
+#   PACKED     the same 60 conditions spread evenly across both axes, with
+#              confidence deliberately decorrelated from WER. Conditions sit at
+#              every threshold, so every threshold move sweeps some across the
+#              cut. Genuinely sensitive.
+
+def _sep_table():
+    """Bimodal in BOTH axes -> the count cannot move anywhere in the box."""
+    rows = [{"condition_name": f"safe{i:02d}", "model": MODEL, "n_clips": 10,
+             "mean_conf": 0.40 + 0.30 * i / 59, "wer": 0.02, "wer_spoke": 0.02}
+            for i in range(60)]
+    rows += [{"condition_name": f"dead{i}", "model": MODEL, "n_clips": 10,
+              "mean_conf": 0.95 + 0.01 * i, "wer": 0.90, "wer_spoke": 0.90}
+             for i in range(5)]
+    return rows
+
+
+def _packed_table():
+    """Dense across both axes, confidence decorrelated from WER by a coprime
+    stride (deterministic, no rng) -> every threshold move crosses conditions."""
+    out = []
+    for i in range(60):
+        rank = (i * 37) % 60
+        w = 0.06 + 0.50 * i / 59
+        out.append({"condition_name": f"c{i:02d}", "model": MODEL, "n_clips": 10,
+                    "mean_conf": 0.40 + 0.55 * rank / 59, "wer": w, "wer_spoke": w})
+    return out
+
+
+def test_sweep_separates_planted_fragility_from_planted_stability():
+    """THE NEGATIVE CONTROL. Both directions, or the sweep pins nothing."""
+    stable = cg.threshold_sweep(_sep_table())
+    packed = cg.threshold_sweep(_packed_table())
+
+    # --- the genuinely stable table must be called STABLE ------------------
+    assert stable["verdict"] == cg.VERDICT_STABLE, stable["verdict_reason"]
+    cs = stable["count_stats"]
+    assert cs["min"] == cs["max"] == 5, cs
+    assert cs["fold_range"] == 1.0, cs
+    assert cs["frac_points_equal_to_default"] == 1.0, cs
+    assert stable["membership"]["default_member_persistence"] == 1.0
+    # nested + same size at every point => literally the same 5 conditions
+    assert stable["membership"]["n_core_all_points"] == 5
+    assert stable["membership"]["n_ever_flagged"] == 5
+
+    # --- the genuinely sensitive table must be called FRAGILE --------------
+    assert packed["verdict"] == cg.VERDICT_FRAGILE, packed["verdict_reason"]
+    cp = packed["count_stats"]
+    assert cp["fold_range"] >= cg.FRAGILE_FOLD_MIN, cp
+    assert cp["min"] < packed["count_at_default"] < cp["max"], cp
+    # and the MEMBERSHIP moves too, not just the size
+    assert packed["membership"]["n_ever_flagged"] > packed["count_at_default"]
+    assert packed["membership"]["n_core_all_points"] < packed["count_at_default"]
+
+    # The discriminator is not an artifact of the two tables having different
+    # dead-zone counts: they are close (5 vs 13) while the verdicts are opposite.
+    assert abs(stable["count_at_default"] - packed["count_at_default"]) < 10
+    print(f"OK 24: sweep separates the controls — SEPARATED {cs['min']}-{cs['max']} "
+          f"(fold {cs['fold_range']:.2f}x) -> {stable['verdict']}; PACKED "
+          f"{cp['min']}-{cp['max']} (fold {cp['fold_range']:.1f}x) -> {packed['verdict']}")
+
+
+def test_dead_zone_sets_are_nested_so_membership_only_accretes():
+    """
+    The flag is a conjunction of two monotone tests against percentiles computed
+    ONCE over the whole table, so the flagged sets are totally ordered by
+    inclusion. Two consequences the report leans on:
+      * membership never CHURNS (no condition is swapped for another), so
+        persistence is the right membership statistic;
+      * a constant count therefore implies a constant SET — which is why the
+        stable control's core equals its count above.
+    """
+    rows = cg.add_gap_metrics(_packed_table())
+    cube = cg._flag_cube(rows, cg.SWEEP_WER_HI, cg.SWEEP_CONF_PCT_HI)
+    for i in range(len(cg.SWEEP_WER_HI) - 1):        # tightening wer_hi
+        for j in range(len(cg.SWEEP_CONF_PCT_HI)):
+            assert not (cube[i + 1, j] & ~cube[i, j]).any(), (i, j)
+    for i in range(len(cg.SWEEP_WER_HI)):            # tightening conf_pct_hi
+        for j in range(len(cg.SWEEP_CONF_PCT_HI) - 1):
+            assert not (cube[i, j + 1] & ~cube[i, j]).any(), (i, j)
+
+    # and the guard that would catch a broken sweep actually fires. The realistic
+    # cause is recomputing the confidence percentile inside each grid cell, which
+    # re-ranks a subset against itself; simulate its signature (a count that goes
+    # UP as a threshold is tightened) and assert the raise.
+    good = cube.sum(axis=2)
+    cg._assert_monotone_surface(good)                # negative control: no raise
+    bad = good.copy()
+    bad[-1, -1] = good.max() + 1
+    try:
+        cg._assert_monotone_surface(bad)
+        raise AssertionError("a non-monotone count surface must be refused")
+    except ValueError as e:
+        assert "INCREASED" in str(e) and "nested" in str(e), str(e)
+    print("OK 25: flagged sets are nested (membership accretes, never churns); "
+          "a non-monotone surface is refused")
+
+
+def test_sweep_refuses_a_default_off_its_own_grid():
+    """`count_at_default` only means something if the default is a CELL of the
+    surface it is being judged against."""
+    try:
+        cg.threshold_sweep(_sep_table(), wer_hi=0.31)
+        raise AssertionError("an off-grid default must be refused")
+    except ValueError as e:
+        assert "not on the swept grid" in str(e), str(e)
+    print("OK 26: an operating point off the swept grid is refused")
+
+
+def test_sensitivity_artifact_is_strict_json_and_reproducible():
+    """Sibling .json/.txt, strict JSON (no bare NaN token), byte-reproducible."""
+    rows = build_table_with_silence()
+    res = cg.threshold_sensitivity_report(rows)
+    with tempfile.TemporaryDirectory() as td:
+        a = cg.write_threshold_sensitivity(res, os.path.join(td, "s.json"),
+                                           os.path.join(td, "s.txt"))
+        raw = open(a[0], encoding="utf-8").read()
+        # bare NaN/Infinity are Python extensions, not JSON: refuse them the way
+        # a non-Python reader would.
+        json.loads(raw, parse_constant=lambda c: (_ for _ in ()).throw(
+            AssertionError(f"non-JSON constant {c!r} in the artifact")))
+        # byte-reproducible: no timestamp, no seed, no dict-order drift
+        b = cg.write_threshold_sensitivity(cg.threshold_sensitivity_report(rows),
+                                           os.path.join(td, "s2.json"),
+                                           os.path.join(td, "s2.txt"))
+        assert open(a[0]).read() == open(b[0]).read(), "json artifact is not reproducible"
+        assert open(a[1]).read() == open(b[1]).read(), "txt artifact is not reproducible"
+        txt = open(a[1], encoding="utf-8").read()
+        for token in ("THRESHOLD SENSITIVITY", "VERDICT:", "NEEDS NO THRESHOLD",
+                      "mean gap", "overconfident in"):
+            assert token in txt, token
+    print("OK 27: sensitivity artifact is strict JSON, has both siblings, and is "
+          "byte-reproducible")
+
+
 def as_f(v):
     return float(v) if v is not None else float("nan")
 
@@ -1221,6 +1373,10 @@ if __name__ == "__main__":
     test_dropping_mute_rows_does_not_move_anyone_elses_percentile()
     test_plot_payload_plots_the_paired_wer()
     test_sentence_names_its_own_denominator()
+    test_sweep_separates_planted_fragility_from_planted_stability()
+    test_dead_zone_sets_are_nested_so_membership_only_accretes()
+    test_sweep_refuses_a_default_off_its_own_grid()
+    test_sensitivity_artifact_is_strict_json_and_reproducible()
     print("\nAll analysis tests passed — D1 recovers the planted dead zone (and "
           "only it), D2 recovers the planted reverb/babble fingerprints, a level "
           "that is merely cleaner than its siblings is never prescribed a fix, "

@@ -569,6 +569,99 @@ check("normalize_sobol_result works on the live dict",
 
 
 # ===========================================================================
+print("\n[10a] the written artifact is STRICT JSON — not Python-only JSON")
+# ===========================================================================
+#
+# `json.dump` emits a bare `NaN` token by default. That is a Python extension:
+# RFC 8259 has no NaN literal, so `JSON.parse`, `serde_json` and `encoding/json`
+# reject the file outright while Python reads it back happily. The artifact is
+# advertised as `quotable` and is read by the write-up, the dashboard and
+# `analysis.interactions`, so "it parses on my machine" is not the bar.
+#
+# The NaNs are legitimate — S2 is strictly upper triangular, so its diagonal and
+# lower triangle are absent BY CONSTRUCTION — which is exactly why this survived:
+# there was never a wrong VALUE to notice, only an unreadable encoding.
+#
+# The fix writes `null` and relies on numpy mapping None -> nan on the way back
+# in, so the consumer's `np.isnan` skip-test is bit-identical. Both halves are
+# checked here: that no non-JSON constant reaches the file, and that the values
+# still arrive as NaN at the far end.
+
+from deadzone.analysis.sensitivity import write_sobol_json                 # noqa: E402
+
+with tempfile.TemporaryDirectory() as td:
+    sp = write_sobol_json(res0, os.path.join(td, "sobol.json"))
+    raw = open(sp, encoding="utf-8").read()
+
+    # 1. A strict reader must accept it. `parse_constant` is invoked ONLY for
+    #    NaN/Infinity/-Infinity, so raising there is exactly a non-Python parser.
+    _bad = []
+    json.loads(raw, parse_constant=lambda c: _bad.append(c) or None)
+    check("written artifact contains no bare NaN/Infinity token", not _bad, str(_bad))
+    check("the S2 lower triangle is present as JSON null (shape preserved)",
+          json.loads(raw)["S2"][1][0] is None)
+
+    # 2. Negative control: the OLD encoding must actually fail that same reader,
+    #    or the check above is passing for free.
+    old = os.path.join(td, "old_style.json")
+    with open(old, "w", encoding="utf-8") as f:
+        json.dump(to_json(res0) | {"S2": np.asarray(res0["S2"]).tolist()}, f)
+    _bad_old = []
+    json.loads(open(old, encoding="utf-8").read(),
+               parse_constant=lambda c: _bad_old.append(c) or None)
+    check("negative control: the bare-NaN encoding IS rejected by that reader",
+          bool(_bad_old), "the control produced no NaN token, so the test proves nothing")
+
+    # 3. The round trip still lands on NaN for the consumer that depends on it.
+    back = load_sobol_json(sp)
+    check("null round-trips to NaN for normalize_sobol_result",
+          bool(np.all(np.isnan(np.asarray(back["S2"])[np.tril_indices(4)]))))
+    check("finite S2 entries are bit-identical through the null encoding",
+          float(np.asarray(back["S2"])[0, 1]) == float(np.asarray(res0["S2"])[0, 1]))
+    check("the s2_ranked reconstruction path still skips the absent triangle",
+          len(normalize_sobol_result(
+              {k: v for k, v in json.loads(raw).items()
+               if k not in ("s2_ranked", "interaction_gap")})["s2_ranked"]) == 6)
+
+    # 4. The guard, not the docstring: a payload that still holds a non-finite
+    #    value must RAISE on write rather than produce an invalid file again.
+    try:
+        with open(os.path.join(td, "x.json"), "w", encoding="utf-8") as f:
+            json.dump({"v": float("nan")}, f, allow_nan=False)
+        check("allow_nan=False refuses a bare NaN", False, "no raise")
+    except ValueError:
+        check("allow_nan=False refuses a bare NaN", True)
+
+    # 5. The substitution log makes the encoding auditable instead of implicit.
+    #    Asserted STRUCTURALLY (the log accounts for every null in the file), not
+    #    against a hardcoded count -- the count is a property of the payload, and
+    #    pinning it here would only pin this fixture.
+    parsed = json.loads(raw)
+    enc = parsed.pop("nonfinite_encoding", None)
+
+    def _nulls(o, path=""):
+        if o is None:
+            yield path
+        elif isinstance(o, dict):
+            for k, v in o.items():
+                yield from _nulls(v, f"{path}/{k}")
+        elif isinstance(o, list):
+            for i, v in enumerate(o):
+                yield from _nulls(v, f"{path}[{i}]")
+
+    found = sorted(_nulls(parsed))
+    check("the substitution log accounts for EVERY null in the file",
+          bool(enc) and enc["n_substituted"] == len(found)
+          and sorted(s["path"] for s in enc["substitutions"]) == found,
+          f"{enc and enc.get('n_substituted')} logged vs {len(found)} nulls")
+    check("the log names the absent S2 triangle as the reason",
+          bool(enc) and all(f"/S2[{i}][{j}]" in {s["path"] for s in enc["substitutions"]}
+                            for i in range(4) for j in range(i + 1)))
+    check("a payload with NO non-finite values gains no encoding key",
+          "nonfinite_encoding" not in to_json({"a": [1.0, 2.0], "b": "x"}))
+
+
+# ===========================================================================
 print("\n[10b] every written payload states what file it is and what it is FOR")
 # ===========================================================================
 #
