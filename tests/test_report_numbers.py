@@ -2282,6 +2282,154 @@ def _conf_char(model):
     return by[model]
 
 
+# --- §7's `u11` exhibit: the only worked false-alarm-AND-miss example --------
+# INTERVIEW_INTERNAL §7 prints four per-word confidences for one clip in one
+# condition, and the whole point of the table is the ORDERING between them:
+# two wrong words above the utterance mean, and the single LOWEST confidence in
+# the utterance sitting on the one word the model got RIGHT. That is the
+# concrete answer to "is your confidence signal usable as a gate", so if any of
+# those four numbers drifts the exhibit stops making its own argument.
+
+_U11_CELL = ("u11", "rt60-0.45_snr-0_engine_g726_roll-0")
+
+
+def _u11_live_words():
+    """(row, [(op, ref, hyp, conf), ...]) for the demo-live exemplar cell.
+
+    Rebuilt from `results/master.csv` rather than read from a demo cache, so the
+    script is pinned to the GRID and not to a presentation artifact that could
+    itself have drifted.
+
+    The alignment is the load-bearing part. Hypothesis words are the edits that
+    carry a hypothesis token (`match` / `sub` / `ins`), in order — that sequence
+    is exactly the hypothesis, so it aligns 1:1 with `word_confidences`. It is
+    deliberately NOT `len(word_confidences)`: the two disagree on 225 of 8,797
+    rows because vendor confidences are per RAW token while edits are over
+    NORMALIZED ones (SPEC G.9), and using the confidence-list length as a word
+    count would reintroduce a population mismatch inside the pin for one.
+    """
+    rows = _master_nova(["clip_id", "condition_name", "edits",
+                         "word_confidences", "wer", "mean_conf"])
+    hit = [r for r in rows
+           if r["clip_id"] == _U11_CELL[0] and r["condition_name"] == _U11_CELL[1]]
+    if len(hit) != 1:
+        raise MissingArtifact(
+            "results/master.csv holds %d non-failed nova-3 rows for %s (expected "
+            "exactly 1) — the §7 exhibit cannot be pinned" % (len(hit), _U11_CELL))
+    r = hit[0]
+    edits = json.loads(r["edits"])
+    confs = json.loads(r["word_confidences"])
+    hyp = [e for e in edits if e[2] is not None]
+    if len(hyp) != len(confs):
+        raise MissingArtifact(
+            "u11 exemplar: %d hypothesis words vs %d confidences — the 1:1 "
+            "alignment the §7 table is read off does not hold"
+            % (len(hyp), len(confs)))
+    return r, [(op, ref, h, float(c)) for (op, ref, h), c in zip(hyp, confs)]
+
+
+def _u11_conf(ref_word):
+    """Confidence on the hypothesis token aligned to `ref_word`, by name."""
+    _, words = _u11_live_words()
+    hits = [c for (_op, ref, _h, c) in words if ref == ref_word]
+    if len(hits) != 1:
+        raise MissingArtifact(
+            "u11 exemplar: %d hypothesis tokens align to reference word %r "
+            "(expected 1)" % (len(hits), ref_word))
+    return hits[0]
+
+
+def _clean_baseline_row(clip_id):
+    path = "results/clean_baseline.csv"
+    if not os.path.exists(path):
+        raise MissingArtifact(path)
+    with open(path, newline="", encoding="utf-8") as fh:
+        for r in csv.DictReader(fh):
+            if r["id"] == clip_id:
+                return r
+    raise MissingArtifact("%s has no row for clip %s" % (path, clip_id))
+
+
+def _ab_pair_wer():
+    """Mean WER over all 40 clips for §5's two indistinguishable conditions.
+
+    §5's condition card is a two-point counterfactual — neither condition has a
+    codec or a mic rolloff — so the card asserts that too, and this recomputes
+    both means from the table rather than trusting the card.
+    """
+    rows = _master_nova(["clip_id", "condition_name", "wer", "codec", "mic_rolloff"])
+    out = {}
+    for name in ("rt60-1_snr-20_babble_none_roll-0",
+                 "rt60-0.2_snr-0_babble_none_roll-0"):
+        g = [r for r in rows if r["condition_name"] == name]
+        if not g:
+            raise MissingArtifact("results/master.csv has no nova-3 rows for %s" % name)
+        bad = [r for r in g
+               if r["codec"] != "none" or float(r["mic_rolloff"]) != 0.0]
+        if bad:
+            raise MissingArtifact(
+                "%s carries a codec or a mic rolloff, so §5's 'nothing else moves "
+                "between them' is false" % name)
+        out[name] = _mean(float(r["wer"]) for r in g)
+    return out
+
+
+def _deletion_share_of_errors_matched():
+    """del / (sub+del+ins) per arm, on the cells ALL arms ran.
+
+    §8's 63.2 % vs 33.7 % is the 10-clip MATCHED figure and nova-3's own 40-clip
+    corpus number for the same quantity is 69.3 %. Six points apart, both
+    correct — which is why the document prints the population beside it and why
+    this is computed on the intersection rather than per arm in isolation.
+    """
+    path = "results/master.csv"
+    if not os.path.exists(path):
+        raise MissingArtifact(path)
+    by_model, cells = defaultdict(list), defaultdict(set)
+    with open(path, newline="", encoding="utf-8") as fh:
+        for r in csv.DictReader(fh):
+            key = (r["clip_id"], r["condition_name"])
+            by_model[r["model"]].append((key, r))
+            cells[r["model"]].add(key)
+    if len(cells) < 2:
+        raise MissingArtifact("results/master.csv holds fewer than two arms")
+    common = set.intersection(*cells.values())
+    out = {}
+    for model, rows in by_model.items():
+        g = [r for key, r in rows if key in common]
+        s = sum(float(r["n_sub"] or 0) for r in g)
+        d = sum(float(r["n_del"] or 0) for r in g)
+        i = sum(float(r["n_ins"] or 0) for r in g)
+        if s + d + i <= 0:
+            raise MissingArtifact("%s recorded no errors on the matched cells" % model)
+        out[model] = d / (s + d + i)
+    return out
+
+
+def _silence_driven_payoff():
+    """§6's payoff exhibit: the condition the estimand mismatch was hiding behind.
+
+    It is the OLD #1 dead zone, now classified `silence_driven`, and both halves
+    of the exhibit are the point: 10 of 40 clips returned nothing, and on the 30
+    that spoke the model was well calibrated. Computed here over the same 40
+    clips so the two halves cannot drift into different populations — which is
+    the exact defect the exhibit is an example of.
+    """
+    rows = _master_nova(["clip_id", "condition_name", "transcript", "wer"])
+    g = [r for r in rows
+         if r["condition_name"] == "rt60-0.7_snr-20_babble_opus-lowrate_roll-1"]
+    if not g:
+        raise MissingArtifact(
+            "results/master.csv has no nova-3 rows for the silence-driven payoff "
+            "condition rt60-0.7_snr-20_babble_opus-lowrate_roll-1")
+    spoke = [r for r in g if (r["transcript"] or "").strip()]
+    if not spoke:
+        raise MissingArtifact("payoff condition: no clip produced words")
+    return {"n_clips": len(g),
+            "n_silent": len(g) - len(spoke),
+            "spoke_acc": 1.0 - _mean(float(r["wer"]) for r in spoke)}
+
+
 def checks_interview_internal():
     """report/INTERVIEW_INTERNAL.md — the private interview script.
 
@@ -2325,6 +2473,10 @@ def checks_interview_internal():
         float(sum(int(float(r["n_ref"])) for r in rows))
 
     xm = {k: v["edit_signature_crossmodel"] for k, v in ma.items()}
+    ab = _ab_pair_wer()
+    dele = _deletion_share_of_errors_matched()
+    rooms = _read_json("results/al_drr.json")["rooms"]
+    payoff = _silence_driven_payoff()
 
     def C(key, patterns, expected, tol, source):
         return Check(key, patterns, expected, tol, source, "INTERVIEW_INTERNAL.md",
@@ -2430,10 +2582,112 @@ def checks_interview_internal():
           [r"whisper-base ρ = \*\*(−?-?[\d.]+)\*\*"],
           float(ma["whisper-base"]["shape"]["spearman"]), TOL3,
           "results/model_arms.json per_model[whisper-base].shape.spearman"),
+        # Anchored to its own sentence, not to "any multiplier in the file":
+        # a bare `**N.N×**` pattern silently acquires a second site the moment
+        # another ratio is written anywhere in the document, and then the check
+        # is about whichever one comes first (SPEC J.7).
         C("II L1 whisper insertion rate over nova-3's",
-          [r"\*\*(\d+\.\d+)×\*\*"],
+          [r"insertions\s*\n?>?\s*are \*\*(\d+\.\d+)×\*\*"],
           float(xm["whisper-base"]["ins"]) / float(xm["nova-3"]["ins"]), TOL1,
           "results/model_arms.json per_model[*].edit_signature_crossmodel ins ratio"),
+
+        # --- §7 the `u11` exhibit: false alarm AND miss on one utterance -----
+        # The ORDERING is the argument, so all four are pinned. If `martinez`
+        # ever stops being the lowest number in the table the exhibit is making
+        # the opposite point from the one the prose claims.
+        C("II u11 wrong word `street`->`three`",
+          [r"`street` → `three` \| \*\*wrong\*\* \| \*\*([\d.]+)\*\*"],
+          _u11_conf("street"), TOL3,
+          "results/master.csv [nova-3 u11 @ dead zone #1] word_confidences, "
+          "aligned via edits"),
+        C("II u11 wrong word `elm`->`l`",
+          [r"`elm` → `l` \| \*\*wrong\*\* \| \*\*([\d.]+)\*\*"],
+          _u11_conf("elm"), TOL3,
+          "results/master.csv [nova-3 u11 @ dead zone #1] word_confidences, "
+          "aligned via edits"),
+        C("II u11 CORRECT word `martinez` (the lowest in the utterance)",
+          [r"`martinez` \| \*\*right\*\* \| \*\*([\d.]+)\*\*"],
+          _u11_conf("martinez"), TOL3,
+          "results/master.csv [nova-3 u11 @ dead zone #1] word_confidences, "
+          "aligned via edits"),
+        C("II u11 utterance mean confidence",
+          [r"Utterance mean \*\*([\d.]+)\*\*"],
+          float(_u11_live_words()[0]["mean_conf"]), TOL3,
+          "results/master.csv [nova-3 u11 @ dead zone #1].mean_conf"),
+        C("II u11 clean control confidence",
+          [r"clean control \*\*WER [\d.]+ at confidence ([\d.]+)\*\*"],
+          float(_clean_baseline_row("u11")["mean_conf"]), TOL3,
+          "results/clean_baseline.csv [u11].mean_conf"),
+
+        # --- §5 the indistinguishable pair, as a two-point counterfactual ----
+        C("II A/B condition A mean WER",
+          [r"\*\*A\*\* \|.*\*\*([\d.]+)\*\* \|"],
+          ab["rt60-1_snr-20_babble_none_roll-0"], TOL3,
+          "results/master.csv mean wer over 40 nova-3 clips "
+          "[rt60-1_snr-20_babble_none_roll-0]"),
+        C("II A/B condition B mean WER",
+          [r"\*\*B\*\* \|.*\*\*([\d.]+)\*\* \|"],
+          ab["rt60-0.2_snr-0_babble_none_roll-0"], TOL3,
+          "results/master.csv mean wer over 40 nova-3 clips "
+          "[rt60-0.2_snr-0_babble_none_roll-0]"),
+
+        # --- §8 the failure mode a confidence monitor cannot see -------------
+        # Pinned WITH its population in the pattern, like the dead-zone rates:
+        # the same quantity on nova-3's own 40-clip corpus is 69.3 %, six points
+        # away, so a bare percentage here would be quotable as either.
+        C("II deletion share of errors, nova-3, 10-clip matched",
+          [r"\*\*([\d.]+) % of nova-3's errors carry no confidence at all\*\*"],
+          100.0 * dele["nova-3"], TOL1,
+          "results/master.csv del/(sub+del+ins) over the cells all arms ran"),
+        C("II deletion share of errors, scribe, 10-clip matched",
+          [r"\*\*([\d.]+) % for Scribe\.\*\*"],
+          100.0 * dele["elevenlabs-scribe"], TOL1,
+          "results/master.csv del/(sub+del+ins) over the cells all arms ran"),
+
+        # --- §A/Q1 the DRR ordering, which IS the mechanistic claim ----------
+        C("II DRR-WER rank correlation",
+          [r"\*\*ρ\(DRR, WER\) = (−?-?[\d.]+)\*\*"],
+          _spearman([r["drr_db"] for r in rooms],
+                    [r["marginal_wer"] for r in rooms]), TOL3,
+          "results/al_drr.json rooms[] spearman(drr_db, marginal_wer)"),
+        C("II RT60-WER rank correlation",
+          [r"\*\*ρ\(RT60, WER\) = \+([\d.]+)\*\*"],
+          _spearman([r["rt60_measured"] for r in rooms],
+                    [r["marginal_wer"] for r in rooms]), TOL3,
+          "results/al_drr.json rooms[] spearman(rt60_measured, marginal_wer)"),
+
+        # --- §11 why the pre-registration interval is deliberately wide ------
+        C("II preregistration CI width ratio, rt60",
+          [r"\*\*([\d.]+)× wider than the direct"],
+          float(gap["rt60"]["gap_conf_ratio_quadrature_over_direct"]), TOL2,
+          "results/sobol.json interaction_gap[rt60]"
+          ".gap_conf_ratio_quadrature_over_direct"),
+        C("II preregistration CI width ratio, snr_db",
+          [r"and ([\d.]+)× for `snr_db`\*\*"],
+          float(gap["snr_db"]["gap_conf_ratio_quadrature_over_direct"]), TOL2,
+          "results/sobol.json interaction_gap[snr_db]"
+          ".gap_conf_ratio_quadrature_over_direct"),
+        C("II S1/ST bootstrap correlation, rt60",
+          [r"\*\*\+([\d.]+)\*\* for `rt60`"],
+          float(gap["rt60"]["s1_st_bootstrap_corr"]), TOL3,
+          "results/sobol.json interaction_gap[rt60].s1_st_bootstrap_corr"),
+        C("II S1/ST bootstrap correlation, snr_db",
+          [r"\*\*\+([\d.]+)\*\* for `snr_db`"],
+          float(gap["snr_db"]["s1_st_bootstrap_corr"]), TOL3,
+          "results/sobol.json interaction_gap[snr_db].s1_st_bootstrap_corr"),
+
+        # --- §6 the silence-driven payoff exhibit ----------------------------
+        C("II payoff condition: silent clips",
+          [r"\*\*(\d+) of the 40 clips returned nothing at all\.\*\*"],
+          payoff["n_silent"], EXACT,
+          "results/master.csv empty transcripts "
+          "[nova-3 rt60-0.7_snr-20_babble_opus-lowrate_roll-1]"),
+        C("II payoff condition: accuracy on the clips it spoke on",
+          [r"it was \*\*([\d.]+) % accurate at [\d.]+\ns*confidence",
+           r"it was \*\*([\d.]+) % accurate"],
+          100.0 * payoff["spoke_acc"], TOL1,
+          "results/master.csv 1 - mean(wer) over the non-empty rows "
+          "[nova-3 rt60-0.7_snr-20_babble_opus-lowrate_roll-1]"),
     ]
 
 

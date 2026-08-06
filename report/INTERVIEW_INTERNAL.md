@@ -37,6 +37,10 @@ What that means for every answer below:
 - **Do not perform depth you do not have.** He will spot it faster than a researcher
   would, because that is what QA is. The self-assessment line (§B) is a strength
   with this person, not a concession.
+- **Do not explain WER, SNR, RT60, or what an RIR is.** He knows. Explaining basics
+  is the fastest way to lose an expert's attention. **The subject under test is his
+  product** — the framing is *"I built an instrument that finds where an ASR fails
+  silently, and here is what it found,"* never *"your model is bad."*
 
 **Every figure in this file was re-read from `results/` on 2026-08-06.**
 `tests/test_report_numbers.py` pins the load-bearing ones — if an artifact moves and
@@ -106,6 +110,16 @@ Then the payoff, which is the part he'll care about:
 > attribute to the codec, flattened the confidence-vs-WER relation, and raised the
 > dead-zone rate. It would have **manufactured my own thesis.** So I checked rather
 > than assumed."*
+
+**If he greps the repo and finds the word — have the answer, don't be surprised by
+it.** `SPEC.md` §0–§13 and Appendices A–J still say "streaming" verbatim (40 hits),
+**deliberately.** SPEC is a dated log and the project's rule is **supersede forward,
+never edit backward** — Appendix K records the decision rather than rewriting the
+history that preceded it, and says so in its own first line ("Appendices A–J stay
+verbatim, including every 'streaming' they contain"). That is a real answer.
+*"I missed it"* is not, and neither is pretending the word was never there. The
+existing bar covers `MANIFEST.json`'s arm key (renamed to `batch_commercial`); it
+does **not** cover the SPEC log, and it should not.
 
 **Where it runs out — have this ready, don't wait to be pushed:** the concession
 doesn't make these streaming results. A streaming decoder commits under truncated
@@ -489,6 +503,19 @@ shows him the ears and the metric disagree.**
 [▶ now run demo 1]     make demo-listen
 ```
 
+**Which pairs, and why that order.** The script's default order is **pair 2 (`u21`)
+→ pair 3 (`u26`)**, with **pair 1 (`u40`) held in reserve**. That is not arbitrary:
+pairs 2 and 3 are the two the single prior listener called **confidently**; on pair 1
+he said in so many words that he was "not 100 % everyone would agree", so it is the
+weakest place to open. The pair *labels* are the join key to `KEY.md`,
+`DEMO_SCRIPT.md` and the sealed prediction — `BLIND_SHEET.md` lists its rows in
+**play** order while keeping the labels unchanged, so nothing needs renumbering.
+
+**Show that `PREREGISTERED_PREDICTION.md` exists and LEAVE IT CLOSED.** Say only
+*"I've written down what I think you'll say."* Stating a prediction aloud before
+someone judges is a demand characteristic, and this project's whole subject is not
+fooling yourself with a number you wanted. It gets opened **after** he commits.
+
 **Setup patter, said while it loads (it loads instantly, so this is really "before
 you press enter"):**
 
@@ -511,11 +538,46 @@ you press enter"):**
 - Then the measured half: **paired difference −0.0178 WER, 95 % CI [−0.065, +0.031],
   over all 40 clips, and 18 of the 40 clips score exactly equal.**
 
+**The condition card — have these two rows cold, they are the whole contrast:**
+
+| | condition | room / mechanism | mean WER, 40 clips |
+|---|---|---|---|
+| **A** | `rt60-1_snr-20_babble_none_roll-0` | Shower IR, measured RT60 **1.011 s**, DRR **−10.02 dB** — but *quiet* | **0.1123** |
+| **B** | `rt60-0.2_snr-0_babble_none_roll-0` | Restaurant IR, measured RT60 **0.193 s**, DRR **+16.90 dB** — speech buried | **0.1301** |
+
+**Neither has a codec or a mic rolloff on it, so nothing else moves between them** —
+this is a two-point counterfactual, not a comparison of two messy conditions. Paired
+over the same 40 clips: **−0.0178, 95 % CI [−0.0654, +0.0310]**, a **10,000-resample
+paired bootstrap over clips**, spanning zero. Say "paired bootstrap over clips" out
+loud — the clips are the resampling unit everywhere in this project and he will
+check that it is consistent.
+
+**"18 of 40 tie" — say the next sentence too, or it sounds like 18 easy clips.**
+**Four of the eighteen ties are non-zero:** `u40` 0.333, `u26` 0.250, `u21` 0.222,
+`u10` 0.125. On those the model did not get both right — it got both **wrong, by the
+same amount, in different places.** The transcripts make that better than the scalar
+does, and **these are two of the clips he will have just heard**:
+
+| clip | reference | A (reverb) | B (babble) |
+|---|---|---|---|
+| `u21` | *"…and legal **by monday**"* | `…and legal filing` — 1 sub + 1 del | `…and legal` — 2 deletions |
+| `u26` | *"…for the **kowalski wedding**"* | `…for the cool seaway` — 2 subs, the name mangled into words | `…for the` — 2 deletions, the name simply gone |
+
+Both rows: **WER identical** (0.222 and 0.250 respectively). **Same WER, different
+failure *shape*** — which is the argument for typed edits over a scalar, made
+audible on clips he has in his ear. It is also the cleanest bridge into §9.
+
 **The line that lands it — the question, not a verdict:**
 > *"You had a preference. The model doesn't — not a small difference, none. Your ears
 > and that number aren't measuring the same thing, and I couldn't check which one was
 > right. **That gap is the question this whole thing was built to answer**, and
 > everything after this segment is the instrument, not one of its results."*
+
+**If he ranks them equal, nothing breaks — and say that rather than looking
+deflated.** One listener agreeing with the model is worth exactly as much as one
+disagreeing with it, which is precisely why the interval underneath is the measured
+half and this half is only the question. Then go to Beat 2, which needs no ranking
+from anyone.
 
 ### (2) THE WHYs
 
@@ -658,6 +720,24 @@ in full.** It is engineering, it is a bug, and it was caught by a human, not a t
 > and they sounded intelligible. That's what prompted the check. The last unchecked
 > item on my own list was the one that found the headline error."*
 
+**The ρ correction has its own mechanism, and it is the better half of the story —
+have it ready, it takes fifteen seconds.**
+> *"The published correlation was **−0.957**, computed over all 176 conditions while
+> reporting n = 169. The 7 mute conditions have no confidence at all, so they enter
+> at percentile 0 with WER 1.0 — **seven fabricated points parked at the ideal corner
+> of a negative correlation.** Removing them makes the correlation **stronger**,
+> −0.980, and that is the tell: a point whose removal *improves* the fit was never a
+> measurement. −0.957 sat between the two honest numbers, which is exactly why
+> nothing looked wrong."*
+
+**The payoff exhibit for the mute category — it is the same condition as the old
+#1 dead zone, so it pays off twice.** `rt60-0.7_snr-20_babble_opus-lowrate_roll-1`:
+**SNR is 20 dB — it is quiet**, the damage is reverb + codec + rolloff, and you can
+hear a person speaking clearly. **10 of the 40 clips returned nothing at all.** On
+`u03` the model returned an empty string: WER 1.000, all **11** reference words
+deleted. On the 30 clips it did speak on it was **81.8 % accurate at 0.843
+confidence — well calibrated.** That is the condition the defect was hiding behind.
+
 **"So how did you fix it so it can't come back?"** — this is the part he'll grade you
 on, and it's strong.
 > *"Not by picking the right one — by making the wrong one impossible to produce by
@@ -787,6 +867,28 @@ Point at, in order:
 
 **Then the dashboard (4.5 min; the scripted path is in `dashboard/DEMO.md`).**
 
+### ⚠ TWO ON-SCREEN LANDMINES — verified on disk 2026-08-06, both silent
+
+Neither of these throws, neither looks wrong, and both put the **wrong arm's
+headline** in front of the room.
+
+1. **The dashboard's model buttons render ALPHABETICALLY, so the leftmost button is
+   NOT the selected arm.** `default_model` is correctly `nova-3`, but the buttons
+   come from the payload's key order — **`elevenlabs-scribe` · `nova-3` ·
+   `whisper-base`** — so **nova-3 is the MIDDLE button** and the highlighted one.
+   **Do not click blind**; read the `aria-pressed` highlight, or click `nova-3` by
+   name. Clicking leftmost silently switches you to Scribe, whose sensitivity and
+   sim2real panels are (correctly) empty.
+2. **`results/confidence_gap.txt` opens on ELEVENLABS-SCRIBE, not nova-3.** The file
+   has no default and no ordering guarantee — Scribe is simply the first block, and
+   **nova-3's block does not start until line 47.** Scribe's headline reads *"mean
+   word confidence **0.976** while WER is **0.428**"*, which looks spectacular, is a
+   real number, and **is not nova-3's.** If you open that artifact on screen — or
+   read it yourself on the morning — **scroll to the `model 'nova-3'` header first.**
+   Worse, Scribe's dead-zone rate is the one figure in this project that is
+   explicitly **not quotable** (§10), so the first block of that file is a number you
+   are barred from saying.
+
 ### WHAT THE HERO DELIBERATELY DOES NOT PRINT — and what to say if asked
 
 Four things were on screen in the old `demo_live.py` and are now off it. They are
@@ -816,6 +918,52 @@ none of them can come back.
 | Panel 6 (sim2real) blanks when you switch arms | Also expected. The simulated-RIR arm was only ever run for nova-3, because that comparison is about **RIR provenance**, not model family. |
 | Panels 7–8 don't move with the toggle | Correct — they're cross-model by construction. |
 | Someone asks "is this real data?" | **Answer from the badge, immediately.** It reads `real grid · 12320 rows · 176 conditions`. Say it out loud in the first fifteen seconds; do not let anyone discover it at minute two. |
+
+### ▶ OPTIONAL: `make demo-live` — and the `u11` exhibit, the best confidence material you have
+
+`make demo-live` is the older, narrower half of the hero: **two real nova-3 calls on
+one clip**, raw then the measured #1 dead zone, per-word confidences printed as they
+arrive. **Operating data, so you can schedule it without guessing: 12.1 s of audio,
+2 calls, ≈ $0.0009, ~20 s wall clock.** Rehearse it as
+`./.venv/bin/python demos/demo_live.py --offline` — byte-identical presentation, no
+key read at all — and preflight the real thing with `--check`.
+
+**Placement rule: after §5's payoff, or as the answer to *"can I see the
+confidences?"* — never at the top.** The spine has to establish itself offline
+before anything touches the network.
+
+**The exemplar is `u11`, and the PER-WORD numbers are the point, not the utterance
+mean.** Reference: *"deliver it to sofia martinez at eighty eight elm street"*. In
+the dead zone (`rt60-0.45_snr-0_engine_g726_roll-0`) it returns *"deliver it to sofia
+martinez at three eight l three"* — **a delivery address destroyed** — with:
+
+| word | outcome | confidence |
+|---|---|---|
+| `street` → `three` | **wrong** | **0.933** |
+| `elm` → `l` | **wrong** | **0.926** |
+| `eighty` → `three` | **wrong** | 0.826 |
+| `martinez` | **right** | **0.336** ← the lowest in the utterance |
+
+Utterance mean **0.849**; clean control **WER 0.000 at confidence 0.961**
+(`results/clean_baseline.csv`), so the control is exact.
+
+**Deliver the HONEST framing — it is better than the triumphant one.** At the
+*utterance* level confidence is informative in direction and useless in magnitude:
+WER goes 0.000 → 0.300 while confidence moves only 0.961 → 0.849. At the *word*
+level it is **worse than uninformative** — the **lowest** confidence in the utterance
+(0.336) is on the one word the model got **right**, while **two of the three
+substitutions score above the utterance mean.**
+
+> *"On this clip the signal is wrong in both directions at once — a **false alarm**
+> on the one word it nailed, and **silence** on the three it invented. A threshold
+> tuned to catch this fires on `martinez` and lets `three eight l three` through.
+> That's the argument for the calibrator, and it's also why I won't tell you
+> confidence thresholding is sufficient."*
+
+**This is the only worked example in the project where the signal fails as a false
+alarm AND as a miss on the same utterance**, so it is the concrete answer to *"is
+your confidence signal actually usable as a gate?"* — which is the question §A/Q3's
+decision rule (precision 0.994, recall 0.249) answers only in aggregate.
 
 **Why nova-3 only in this demo, if he asks:** not a preference. Scribe's orthography
 is non-deterministic call to call, so a live call could return a *different
@@ -859,6 +1007,30 @@ within each model's own distribution, and it's enforced by a raise in code."*
 > about having a file. And one cell came back as a row of
 > decorative Unicode glyphs — not language at all — at **0.926 confidence.***
 >
+**The half of the arm comparison that is immune to ALL of the orthography argument —
+and it inverts the safety story. Volunteer it.** An empty transcript is empty under
+any normalizer.
+> *"On the ten clips all three ran, nova-3 returns **nothing at all on 24.5 %** of
+> clip-rows (431 of 1,757) and goes fully mute on **12** conditions; Scribe on
+> **4.4 %** (78 of 1,757) and **2**. That's **5.5×.** Under stress **nova-3 goes
+> quiet and Scribe keeps talking** — and a deletion carries no hypothesis token, so
+> **63.2 % of nova-3's errors carry no confidence at all**, against
+> **33.7 % for Scribe.** So the best-calibrated arm in the study has the **least
+> monitorable** failure mode. That isn't a knock on the model — it's why I split mute zones out as
+> their own category, and it's why the product recommendation is confidence **plus a
+> 'did I get anything' check**, never confidence alone."*
+
+> ⚠️ **POPULATION.** 63.2 % is the **10-clip matched** figure. On nova-3's own
+> **40-clip** corpus the same quantity is **69.3 %** — the number §A/Q3 and §C quote.
+> Both are correct; they are different populations and they are 6 points apart.
+> Scribe's 33.7 % has only one population, because Scribe only ever ran the 10.
+
+**And it qualifies the correlation table mechanically — say this before he finds
+it:** *"nova-3's ρ is computed over **164** conditions after its **12** hardest were
+dropped for emitting nothing; Scribe's over **174** after **2**. A model that goes
+silent on its worst conditions is scored on an easier set. That's exactly why the
+three-arm table is restricted to the 159 conditions all three spoke on."*
+
 > *The point for a deployment: **WER structurally understates that.** WER caps damage
 > at one error per reference word. A 47-word hallucination handed to a downstream LLM
 > is unbounded harm. That's an independent argument for why WER isn't the deployment
@@ -885,6 +1057,40 @@ then concede the convenience.
 > −0.970 to −0.970. A rank correlation is invariant to a constant offset and
 > attenuated by a per-call one. **That's the signature of noise rather than bias, and
 > it's measured rather than asserted.**"*
+
+**"Why ElevenLabs at all?" — answer with the DAY-ONE GATE, not the results.** It is
+about method, and it is the better answer to that question.
+> *"Before a single row entered the table I ran a one-clip, one-call probe, because
+> the answer changed what the arm **is**: with per-word confidence it's a full arm and
+> joins the headline; without one it's WER-only. It returns a per-word **`logprob`**,
+> so it's the second arm in the study that can be asked the silent-failure question
+> at all — Whisper can't, its per-word number is a derived proxy.*
+>
+> *Three things that gate caught, and each one is why it was a live probe and not a
+> documentation read:*
+>
+> *One — **the vendor's own docs disagreed with each other.** The capabilities page
+> shows a response with **no** `logprob`; the API reference lists it. One live call
+> settles what no amount of reading would have.*
+>
+> *Two — **the trap I nearly walked into.** `language_probability` sits right there
+> in the response on a friendly 0–1 scale. It is a **document-level language-detection
+> score.** Mistaking it for confidence would assign **every word in a clip the same
+> value** — a perfectly smooth, entirely fake confidence signal that would have
+> correlated with nothing and looked completely plausible, and **no test in this repo
+> would have caught it.** That's this project's signature failure mode, offered to me
+> by a vendor's response schema on day one.*
+>
+> *Three — a word came back with **`logprob` exactly 0.0**, i.e. `exp()` exactly 1.0.
+> Observed live, not hypothesised: `u02`, the word "at". Anything that then takes a
+> **logit** of that confidence divides by zero, so the adapter clips — same class of
+> bug as the calibration layer's `_logit` guard. You can see the clip in the shipped
+> data: the arm's maximum confidence is **exactly 0.999999**, and that word is it.*
+>
+> *And cost was never the constraint — $0.22/hr batch, so the 10-clip arm that ran
+> cost **$0.44** of the project's $3.70, and the full 40-clip grid would have been
+> about **$1.76**. **The gate was the constraint, and it was the right one:** the
+> orthography audit is what turned this from a third data point into a reversal."*
 
 **Now concede, unprompted:**
 > *"Two things I'd flag against myself. First, the exclusion is **also** the outcome
@@ -1049,6 +1255,24 @@ bit. Volunteer it.**
 > statistics, never to **level** statistics — and check whether a statistic you called
 > 'within-model' is secretly a level statistic."*
 
+**And take it one step further than he will — it indicts your own headline metric,
+which is the strongest version of the point.**
+> *"It isn't only Scribe. **No arm's dead-zone rate is scale-free**, because
+> `dead_zone_flags` thresholds an absolute WER. Re-scored through the normalizer,
+> Scribe goes **7 → 0**, nova-3 **1 → 0**, and **Whisper 69 → 44.** So the count I
+> put in the headline moves under a change that isn't acoustic at all. It survives
+> for nova-3 specifically because that arm's own normalization shift is −0.014,
+> essentially zero by construction — which is the audit, not a coincidence. But the
+> honest statement is that this is a **limitation of my own headline metric**, and
+> it's the same class of finding as the estimand mismatch — caught before publication
+> this time instead of after."*
+
+**One framing caution, and it matters with this audience:** *"vendor confidence is
+not a calibrated probability"* is the **premise** of the calibration layer, **not a
+criticism of their product.** Nothing in the docs claims calibration and nothing
+should. Say it that way — the layer asks *can a thin learned wrapper make it one*,
+and the answer is yes.
+
 ### (3) LIMITATION TO PRE-EMPT HERE
 
 **This is the natural place for the self-assessment line (§B).** The section is about
@@ -1159,6 +1383,20 @@ demo, this is where it goes.
 > computes a tighter correct one. The one with a **prose rule** failed, and the rule
 > couldn't fail. That's the lesson, and it cost me nothing to learn it in public."*
 
+**If he asks what "deliberately wider" means — the mechanism, per factor:** the
+published interval adds the S1 and ST half-widths **in quadrature**, which assumes
+they're independent. They are not: the bootstrap correlation is **+0.843** for `rt60`
+and **+0.871** for `snr_db`. So the quoted interval is **2.49× wider than the direct
+one for `rt60` and 2.70× for `snr_db`** — the code computes the tighter, correct
+interval and **declines to use it**, conservative in the only direction that matters
+for a pre-registered test. Both are persisted in `results/sobol.json`
+(`s1_st_bootstrap_corr`, `gap_conf_ratio_quadrature_over_direct`).
+
+> ⚠️ **Do not say "~2.5× wider" as a single figure** — that was a summary-log
+> approximation and it does **not** hold across the factor table: `mic_rolloff` is
+> 2.10× and `codec` only **1.27×**. Same trap as the 4.5×-vs-3.58× clearance in §C:
+> an `rt60` statement quoted without its factor name.
+
 ### (3) LIMITATION TO PRE-EMPT HERE
 
 **The AL null is a surrogate-oracle result** (say it every time) and **the DRR
@@ -1217,6 +1455,12 @@ defend the strong form.** Concede in the first sentence.
 | 0.45 | Bar | 0.474 | −2.05 | 10.22 | 0.5559 |
 | 0.7 | Campground Dining Hall | 0.680 | +4.26 | 10.03 | 0.4495 |
 | 1.0 | **Shower** | 1.011 | **−10.02** | 2.12 | 0.7217 |
+
+**The three rank correlations, which are the claim:** **ρ(DRR, WER) = −1.000** ·
+**ρ(RT60, WER) = +0.800** · ρ(C50, WER) = −0.800. *"Damage is monotone in
+direct-to-reverberant ratio and NOT in reverberation time — so a reverb benchmark
+parameterised by RT60 alone will mis-rank its own conditions."* That is the sentence,
+and it is useful to anyone building an ASR eval set, which is them. n = 4 stands.
 
 *(Population trap in your own table: over the **babble-only 144-cell block** the same
 marginals read 0.203 / 0.636 / 0.449 / 0.758. Both are correct. Say which one you're
@@ -1361,6 +1605,18 @@ what it IS.**
 > random word-level split, which leaks and whose symptom is a *better* ECE. And it
 > learned a discount schedule you could ship: above rt60 = 0.7, discount reported
 > confidence by about 0.07; above mic rolloff 0.5, by about 0.06.*
+
+**He WILL notice Whisper is missing from that table. It is blocked, not computed —
+own it, the answer is better than the number would have been:**
+> *"**69 of 1,757** Whisper rows still have a hypothesis-word count that disagrees
+> with the confidence-list length after re-alignment — `align_confidences` recovered
+> **33** and could not recover those. `word_records` **refuses to zip**, because
+> zipping binds confidences to the wrong words. The library does offer
+> `on_misalign='skip'`, which drops them and hands me a number — and that number
+> would print in the same column as the other two arms while being fit on a silently
+> smaller and non-random set. **That's a protocol change disguised as a value.** So
+> the row is blank and the reason is printed next to it. I'd rather show you a hole
+> than a number I'd have to caveat."*
 >
 > ***What I can't tell you is why it behaves that way** — and that's the part I'd want
 > to spend time on with someone who knows the decoder."*
@@ -1455,7 +1711,14 @@ weakness. If he agrees with it, that is the answer working, not the answer faili
 - best aggregate = **mean**, AUROC **0.944**; median 0.938 · p10 0.917 · min **0.877**
   (significantly worse) · `utterance_conf` 0.936 · `n_words` control 0.560
 - decision rule: flag lowest-confidence 10 % by mean → threshold 0.564, precision
-  0.994, recall 0.249
+  0.994, recall 0.249. **The worked counter-example is `u11` in §7** — one utterance
+  on which the signal is a false alarm *and* a miss at once.
+
+**§7's `u11` exhibit — nova-3, 1 clip, dead zone #1 (`rt60-0.45_snr-0_engine_g726_roll-0`)**
+- wrong at **0.933** (`street`→`three`) · wrong at **0.926** (`elm`→`l`) · wrong at
+  0.826 (`eighty`→`three`) · **right at 0.336** (`martinez`, the lowest in the
+  utterance)
+- utterance mean **0.849**; clean control WER 0.000 at **0.961**; degraded WER 0.300
 
 **D2 fingerprints — nova-3, 7,040 rows, 63,888 reference words**
 - del **0.351** · sub 0.136 · ins 0.020
@@ -1614,6 +1877,30 @@ mini-project. Say the honest thing.
 > system is the highest demo risk in the project and it would have failed live for
 > reasons that have nothing to do with the quality of the work."*
 
+**"Does degradation break endpointing before it breaks transcription?"** → **The one
+finding the project doesn't have and the one he will care about most.** Do not
+speculate — hand him the design, because having the design is the signal.
+> *"I don't have it, and it's the thing I'd build next. The design, though, I'm
+> confident about:*
+>
+> ***Inject the degraded WAV bytes straight into the live socket, chunked and paced
+> to realtime.** No audio hardware, fully reproducible, and it still exercises the
+> real streaming and endpointing path.*
+>
+> *And the thing I would **not** do, which is the part that matters: **never play the
+> audio through speakers into a microphone.** That re-introduces uncontrolled room
+> acoustics **on top of** the simulated ones, which destroys the counterfactual-
+> isolation premise the entire rig rests on. It's a party trick, not a measurement —
+> and it would quietly undo the one property that makes the exact variance
+> decomposition possible.*
+>
+> *One parameter I'd want on the record before running it: **`utterance_end_ms` is a
+> parameter you CHOOSE, not a property you discover.** My clips carry ~0.5 s of
+> trailing room tone by design — the VAD and `apply_rir`'s onset trim both need it —
+> and that tail may itself trip the endpointer. So the value has to be set
+> deliberately and **reported in the methods**, not tuned until the result looks
+> good."*
+
 **"What's the one thing you'd change about how you worked?"** →
 > *"Pin the prose earlier. Four of the five worst number errors in this project
 > survived multiple reviews because they were being copied forward from a progress
@@ -1623,7 +1910,37 @@ mini-project. Say the honest thing.
 
 ---
 
-# §F — Pre-flight, the morning of
+# §F — Run-of-show, and pre-flight the morning of
+
+## The hour budget — and what to cut if you are running long
+
+| beat | min |
+|---|---|
+| the reframe (§1–§2) | 2 |
+| the audio demos (§5 + §7) | 6 |
+| the instrument (§3–§4) | 4 |
+| the dashboard | 9 |
+| judgment — the corrections and the nulls (§6, §11) | 8 |
+| product framing (§8–§10) | 4 |
+| **spine total** | **33** |
+
+**That leaves ~25 minutes for conversation, which is where the hiring signal actually
+lives.** Do not spend it. If you are running long, cut in this order:
+
+1. **§3 down to two bullets** (the pipeline diagram — he can read it).
+2. **§4's third "why"** (why the same room/mic/distance).
+3. **Listening pair 1 (`u40`)** — two pairs carry the beat and pair 1 is the marginal
+   one (§5 explains why it is already third in the order).
+
+> ### 🚫 NEVER CUT — these three are the interview
+> - **The headline correction** (§6: 6 → 2 dead zones, found by ears not by a test).
+> - **The failed pre-registration** (§5: it failed, and its rubric couldn't fail).
+>   A demo that only reports the predictions that worked is the exact failure this
+>   project is about.
+> - **The Scribe reversal** (§8/§10: two scorings, opposite verdicts). It is the only
+>   place the hour demonstrates the thesis on the **benchmark** rather than on a model.
+
+## Pre-flight, the morning of
 
 ```bash
 make demo-check                                     # wifi still ON
