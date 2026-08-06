@@ -177,6 +177,55 @@ def test_nan_wer_never_dilutes_the_dead_zone_rate():
           f"rate from {clean_rate:.3f} to {silent_rate:.3f}")
 
 
+def test_wer_key_selects_the_estimand():
+    """
+    `dead_zone_flags` must flag against the WER the caller names, because
+    "confidently wrong" is a claim about the clips the confidence was averaged
+    over. A per-condition row whose `mean_conf` comes only from the clips that
+    produced words has to be judged on `wer_spoke`, not on the all-clips `wer` —
+    that mismatch is what inflated D1's published gaps.
+    """
+    tables = build_tables()
+    rows = [dict(r) for r in tables["strong"]]
+    # `strong` is planted to have NO dead zones on its own WER. Give every row a
+    # second, worse WER column: the same confidences must now flag under the new
+    # key and not under the old one. Only the estimand changed.
+    for r in rows:
+        r["wer_spoke"] = min(r["wer"] + 0.6, 1.0)
+
+    on_wer = dead_zone_flags(rows, wer_key="wer")
+    on_spoke = dead_zone_flags(rows, wer_key="wer_spoke")
+    assert on_wer.sum() == 0, "the control table must have no dead zones on `wer`"
+    assert on_spoke.sum() > 0, "the same rows must flag under the worse estimand"
+    # ...and the confidence half is untouched: the flip is entirely the WER key
+    pct = within_model_conf_percentile(rows)
+    assert np.array_equal(on_spoke, (np.array([r["wer_spoke"] for r in rows]) >= 0.3)
+                          & (pct >= 0.6))
+
+    # NEGATIVE CONTROL: when the two columns agree (no silent clips), naming
+    # either key must give bit-identical flags.
+    same = [dict(r, wer_spoke=r["wer"]) for r in tables["weak"]]
+    assert np.array_equal(dead_zone_flags(same, wer_key="wer"),
+                          dead_zone_flags(same, wer_key="wer_spoke"))
+
+    # a missing/NaN value under the NAMED key raises, naming that key — a mute
+    # condition must be held out explicitly, never read as "not a dead zone"
+    holed = [dict(r) for r in rows]
+    holed[3]["wer_spoke"] = float("nan")
+    try:
+        dead_zone_flags(holed, wer_key="wer_spoke")
+        assert False, "expected a non-finite raise under the named key"
+    except ValueError as exc:
+        assert "wer_spoke" in str(exc), exc
+
+    shape_a = confidence_wer_shape(rows, wer_key="wer")["spearman"]
+    shape_b = confidence_wer_shape(rows, wer_key="wer_spoke")["spearman"]
+    assert np.isfinite(shape_a) and np.isfinite(shape_b)
+    print(f"ok 4c: wer_key selects the estimand — 0 dead zones on `wer`, "
+          f"{int(on_spoke.sum())} on `wer_spoke`, identical when the two agree; "
+          f"a NaN under the named key raises and names it")
+
+
 def test_ragged_region_coverage_raises():
     """
     `wer_gap` subtracts one model's mean over ITS rows in a region from
@@ -234,6 +283,7 @@ if __name__ == "__main__":
     test_comparison_surfaces_weak_region()
     test_dead_zone_and_shape()
     test_nan_wer_never_dilutes_the_dead_zone_rate()
+    test_wer_key_selects_the_estimand()
     test_ragged_region_coverage_raises()
     test_vosk_parses_to_contract()
     print("\nAll model-compare tests passed — cross-model dead-zone comparison "

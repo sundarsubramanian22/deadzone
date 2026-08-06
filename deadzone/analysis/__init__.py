@@ -21,7 +21,20 @@ a WER of 1.0 sits above every threshold. Failures are therefore split out
 EXPLICITLY (`split_failures`) and counted in every report, never dropped silently
 and never averaged in.
 
-THE SECOND TRAP, AND WHY THE GUARDS BELOW ARE HERE. Every layer in this package
+THE SECOND TRAP: MISMATCHED ESTIMANDS (`is_silent_row` / `n_hyp_words`). A clip
+whose transcript comes back EMPTY scores WER 1.0 with 100% deletions, but it
+carries no hypothesis words, so it carries no per-word confidence and contributes
+NOTHING to that condition's `mean_conf`. Average WER over all 40 clips and
+confidence over the ~30 that spoke and the two numbers describe different
+populations: the confidence describes a strictly easier subset. `mean_conf -
+(1 - wer)` then reads as overconfidence that is really just the missing clips, and
+the arithmetic is clean, the row count is right, and nothing downstream can see
+it. On the real grid this inflated the #1 dead zone's gap from +0.025 to +0.230
+and REORDERED the published table. Any layer that pairs a confidence with an
+accuracy must pair them over the SAME rows and say which rows those are;
+`is_silent_row` is the shared definition of the clips that drop out.
+
+THE THIRD TRAP, AND WHY THE GUARDS BELOW ARE HERE. Every layer in this package
 keys rows into a dict or an array by some cell identity — (clip, condition),
 (clip, condition, model), (clip, level) — and then aggregates. A DUPLICATE key
 is invisible to all of them: a dict assignment silently overwrites the earlier
@@ -175,6 +188,63 @@ def split_failures(rows: Sequence[dict]) -> tuple[list[dict], list[dict]]:
     for r in rows:
         (bad if is_failed_row(r) else ok).append(r)
     return ok, bad
+
+
+def n_hyp_words(row: dict) -> int:
+    """
+    How many HYPOTHESIS words this clip produced, from the frozen schema's counts.
+
+    `classify_errors` aligns n_ref reference words against the hypothesis, so
+    n_hyp = n_match + n_sub + n_ins and n_match = n_ref - n_del - n_sub, giving
+    n_hyp = n_ref - n_del + n_ins. Derived from REQUIRED_COLUMNS only (n_match is
+    not required), and derived from the same alignment that produced `wer` — which
+    is the point: a count taken from anywhere else could disagree with the WER it
+    is about to be paired with.
+
+    Deliberately NOT `len(word_confidences)`: the two differ on 225 of 8797 rows
+    of the real grid, because confidences are per RAW vendor token while the edits
+    are over `normalize_text`-ed tokens. Two Whisper rows transcribe pure
+    punctuation ('.', a run of emoji) — one hypothesis token each by the vendor's
+    count, ZERO scorable words after normalization. It is the scorable count that
+    the WER was computed from, so it is the scorable count that decides whether a
+    clip is in the paired subset.
+    """
+    return as_int(row.get("n_ref")) - as_int(row.get("n_del")) + as_int(row.get("n_ins"))
+
+
+def is_silent_row(row: dict) -> bool:
+    """
+    True when the model emitted NO scorable words for this clip.
+
+    A silent clip is a real, severe failure (WER 1.0, 100% deletions) — and it is
+    invisible to every confidence-based statistic, because there is no word to
+    attach a confidence to. It must be counted, never dropped and never quietly
+    folded into a confidence average's denominator. See the second trap above.
+    """
+    return n_hyp_words(row) <= 0
+
+
+def silence_summary(rows: Sequence[dict]) -> dict:
+    """Counts of silent (no-hypothesis-word) rows + the per-condition breakdown."""
+    by_condition: dict[str, int] = {}
+    total_by_condition: dict[str, int] = {}
+    n_silent = 0
+    for r in rows:
+        key = str(r.get("condition_name", "?"))
+        total_by_condition[key] = total_by_condition.get(key, 0) + 1
+        if is_silent_row(r):
+            by_condition[key] = by_condition.get(key, 0) + 1
+            n_silent += 1
+    fully_silent = sorted(c for c, n in by_condition.items()
+                          if n == total_by_condition.get(c, 0))
+    return {
+        "n_rows": len(rows),
+        "n_silent": n_silent,
+        "silent_rate": (n_silent / len(rows)) if rows else float("nan"),
+        "silent_by_condition": by_condition,
+        "n_conditions_with_silence": len(by_condition),
+        "fully_silent_conditions": fully_silent,
+    }
 
 
 def failure_summary(rows: Sequence[dict]) -> dict:

@@ -32,6 +32,30 @@ docstring for what it fixes and what residuals survive.
 confound the model with the clip set. This module intersects down to the cells
 both arms actually ran, and refuses to proceed if the intersection is ragged.
 
+**4. A confidence is never subtracted from — or thresholded against — an accuracy
+measured on DIFFERENT clips.** This is the same defect D1 was rebuilt around
+(`analysis/confidence_gap.py`, `analysis/__init__.py` second trap), and L1 had an
+identical instance of it: `condition_table` averaged `wer` over EVERY clip while
+averaging `mean_conf` over only the clips that produced words, and then
+`dead_zone_flags` tested one against the other. A clip whose transcript comes back
+EMPTY scores WER 1.0 with 100% deletions and carries no per-word confidence at all,
+so it inflates the WER term while contributing nothing to the confidence term. The
+arithmetic is clean, the row count is right, and nothing downstream can see it.
+
+So every condition row now carries BOTH pairings under explicit names —
+`wer_all_clips` (corpus severity, the honest "what does this condition do")
+and `wer_spoke` (the ONLY accuracy the confidence may be thresholded against) —
+plus `n_spoke` / `n_silent` / `silent_frac`, and the dead-zone flags are computed
+against `wer_spoke` through `confidence_gap.condition_flags` (which holds the
+MUTE conditions out; a condition that emitted nothing on any clip has no
+confidence, so it cannot be confidently wrong — it is a different, worse failure
+and it is reported as its own category rather than dropped).
+
+Measured effect on the real grid (10-clip common cell set, 176 conditions/arm):
+nova-3 had 94 conditions with at least one silent clip and ONE condition flipped
+out of the dead-zone set (2 -> 1); whisper-base had 0 flips, because its WERs are
+so far above the threshold that the spoke-only subset is still above it.
+
     ./.venv/bin/python -m deadzone.analysis.model_arms
 """
 from __future__ import annotations
@@ -46,9 +70,15 @@ from typing import Mapping, Sequence
 
 import numpy as np
 
+from deadzone.analysis import as_float, is_silent_row, silence_summary
+from deadzone.analysis.confidence_gap import (
+    CATEGORY_DEAD_ZONE, CATEGORY_MUTE, CATEGORY_OK, CATEGORY_SILENCE_DRIVEN,
+    CATEGORY_MEANING, condition_flags,
+)
 from deadzone.cross_model_norm import cross_model_classify_errors, cross_model_normalize
+from deadzone.design import DEFAULT_FACTOR_SPACE, FactorSpace
 from deadzone.model_compare import (
-    compare_models, confidence_wer_shape, dead_zone_flags,
+    _bins_for, _region_rows, compare_models, confidence_wer_shape,
     find_divergence_regions, within_model_conf_percentile,
 )
 
@@ -69,6 +99,13 @@ class RaggedArmsError(ValueError):
     and every number in it would be a mixture of a model effect and a coverage
     effect with no way to separate them afterwards.
     """
+
+
+def _nanmean(a: np.ndarray) -> float:
+    """np.nanmean without the empty-slice warning: no finite values -> NaN."""
+    a = np.asarray(a, dtype=float)
+    a = a[np.isfinite(a)]
+    return float(a.mean()) if a.size else float("nan")
 
 
 # ---------------------------------------------------------------------------
@@ -236,6 +273,34 @@ def condition_table(rows: Sequence[Mapping], wer_key: str = "wer") -> list[dict]
     a property of an acoustic condition, not of one utterance, and averaging over
     the clip set is what makes the WER estimate precise enough to separate
     adjacent cells.
+
+    TWO ACCURACIES, BOTH NAMED — see the module docstring's point 4. There is no
+    single "the WER" of a condition once some clips come back EMPTY:
+
+      wer / wer_all_clips  macro mean over EVERY clip. Corpus severity. This is
+                           the honest answer to "what does this condition do",
+                           and it is NOT comparable to `mean_conf`.
+      wer_spoke            macro mean over exactly the clips that returned a
+                           confidence — the population `mean_conf` is averaged
+                           over, and therefore the only accuracy that may be
+                           thresholded against it or subtracted from it.
+      n_spoke              that population's size, i.e. mean_conf's denominator.
+      n_silent/silent_frac clips that emitted no scorable words (`is_silent_row`,
+                           shared with D1). First-class, because it is exactly
+                           the quantity that separates the two WERs.
+      mute                 True when NO clip produced a confidence. Such a
+                           condition has `wer_spoke` NaN and no gap can exist for
+                           it; `confidence_flags` holds it out and it is reported
+                           as its own category.
+
+    `wer` is kept as an alias of `wer_all_clips` because it is the frozen key the
+    divergence scan and the dashboard join on.
+
+    THE PAIRED SUBSET IS DEFINED BY "did this clip contribute a confidence"
+    (`isfinite(mean_conf)`), not by `is_silent_row`. That is what the denominator
+    of `mean_conf` literally is, and the two can disagree: whisper returns an
+    utterance-level confidence with no words on a handful of real rows. Those are
+    counted separately as `n_conf_without_words` rather than reconciled away.
     """
     groups: dict[str, list[Mapping]] = defaultdict(list)
     for r in rows:
@@ -265,13 +330,31 @@ def condition_table(rows: Sequence[Mapping], wer_key: str = "wer") -> list[dict]
     out = []
     for name, g in sorted(groups.items()):
         first = g[0]
+        wer = np.array([as_float(r[wer_key]) for r in g], dtype=float)
+        conf = np.array([as_float(r["mean_conf"]) for r in g], dtype=float)
+        # THE PAIRED SUBSET. Every quantity computed under `spoke` is on the same
+        # estimand as `mean_conf`; anything computed over the whole group is not
+        # and must never be thresholded against a confidence.
+        spoke = np.isfinite(conf)
+        silent = np.array([is_silent_row(r) for r in g], dtype=bool)
+        wer_all = _nanmean(wer)
         out.append({
             "condition_name": name,
             "rt60": first["rt60"], "snr_db": first["snr_db"],
             "noise_type": first["noise_type"], "codec": first["codec"],
             "mic_rolloff": first["mic_rolloff"],
-            "wer": float(np.nanmean([r[wer_key] for r in g])),
-            "mean_conf": float(np.nanmean([r["mean_conf"] for r in g])),
+            # --- all-clips estimand (corpus severity) -------------------------
+            "wer": wer_all,
+            "wer_all_clips": wer_all,
+            # --- paired (spoke-only) estimand — the confidence's own population -
+            "mean_conf": _nanmean(conf),
+            "wer_spoke": _nanmean(wer[spoke]) if spoke.any() else float("nan"),
+            "n_spoke": int(spoke.sum()),
+            # --- silence accounting -------------------------------------------
+            "n_silent": int(silent.sum()),
+            "silent_frac": float(silent.mean()) if len(g) else float("nan"),
+            "n_conf_without_words": int((spoke & silent).sum()),
+            "mute": bool(not spoke.any()),
             "n_clips": len(g),
         })
     return out
@@ -353,6 +436,75 @@ def edit_signature(rows: Sequence[Mapping], prefix: str = "n_") -> dict:
 
 
 # ---------------------------------------------------------------------------
+# the corrected per-region dead-zone rate
+#
+# `model_compare.find_divergence_regions` computes its own dead-zone rates
+# internally with the default `wer_key="wer"` and does not expose the argument.
+# Its headline `wer_gap` is a comparison of two arms' CORPUS severity and is
+# correct as it stands — but the dead-zone rate it carries is the mismatched
+# pairing. Rather than fork the harness, we recompute that one field here over
+# the SAME bins (model_compare's own `_bins_for`/`_region_rows`, so D1, L1 and
+# the divergence scan cannot drift apart) and publish the old value under an
+# explicit name beside it.
+
+def _region_dead_zone_rates(cond: Mapping[str, Sequence[dict]],
+                            space: FactorSpace, n_bins: int,
+                            wer_hi: float, conf_pct_hi: float) -> dict:
+    flags = {m: condition_flags(t, wer_hi, conf_pct_hi, "wer_spoke")
+             for m, t in cond.items()}
+    out: dict[tuple, tuple[dict, dict]] = {}
+    for factor in space.names:
+        if not any(factor in (t[0] if t else {}) for t in cond.values()):
+            continue
+        kind, spec = _bins_for(space, factor, n_bins)
+        n_slots = (len(spec) - 1) if kind == "continuous" else len(spec)
+        for b in range(n_slots):
+            rates: dict[str, float] = {}
+            mutes: dict[str, int] = {}
+            span = None
+            for m, table in cond.items():
+                idx, span = _region_rows(table, factor, kind, spec, b)
+                if len(idx) == 0:
+                    rates[m], mutes[m] = float("nan"), 0
+                    continue
+                rates[m] = float(np.mean(flags[m][idx]))
+                mutes[m] = int(sum(1 for i in idx if table[i]["mute"]))
+            out[(factor, str(span))] = (rates, mutes)
+    return out
+
+
+def augment_divergence_regions(regions: list[dict],
+                               cond: Mapping[str, Sequence[dict]],
+                               space: FactorSpace = DEFAULT_FACTOR_SPACE,
+                               n_bins: int = 4, wer_hi: float = 0.3,
+                               conf_pct_hi: float = 0.6) -> list[dict]:
+    """
+    Replace each region's `dead_zone_rate_by_model` with the same-subset value
+    and keep the all-clips one under `dead_zone_rate_by_model_all_clips_pairing`.
+
+    The canonical name points at the correct quantity (the convention D1 fixed:
+    `gap` == `gap_spoke`); the mismatched one survives only under a name that
+    says what it is, so the published grid-v1 numbers stay reproducible.
+    """
+    lookup = _region_dead_zone_rates(cond, space, n_bins, wer_hi, conf_pct_hi)
+    for r in regions:
+        key = (r["factor"], str(r["span"]))
+        if key not in lookup:
+            continue
+        rates, mutes = lookup[key]
+        r["dead_zone_rate_by_model_all_clips_pairing"] = r["dead_zone_rate_by_model"]
+        r["dead_zone_rate_by_model"] = rates
+        r["dead_zone_rate_by_model_spoke"] = rates
+        r["n_mute_by_model"] = mutes
+        # `wer_gap` and `wer_by_model` are deliberately left on the ALL-CLIPS
+        # WER: that comparison has no confidence term in it, so corpus severity
+        # is the right estimand and restricting it to the spoke subset would
+        # silently discount each arm's worst clips.
+        r["wer_pairing"] = "all_clips"
+    return regions
+
+
+# ---------------------------------------------------------------------------
 # the report
 
 def model_arms_report(master_path: str = MASTER,
@@ -373,21 +525,59 @@ def model_arms_report(master_path: str = MASTER,
 
     per_model = {}
     for m, table in cond.items():
-        flags = dead_zone_flags(table, wer_hi=wer_hi, conf_pct_hi=conf_pct_hi)
+        # SAME-SUBSET flags — "confidently wrong" is a claim about the clips the
+        # model actually spoke on. `condition_flags` (D1's) holds MUTE conditions
+        # out, which is both required (their wer_spoke is NaN and dead_zone_flags
+        # refuses a non-finite WER by design) and safe (a NaN confidence is
+        # already excluded from the within-model percentile, so removing those
+        # rows leaves every surviving percentile bit-identical).
+        flags = condition_flags(table, wer_hi, conf_pct_hi, "wer_spoke")
+        flags_all = condition_flags(table, wer_hi, conf_pct_hi, "wer")
         pct = within_model_conf_percentile(table)
+        mute = np.array([bool(r["mute"]) for r in table], dtype=bool)
+        # silence-driven: flagged ONLY by the mismatched pairing. The model was
+        # not wrong enough on the clips it spoke on; the flag came from clips
+        # that vanished. Dangerous, but a silence failure, and the fix differs.
+        sd = flags_all & ~flags & ~mute
+        paired = [r for r in table
+                  if np.isfinite(as_float(r["mean_conf"]))
+                  and np.isfinite(as_float(r["wer_spoke"]))]
         per_model[m] = {
             "n_conditions": len(table),
             "n_clips_per_condition": table[0]["n_clips"] if table else 0,
             "wer_mean_strict": float(np.nanmean([r["wer"] for r in table])),
             "wer_mean_crossmodel": float(np.nanmean(
                 [r["wer"] for r in cond_xm[m]])),
+            "wer_mean_strict_spoke": _nanmean(
+                np.array([r["wer_spoke"] for r in table])),
+            # --- the corrected headline ---------------------------------------
             "dead_zone_rate": float(np.mean(flags)),
             "n_dead_zones": int(np.sum(flags)),
             "dead_zones": [table[i]["condition_name"]
                            for i in np.flatnonzero(flags)],
             "conf_percentile_of_dead_zones": [float(pct[i])
                                               for i in np.flatnonzero(flags)],
-            "shape": confidence_wer_shape(table),
+            # --- and the mismatched pairing, kept so grid-v1 stays reproducible -
+            "dead_zone_rate_all_clips_pairing": float(np.mean(flags_all)),
+            "n_dead_zones_all_clips_pairing": int(np.sum(flags_all)),
+            "dead_zones_all_clips_pairing": [table[i]["condition_name"]
+                                             for i in np.flatnonzero(flags_all)],
+            # --- the other two categories, never dropped ----------------------
+            "n_silence_driven": int(np.sum(sd)),
+            "silence_driven": [table[i]["condition_name"]
+                               for i in np.flatnonzero(sd)],
+            "n_mute_zones": int(mute.sum()),
+            "mute_zones": [table[i]["condition_name"]
+                           for i in np.flatnonzero(mute)],
+            "silence": silence_summary(arms[m]),
+            "n_conditions_with_silence": int(
+                sum(1 for r in table if r["n_silent"] > 0)),
+            "mean_silent_frac": _nanmean(
+                np.array([r["silent_frac"] for r in table])),
+            # SHAPE on the paired subset (mute rows carry no confidence AND no
+            # wer_spoke; leaving them in returns a NaN spearman).
+            "shape": confidence_wer_shape(paired, wer_key="wer_spoke"),
+            "shape_all_clips_pairing": confidence_wer_shape(table, wer_key="wer"),
             "edit_signature_strict": edit_signature(arms[m], "n_"),
             "edit_signature_crossmodel": {
                 op: sum(int(r[f"n_{op}_xm"]) for r in arms[m])
@@ -395,15 +585,31 @@ def model_arms_report(master_path: str = MASTER,
                 for op in ("sub", "del", "ins")},
         }
 
-    divergence = find_divergence_regions(cond, wer_hi=wer_hi,
-                                         conf_pct_hi=conf_pct_hi)
+    divergence = augment_divergence_regions(
+        find_divergence_regions(cond, wer_hi=wer_hi, conf_pct_hi=conf_pct_hi),
+        cond, wer_hi=wer_hi, conf_pct_hi=conf_pct_hi)
     combined = compare_models(cond, wer_hi=wer_hi, conf_pct_hi=conf_pct_hi)
+    # `compare_models` is model_compare's own harness and takes no wer_key, so
+    # every dead-zone number inside it is the MISMATCHED all-clips pairing. It is
+    # kept (this module uses the shared harness rather than a private fork) but
+    # it is labelled, because an unlabelled `dead_zone_rate` under a second key
+    # is exactly how the corrected one gets misquoted.
+    combined["pairing"] = (
+        "all-clips (mean_conf vs WER over EVERY clip, including the silent ones "
+        "that carry no confidence). model_compare.compare_models does not accept "
+        "a wer_key; the CORRECTED same-subset rates are per_model[*]"
+        "['dead_zone_rate'] above, and the all-clips ones are repeated there as "
+        "'dead_zone_rate_all_clips_pairing'.")
 
     # Dead-zone set overlap: do the two models fail silently in the SAME places?
     sets = {m: set(v["dead_zones"]) for m, v in per_model.items()}
+    sets_all = {m: set(v["dead_zones_all_clips_pairing"])
+                for m, v in per_model.items()}
     a, b = SPINE_MODEL, BASELINE_MODEL
-    union = sets[a] | sets[b]
-    jaccard = (len(sets[a] & sets[b]) / len(union)) if union else float("nan")
+
+    def _jac(s: dict) -> float:
+        union = s[a] | s[b]
+        return (len(s[a] & s[b]) / len(union)) if union else float("nan")
 
     return {
         "arms": list(arms),
@@ -413,11 +619,14 @@ def model_arms_report(master_path: str = MASTER,
             "shared": sorted(sets[a] & sets[b]),
             f"{a}_only": sorted(sets[a] - sets[b]),
             f"{b}_only": sorted(sets[b] - sets[a]),
-            "jaccard": jaccard,
+            "jaccard": _jac(sets),
+            "jaccard_all_clips_pairing": _jac(sets_all),
+            "pairing": "same-subset (dead zones flagged on wer_spoke)",
         },
         "divergence_regions": divergence,
         "compare_models": combined,
         "whisper_hallucination": hallucination_report(arms[BASELINE_MODEL], refs),
+        "category_meaning": CATEGORY_MEANING,
         "params": {"wer_hi": wer_hi, "conf_pct_hi": conf_pct_hi},
     }
 
@@ -442,19 +651,54 @@ def format_report(res: Mapping) -> str:
     add("")
 
     add("-- per-model, per-condition ------------------------------------------")
-    add(f"{'model':<16}{'conds':>7}{'WER':>8}{'WERxm':>8}{'deadzone%':>11}{'n_dz':>6}")
+    add("WERall = macro WER over EVERY clip (corpus severity).  WERsp = over only")
+    add("the clips that emitted words, i.e. the population mean_conf is averaged")
+    add("over — the ONLY accuracy a confidence may be thresholded against. Dead")
+    add("zones are flagged on WERsp; the all-clips pairing is shown to be rejected.")
+    add(f"{'model':<16}{'conds':>7}{'WERall':>8}{'WERsp':>8}{'WERxm':>8}"
+        f"{'deadzone%':>11}{'n_dz':>6}{'n_dz(all)':>10}")
     for m, d in res["per_model"].items():
         add(f"{m:<16}{d['n_conditions']:>7}{d['wer_mean_strict']:>8.3f}"
-            f"{d['wer_mean_crossmodel']:>8.3f}"
-            f"{100 * d['dead_zone_rate']:>10.2f}%{d['n_dead_zones']:>6}")
+            f"{d['wer_mean_strict_spoke']:>8.3f}{d['wer_mean_crossmodel']:>8.3f}"
+            f"{100 * d['dead_zone_rate']:>10.2f}%{d['n_dead_zones']:>6}"
+            f"{d['n_dead_zones_all_clips_pairing']:>10}")
+    add("")
+
+    add("-- silence accounting (the quantity that separates the two WERs) ------")
+    add("A clip whose transcript comes back EMPTY scores WER 1.0 with 100% deletions")
+    add("and carries NO per-word confidence. It inflates WERall while contributing")
+    add("nothing to mean_conf, so the two describe different populations.")
+    add(f"{'model':<16}{'silent rows':>13}{'rate':>8}{'conds w/ silence':>18}"
+        f"{'silence-driven':>16}{'mute':>6}")
+    for m, d in res["per_model"].items():
+        s = d["silence"]
+        add(f"{m:<16}{s['n_silent']:>6}/{s['n_rows']:<6}"
+            f"{100 * s['silent_rate']:>7.1f}%"
+            f"{d['n_conditions_with_silence']:>10}/{d['n_conditions']:<7}"
+            f"{d['n_silence_driven']:>16}{d['n_mute_zones']:>6}")
+    add("  silence-driven = flagged ONLY by the all-clips pairing (a silence "
+        "failure,")
+    add("                   not a confidently-wrong one; different fix).")
+    add("  mute           = NO words on ANY clip, so no confidence and no gap can")
+    add("                   exist. The worst conditions measured, and invisible to")
+    add("                   a confidence-based monitor. Listed, never dropped.")
+    for m, d in res["per_model"].items():
+        if d["mute_zones"]:
+            add(f"  {m} mute: " + ", ".join(d["mute_zones"][:6])
+                + (" ..." if len(d["mute_zones"]) > 6 else ""))
+        if d["silence_driven"]:
+            add(f"  {m} silence-driven: " + ", ".join(d["silence_driven"][:6])
+                + (" ..." if len(d["silence_driven"]) > 6 else ""))
     add("")
 
     add("-- confidence-vs-WER shape (within-model; scales are NOT comparable) --")
+    add("  correlated against WERsp (same clips as the confidence); the all-clips")
+    add("  pairing is shown beside it — a large disagreement means the apparent")
+    add("  self-awareness is really a silence pattern.")
     for m, d in res["per_model"].items():
-        s = d["shape"]
-        bits = ", ".join(f"{k}={v:.3f}" for k, v in s.items()
-                         if isinstance(v, (int, float)))
-        add(f"  {m:<14} {bits}")
+        s, sa = d["shape"], d["shape_all_clips_pairing"]
+        add(f"  {m:<14} spearman={s['spearman']:+.3f}, n={s['n']}"
+            f"   [all-clips: {sa['spearman']:+.3f}, n={sa['n']}]")
     add("")
 
     add("-- edit signature (fraction of reference words) ----------------------")
@@ -467,16 +711,21 @@ def format_report(res: Mapping) -> str:
     ov = res["dead_zone_overlap"]
     add("-- do the two models fail silently in the SAME places? ---------------")
     add(f"  shared dead zones : {len(ov['shared'])}")
-    add(f"  jaccard           : {ov['jaccard']:.3f}")
+    add(f"  jaccard           : {ov['jaccard']:.3f}   "
+        f"[all-clips pairing: {ov['jaccard_all_clips_pairing']:.3f}]")
     for k in ov:
         if k.endswith("_only"):
             add(f"  {k:<18}: {len(ov[k])}")
     add("")
 
-    add("-- divergence regions (ranked) ---------------------------------------")
+    add("-- divergence regions (ranked by all-clips WER gap) ------------------")
+    add("  wer_gap/wer_by_model are ALL-CLIPS (corpus severity — no confidence")
+    add("  term, so restricting to the spoke subset would discount each arm's")
+    add("  worst clips). dead_zone_rate_by_model is the SAME-SUBSET rate.")
     for d in res["divergence_regions"][:8]:
         bits = " ".join(f"{k}={v}" for k, v in d.items()
-                        if k not in ("gap", "detail"))
+                        if k not in ("gap", "detail", "wer_pairing",
+                                     "dead_zone_rate_by_model_spoke"))
         add(f"  {bits}")
     add("")
 

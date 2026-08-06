@@ -94,14 +94,25 @@ def within_model_conf_percentile(rows: Sequence[dict],
 
 
 def dead_zone_flags(rows: Sequence[dict], wer_hi: float = 0.3,
-                    conf_pct_hi: float = 0.6) -> np.ndarray:
+                    conf_pct_hi: float = 0.6,
+                    wer_key: str = "wer") -> np.ndarray:
     """
     Boolean per row: a DEAD ZONE = the model is *confidently wrong* — WER at or
     above `wer_hi` while its within-model confidence sits in the top (>= conf_pct_hi)
     of its own range. High WER with LOW self-confidence is a loud failure, not a
     silent one, and is deliberately excluded.
+
+    `wer_key` NAMES THE ESTIMAND, and it is not cosmetic. "Confidently wrong" is a
+    claim about the clips the model actually spoke on — the only clips its
+    confidence was averaged over. When some clips returned an EMPTY transcript
+    they score WER 1.0 but contribute no confidence, so a row's all-clips `wer`
+    and its `mean_conf` describe different populations and this test would compare
+    them anyway (see analysis/__init__.py, the second trap). Callers holding a
+    per-condition table must pass the same-subset key (`wer_spoke`); the default
+    stays `wer` for clip-level tables, where one row is one clip and the question
+    does not arise.
     """
-    wer = _col(rows, "wer")
+    wer = _col(rows, wer_key)
     # A NaN confidence is legitimate (the model returned no per-word scores) and
     # is handled deliberately: it sinks to percentile 0. A NaN *WER* is not. It
     # makes `wer >= wer_hi` False, so the row is silently classified NOT a dead
@@ -113,24 +124,31 @@ def dead_zone_flags(rows: Sequence[dict], wer_hi: float = 0.3,
         n = int(np.count_nonzero(~np.isfinite(wer)))
         bad = [i for i, v in enumerate(wer) if not np.isfinite(v)][:5]
         raise ValueError(
-            f"dead_zone_flags: {n} of {len(wer)} rows have a non-finite WER "
-            f"(row indices {bad}). NaN >= threshold is False, so those rows "
+            f"dead_zone_flags: {n} of {len(wer)} rows have a non-finite WER under "
+            f"key {wer_key!r} (row indices {bad}). NaN >= threshold is False, so those rows "
             f"would be counted as 'not a dead zone' and would dilute the "
             f"dead-zone rate without appearing anywhere as missing. Split "
             f"failed rows out first (analysis.split_failures) — a failure "
-            f"sentinel is not a measurement.")
+            f"sentinel is not a measurement. With wer_key='wer_spoke', a "
+            f"non-finite value also means a condition where the model spoke on "
+            f"NO clip: hold those out and report them as their own category "
+            f"(analysis.confidence_gap.classify_conditions), never as a quiet "
+            f"False.")
     pct = within_model_conf_percentile(rows)
     return (wer >= wer_hi) & (pct >= conf_pct_hi)
 
 
-def confidence_wer_shape(rows: Sequence[dict]) -> dict:
+def confidence_wer_shape(rows: Sequence[dict], wer_key: str = "wer") -> dict:
     """
     Characterize the SHAPE of the confidence-vs-WER relationship for one model,
     using within-model confidence percentile (scale-free). A self-aware model has
     a NEGATIVE correlation (more confident -> lower WER). Near-zero or positive
     means confidence fails to track error — the dangerous regime.
+
+    `wer_key`: same estimand argument as `dead_zone_flags` — pass the same-subset
+    WER when the confidence being correlated is a subset average.
     """
-    wer = _col(rows, "wer")
+    wer = _col(rows, wer_key)
     pct = within_model_conf_percentile(rows)
     if len(rows) < 3 or np.allclose(pct, pct[0]) or np.allclose(wer, wer[0]):
         return {"spearman": float("nan"), "n": len(rows)}

@@ -57,9 +57,32 @@ formatted block. A partial mismatch is the expected situation and is handled by
 restriction, not by an exception; only an empty or implausibly small intersection
 raises (`ClipSetMismatchError`). What must never happen is that it is silent.
 
+THE THIRD TRAP — WHICH WER THE DEAD ZONES ARE FLAGGED ON. A clip whose transcript
+comes back EMPTY scores WER 1.0 with 100% deletions and carries NO per-word
+confidence, so it inflates a condition's mean WER while contributing nothing to
+its `mean_conf`. Thresholding one against the other compares two populations (see
+`analysis/__init__.py`, the second trap, and `analysis/confidence_gap.py`). D4's
+dead-zone sets are therefore flagged on `wer_spoke` — the WER over exactly the
+clips that returned a confidence — via `confidence_gap.condition_flags`, which is
+also what D1 and L1 use, so all three layers flag the same cells by construction.
+
+The LEVEL and ORDER claims above are deliberately NOT affected: `gap`, the
+Spearman and the Kendall compare two arms' CORPUS severity (`wer` over every
+clip) and contain no confidence term at all, so all-clips is the right estimand
+there and restricting it to the spoke subset would silently discount each arm's
+worst clips. Only the dead-zone SET moves.
+
+AND THE SET IS SCOPED TO THE COMMON CLIP SUBSET. Both arms are restricted to the
+clips they share (10 on this project's grid, vs D1's 40), so D4's dead-zone sets
+are computed WITHIN that subset and will not coincide with the 40-clip D1 table.
+That is correct — a 10-clip and a 40-clip dead zone are different measurements —
+and it is stated in the payload (`clip_scope`) and in the formatted block so the
+two can never be read as the same set.
+
 Reuse, not reimplementation: the master-table schema/failure handling comes from
-`deadzone/analysis/__init__.py`, and dead zones come from `model_compare.dead_zone_flags`
-(so D4 flags exactly the cells D1 and L1 flag).
+`deadzone/analysis/__init__.py`, and dead zones come from
+`confidence_gap.condition_flags` over `model_compare.dead_zone_flags` (so D4
+flags exactly the cells D1 and L1 flag).
 
     ./.venv/bin/python -m deadzone.analysis.sim2real results/master.csv results_sim/master_sim.csv
 
@@ -88,9 +111,12 @@ if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
 from deadzone.analysis import (                       # noqa: E402  (after the path shim)
-    as_float, failure_summary, load_master_table, split_by_model, split_failures,
+    as_float, failure_summary, is_silent_row, load_master_table, silence_summary,
+    split_by_model, split_failures,
 )
-from deadzone.model_compare import dead_zone_flags    # noqa: E402  — REUSED, not reimplemented
+# REUSED, not reimplemented — D4 flags exactly the cells D1/L1 flag, on the same
+# estimand (wer_spoke), with mute conditions held out the same way.
+from deadzone.analysis.confidence_gap import condition_flags   # noqa: E402
 from scipy.optimize import linear_sum_assignment   # noqa: E402
 from scipy.stats import kendalltau, spearmanr      # noqa: E402
 
@@ -211,12 +237,30 @@ def aggregate_conditions(rows: Sequence[dict], model: str | None = None,
     out: list[dict] = []
     for name, group in sorted(by_cond.items()):
         wer = _mean([r.get("wer") for r in group])
+        # THE PAIRED SUBSET (see the module docstring's third trap). `spoke` is
+        # exactly the clips whose confidence is inside `mean_conf`, so anything
+        # computed under it is on the same estimand as the confidence. `wer`
+        # above is over EVERY clip and must never be thresholded against one.
+        conf_arr = np.array([as_float(r.get("mean_conf")) for r in group],
+                            dtype=float)
+        wer_arr = np.array([as_float(r.get("wer")) for r in group], dtype=float)
+        spoke = np.isfinite(conf_arr)
+        silent = np.array([is_silent_row(r) for r in group], dtype=bool)
         rec = {
             "condition_name": name,
             "n": len(group),
+            # --- all-clips estimand: corpus severity, what LEVEL/ORDER use ----
             "wer": wer,
+            "wer_all_clips": wer,
             "wer_sd": float(np.std([as_float(r.get("wer")) for r in group])) if group else float("nan"),
             "mean_conf": _mean([r.get("mean_conf") for r in group]),
+            # --- paired estimand: the only WER the confidence may be judged on -
+            "wer_spoke": (_mean(wer_arr[spoke]) if spoke.any() else float("nan")),
+            "n_spoke": int(spoke.sum()),
+            "n_silent": int(silent.sum()),
+            "silent_frac": float(silent.mean()) if len(group) else float("nan"),
+            "n_conf_without_words": int((spoke & silent).sum()),
+            "mute": bool(not spoke.any()),
             MEASURED_RT60: _mean([r.get(MEASURED_RT60) for r in group]),
             REQUESTED_RT60: _mean([r.get(REQUESTED_RT60) for r in group]),
             "model": str(group[0].get("model", "unknown")),
@@ -428,9 +472,18 @@ def _pair_record(r: dict, s: dict, delta: float) -> dict:
     rec = {
         "condition_real": r["condition_name"],
         "condition_sim": s["condition_name"],
+        # ALL-CLIPS on both sides: the gap is a corpus-severity comparison with
+        # no confidence term in it, so restricting it to the clips each arm
+        # spoke on would discount exactly the clips the reverb destroyed.
         "wer_real": r["wer"],
         "wer_sim": s["wer"],
         "gap": float(s["wer"] - r["wer"]),          # sign: + means sim is WORSE
+        # the paired estimand travels alongside, because the dead-zone sets are
+        # flagged on it and a reader comparing the two tables needs both
+        "wer_spoke_real": r["wer_spoke"],
+        "wer_spoke_sim": s["wer_spoke"],
+        "n_silent_real": r["n_silent"],
+        "n_silent_sim": s["n_silent"],
         "conf_real": r["mean_conf"],
         "conf_sim": s["mean_conf"],
         "rt60_measured_real": r[MEASURED_RT60],
@@ -542,35 +595,72 @@ def rank_agreement(pairs: Sequence[dict]) -> dict:
 # DECISION — is the dead-zone SET the same under sim RIRs?
 # ============================================================================
 
+def _flag_map(table: Sequence[dict], wer_hi: float, conf_pct_hi: float,
+              wer_key: str) -> dict[str, bool]:
+    return dict(zip((c["condition_name"] for c in table),
+                    (bool(f) for f in
+                     condition_flags(table, wer_hi, conf_pct_hi, wer_key))))
+
+
 def dead_zone_agreement(paired: dict, wer_hi: float = WER_HI,
                         conf_pct_hi: float = CONF_PCT_HI) -> dict:
     """
     Compare the D1 dead-zone SET (confidently wrong) between the two runs.
 
-    `dead_zone_flags` is imported from model_compare, not reimplemented, so D4
-    flags exactly the cells D1/L1 flag. The within-run confidence percentile is
-    computed over each run's WHOLE condition table (never inside the paired
-    subset): confidence is only meaningful relative to that run's own
-    distribution, and re-percentiling a subset collapses the ranking.
+    FLAGGED ON `wer_spoke`, NOT ON THE ALL-CLIPS WER. A condition's `mean_conf`
+    is averaged only over the clips that emitted words; its all-clips WER is
+    inflated by the clips that emitted nothing and could carry no confidence.
+    Testing "high WER *and* high confidence" across those two populations
+    flags cells whose apparent danger is really their silence — the exact defect
+    D1 was rebuilt around. `condition_flags` is D1's own function (over
+    `model_compare.dead_zone_flags`), so all three layers flag the same cells,
+    and it holds MUTE conditions out: a run that emitted nothing on any clip has
+    no confidence, so it cannot be *confidently* wrong. Mute cells are counted
+    and reported per arm instead of silently reading as "not a dead zone".
+
+    The within-run confidence percentile is computed over each run's WHOLE
+    condition table (never inside the paired subset): confidence is only
+    meaningful relative to that run's own distribution, and re-percentiling a
+    subset collapses the ranking.
+
+    SCOPE. Both tables have already been restricted to the arms' common clip set
+    (`pair_conditions` -> `clip_intersection`), so these sets are dead zones
+    WITHIN that subset — 10 clips on this project's grid, against D1's 40. They
+    are not the same measurement as D1's table and `clip_scope` says so.
 
     Sets are labelled by the REAL condition name so they are comparable.
+
+    Both pairings are returned: `jaccard` is the corrected one, and
+    `*_all_clips_pairing` preserves what the mismatched pairing reported so the
+    published grid-v1 number stays reproducible rather than quietly restated.
     """
     real_tbl, sim_tbl = paired["real_table"], paired["sim_table"]
-    flags_r = dict(zip((c["condition_name"] for c in real_tbl),
-                       dead_zone_flags(real_tbl, wer_hi, conf_pct_hi)))
-    flags_s = dict(zip((c["condition_name"] for c in sim_tbl),
-                       dead_zone_flags(sim_tbl, wer_hi, conf_pct_hi)))
 
-    real_set, sim_set = set(), set()
-    for p in paired["pairs"]:
-        label = p["condition_real"]
-        if flags_r.get(p["condition_real"], False):
-            real_set.add(label)
-        if flags_s.get(p["condition_sim"], False):
-            sim_set.add(label)
+    def _sets(wer_key: str) -> tuple[set, set]:
+        fr = _flag_map(real_tbl, wer_hi, conf_pct_hi, wer_key)
+        fs = _flag_map(sim_tbl, wer_hi, conf_pct_hi, wer_key)
+        rs, ss = set(), set()
+        for p in paired["pairs"]:
+            label = p["condition_real"]
+            if fr.get(p["condition_real"], False):
+                rs.add(label)
+            if fs.get(p["condition_sim"], False):
+                ss.add(label)
+        return rs, ss
 
+    real_set, sim_set = _sets("wer_spoke")
+    real_all, sim_all = _sets("wer")
     both = real_set & sim_set
     union = real_set | sim_set
+    union_all = real_all | sim_all
+
+    def _n_mute(table: Sequence[dict]) -> int:
+        return int(sum(1 for c in table if c.get("mute")))
+
+    def _n_with_silence(table: Sequence[dict]) -> int:
+        return int(sum(1 for c in table if as_float(c.get("n_silent"), 0) > 0))
+
+    clips = paired["clip_match"]
     return {
         "n_paired": len(paired["pairs"]),
         "n_real": len(real_set), "n_sim": len(sim_set), "n_both": len(both),
@@ -582,6 +672,36 @@ def dead_zone_agreement(paired: dict, wer_hi: float = WER_HI,
         "real_only": sorted(real_set - sim_set),   # sim would MISS these dead zones
         "sim_only": sorted(sim_set - real_set),    # sim invents these
         "wer_hi": float(wer_hi), "conf_pct_hi": float(conf_pct_hi),
+        "pairing": "same-subset (wer_spoke vs mean_conf, over the same clips)",
+        # what the MISMATCHED all-clips pairing reported — kept, labelled, and
+        # never the headline
+        "all_clips_pairing": {
+            "n_real": len(real_all), "n_sim": len(sim_all),
+            "n_both": len(real_all & sim_all),
+            "jaccard": ((len(real_all & sim_all) / len(union_all))
+                        if union_all else float("nan")),
+            "real_only": sorted(real_all - sim_all),
+            "sim_only": sorted(sim_all - real_all),
+        },
+        # the categories a dead-zone count is meaningless without
+        "silence": {
+            "real": {"n_mute": _n_mute(real_tbl),
+                     "n_conditions_with_silence": _n_with_silence(real_tbl),
+                     "n_silence_driven": len(real_all - real_set)},
+            "sim": {"n_mute": _n_mute(sim_tbl),
+                    "n_conditions_with_silence": _n_with_silence(sim_tbl),
+                    "n_silence_driven": len(sim_all - sim_set)},
+        },
+        # THE SCOPE, carried with the sets themselves so they can never be
+        # quoted as if they were D1's 40-clip table.
+        "clip_scope": {
+            "n_clips": clips["n_common"],
+            "clips": list(clips["common"]),
+            "note": (f"dead zones computed WITHIN the {clips['n_common']}-clip "
+                     f"set both arms ran; D1's table is over the full corpus, so "
+                     f"these sets are a different measurement and are not "
+                     f"expected to coincide with it"),
+        },
     }
 
 
@@ -678,6 +798,8 @@ def plot_payload(res: dict) -> dict:
         "condition": p["condition_real"],
         "condition_sim": p["condition_sim"],
         "wer_real": p["wer_real"], "wer_sim": p["wer_sim"], "gap": p["gap"],
+        "wer_spoke_real": p["wer_spoke_real"], "wer_spoke_sim": p["wer_spoke_sim"],
+        "n_silent_real": p["n_silent_real"], "n_silent_sim": p["n_silent_sim"],
         "rt60_measured_real": p["rt60_measured_real"],
         "rt60_measured_sim": p["rt60_measured_sim"],
         "snr_db": p["snr_db"], "noise_type": p["noise_type"], "codec": p["codec"],
@@ -703,7 +825,16 @@ def plot_payload(res: dict) -> dict:
             "ci": [res["level"]["ci_lo"], res["level"]["ci_hi"]],
             "spearman": res["order"]["spearman"],
             "kendall": res["order"]["kendall"],
+            # flagged on wer_spoke, over the common clip subset — both facts
+            # travel with the number so it cannot be read as D1's 40-clip set
             "dead_zone_jaccard": dz["jaccard"],
+            "dead_zone_jaccard_all_clips_pairing":
+                dz["all_clips_pairing"]["jaccard"],
+            "dead_zone_pairing": dz["pairing"],
+            "dead_zone_clip_scope": dz["clip_scope"]["note"],
+            "n_dead_zones_real": dz["n_real"], "n_dead_zones_sim": dz["n_sim"],
+            "n_mute_real": dz["silence"]["real"]["n_mute"],
+            "n_mute_sim": dz["silence"]["sim"]["n_mute"],
             "verdict": res["headline"]["verdict"],
             # The clip set the numbers above were computed on. Carried into the
             # headline itself so a consumer that reads nothing else still cannot
@@ -742,7 +873,26 @@ def format_sim2real(res: dict) -> str:
          f"-> {od['verdict']}",
          f"  DEAD ZONES : real {dz['n_real']}, sim {dz['n_sim']}, both "
          f"{dz['n_both']} -> Jaccard {dz['jaccard']:.2f}, "
-         f"recall {dz['recall']:.2f}"]
+         f"recall {dz['recall']:.2f}",
+         f"               flagged on wer_spoke (the clips each arm actually "
+         f"spoke on) — the",
+         f"               all-clips pairing would report Jaccard "
+         f"{dz['all_clips_pairing']['jaccard']:.2f} from real "
+         f"{dz['all_clips_pairing']['n_real']} / sim "
+         f"{dz['all_clips_pairing']['n_sim']}",
+         f"               SCOPE: {dz['clip_scope']['note']}",
+         f"               silence: real {dz['silence']['real']['n_mute']} mute / "
+         f"{dz['silence']['real']['n_conditions_with_silence']} conds with a "
+         f"silent clip / {dz['silence']['real']['n_silence_driven']} "
+         f"silence-driven;",
+         f"                        sim  {dz['silence']['sim']['n_mute']} mute / "
+         f"{dz['silence']['sim']['n_conditions_with_silence']} conds with a "
+         f"silent clip / {dz['silence']['sim']['n_silence_driven']} "
+         f"silence-driven",
+         f"               (mute = no words on ANY clip: no confidence exists, so "
+         f"no dead zone can",
+         f"                be flagged there — the worst cells are invisible to a "
+         f"confidence monitor)"]
     if dz["real_only"]:
         L.append(f"               sim MISSES: {', '.join(dz['real_only'][:5])}"
                  + (" ..." if len(dz["real_only"]) > 5 else ""))

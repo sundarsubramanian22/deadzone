@@ -648,6 +648,252 @@ def test_clip_matching_is_an_enforced_invariant():
           f"{cm['n_rows_real_dropped']}/{cm['n_rows_sim_dropped']} rows dropped)")
 
 
+# ---- 10: the dead-zone SET is flagged on the PAIRED WER ---------------------
+#
+# D4's third trap, inherited from D1. A clip whose transcript comes back EMPTY
+# scores WER 1.0 with 100% deletions and carries NO per-word confidence, so it
+# lifts a condition's all-clips WER while contributing nothing to its mean_conf.
+# `dead_zone_flags` was thresholding one against the other, so a cell could be
+# called "confidently wrong" purely because clips vanished. Every test below is
+# paired with a zero-silence negative control.
+
+N_SILENT_PLANT = 4          # of N_CLIPS_WIDE clips, on the real arm only
+N_CLIPS_WIDE = 6
+SILENT_RT60 = max(RT60_MEASURED)        # where the silence is planted
+GENUINE_RT60 = RT60_MEASURED[2]         # a different level: the honest dead zone
+GENUINE_SNR = SNR[0]
+
+
+def _silent(clip_id, name, rt60_req, rt60_meas, snr, model=MODEL):
+    """
+    An empty transcript: WER 1.0, 100% deletions, no hypothesis word, and
+    therefore no confidence. A real MEASUREMENT — `failed` stays False — and
+    exactly the row that makes the two WER estimands diverge.
+    """
+    row = _row(clip_id, name, rt60_req, rt60_meas, snr, 1.0, float("nan"),
+               model=model)
+    row.update({"transcript": "", "n_ref": 6, "n_sub": 0, "n_del": 6,
+                "n_ins": 0, "n_match": 0})
+    return row
+
+
+def build_silence_tables(n_silent_real: int):
+    """
+    Both arms run the same 12 conditions over N_CLIPS_WIDE clips. Two cells are
+    planted, at DIFFERENT reverb levels so neither can mask the other:
+
+      SILENCE-DRIVEN (rt60 = SILENT_RT60, all 3 SNRs). The real arm is CONFIDENT
+        (0.95) and only 20% wrong on the clips it spoke on, but `n_silent_real`
+        of its 6 clips come back EMPTY, which drags the ALL-CLIPS WER to
+        (2*0.20 + 4*1.0)/6 = 0.733 — over the 0.30 threshold — while the
+        spoke-WER stays at 0.20, under it. So with n_silent_real > 0 these are
+        dead zones under the mismatched pairing ONLY.
+      GENUINE (rt60 = GENUINE_RT60, snr = GENUINE_SNR). Zero silent clips,
+        spoke-WER 0.55, the HIGHEST confidence (0.97): a dead zone under BOTH
+        pairings, in every variant of this fixture. Its job is to prove the
+        correction does not simply empty the table — including in the
+        zero-silence control, which would otherwise pass vacuously.
+
+    Everywhere else: low WER, low confidence (0.40), never flagged. `conf_pct_hi`
+    is a within-model PERCENTILE, so the fixture needs that low-confidence bulk
+    for the two planted cells to land in the top band at all.
+
+    The sim arm never goes silent and holds a single flat confidence (0.45), so
+    every sim percentile ties at 0.5 and the sim arm contributes no dead zone
+    under either pairing — which keeps the assertions about the REAL arm clean.
+    """
+    real, sim = [], []
+    for k, rt_m in enumerate(RT60_MEASURED):
+        rt_sim = rt_m + RT60_SIM_DELTA[k]
+        for snr in SNR:
+            silent_cell = rt_m == SILENT_RT60
+            genuine_cell = rt_m == GENUINE_RT60 and snr == GENUINE_SNR
+            wr = 0.55 if genuine_cell else 0.20 if silent_cell else 0.05
+            ws = wr + 0.10
+            cr = 0.97 if genuine_cell else 0.95 if silent_cell else 0.40
+            cs = 0.45                            # sim: never in the top band
+            name_r = f"rt60{RT60_REQUESTED_REAL[k]:g}_snr{snr:g}"
+            name_s = f"rt60{rt_m:g}_snr{snr:g}"
+            for c in range(N_CLIPS_WIDE):
+                cid = f"u{c:02d}"
+                if silent_cell and c < n_silent_real:
+                    real.append(_silent(cid, name_r, RT60_REQUESTED_REAL[k],
+                                        rt_m, snr))
+                else:
+                    real.append(_row(cid, name_r, RT60_REQUESTED_REAL[k], rt_m,
+                                     snr, wr, cr))
+                sim.append(_row(cid, name_s, rt_m, rt_sim, snr, ws, cs))
+    return real, sim
+
+
+def _genuine_name():
+    k = RT60_MEASURED.index(GENUINE_RT60)
+    return f"rt60{RT60_REQUESTED_REAL[k]:g}_snr{GENUINE_SNR:g}"
+
+
+def _silent_names():
+    k = RT60_MEASURED.index(SILENT_RT60)
+    return sorted(f"rt60{RT60_REQUESTED_REAL[k]:g}_snr{s:g}" for s in SNR)
+
+
+def test_dead_zones_are_flagged_on_the_paired_wer():
+    """
+    THE HEADLINE ASSERTION for D4's set. The top-reverb cell's all-clips WER
+    only clears the threshold because 4 of its 6 clips came back EMPTY; on the
+    clips it spoke on it was 80% accurate at 0.95 confidence. Calling that
+    "confidently wrong" is comparing a subset confidence to a whole-corpus
+    accuracy.
+    """
+    real, sim = build_silence_tables(N_SILENT_PLANT)
+    res = sim2real_report(real, sim, model=MODEL, n_boot=300, seed=0)
+    dz = res["dead_zones"]
+    ac = dz["all_clips_pairing"]
+
+    # the aggregation carries both estimands and the silence between them
+    tbl = {c["condition_name"]: c for c in aggregate_conditions(real, model=MODEL)}
+    top = tbl[_silent_names()[0]]
+    assert top["n_silent"] == N_SILENT_PLANT and top["n_spoke"] == 2
+    assert abs(top["wer_spoke"] - 0.20) < 1e-12
+    assert abs(top["wer_all_clips"] - (2 * 0.20 + 4 * 1.0) / 6) < 1e-12
+    assert top["wer_all_clips"] > 0.30 > top["wer_spoke"], top
+
+    # THE FLIP: the mismatched pairing flags all three silence cells, the
+    # corrected one flags none of them
+    assert set(_silent_names()) <= set(ac["real_only"]) | set(ac["sim_only"]) \
+        or set(_silent_names()) <= set(dz["all_clips_pairing"]["real_only"]), ac
+    assert not (set(_silent_names()) & set(dz["real_only"])), dz
+    assert ac["n_real"] == len(SNR) + 1, ac      # 3 silence-driven + 1 genuine
+    assert dz["n_real"] == 1, dz                 # ...only the genuine one left
+    assert dz["real_only"] == [_genuine_name()], dz
+    assert dz["n_real"] < ac["n_real"], (dz, ac)
+    assert dz["pairing"].startswith("same-subset"), dz
+
+    # the scope travels with the sets, so they can never be read as D1's table
+    assert dz["clip_scope"]["n_clips"] == res["clip_match"]["n_common"]
+    assert "D1" in dz["clip_scope"]["note"], dz["clip_scope"]
+
+    # and the silence census is per arm
+    assert dz["silence"]["real"]["n_conditions_with_silence"] == len(SNR), dz
+    assert dz["silence"]["real"]["n_silence_driven"] == len(SNR), dz
+    assert dz["silence"]["sim"]["n_conditions_with_silence"] == 0, dz
+    print(f"ok 10: the {len(SNR)} cells with {N_SILENT_PLANT}/{N_CLIPS_WIDE} "
+          f"silent clips are dead zones under the all-clips pairing "
+          f"({ac['n_real']} real) and not under the corrected one "
+          f"({dz['n_real']}: only the 0-silence 'genuine' cell survives); scope "
+          f"({dz['clip_scope']['n_clips']} clips) travels with the set")
+
+
+def test_zero_silence_makes_both_dead_zone_pairings_bit_identical():
+    """
+    THE NEGATIVE CONTROL. Same conditions, same confidences, same spoke-WERs,
+    but every clip speaks. Both pairings must now agree on EVERY number — which
+    is what pins the guard to the estimand rather than to a threshold or a
+    ranking rule that happened to change at the same time.
+    """
+    real, sim = build_silence_tables(0)
+    res = sim2real_report(real, sim, model=MODEL, n_boot=300, seed=0)
+    dz = res["dead_zones"]
+    ac = dz["all_clips_pairing"]
+
+    for c in aggregate_conditions(real, model=MODEL):
+        assert c["n_silent"] == 0 and c["mute"] is False, c
+        assert c["wer_spoke"] == c["wer_all_clips"] == c["wer"], (
+            "with zero silent clips the paired subset IS the whole clip set, so "
+            "the two WERs must be bit-identical, not merely close")
+    assert dz["n_real"] == ac["n_real"] and dz["n_sim"] == ac["n_sim"], (dz, ac)
+    assert dz["jaccard"] == ac["jaccard"] or (
+        not np.isfinite(dz["jaccard"]) and not np.isfinite(ac["jaccard"])), (dz, ac)
+    assert dz["real_only"] == ac["real_only"], (dz, ac)
+    assert dz["sim_only"] == ac["sim_only"], (dz, ac)
+    assert dz["silence"]["real"]["n_mute"] == 0
+    assert dz["silence"]["real"]["n_silence_driven"] == 0
+    # the control must still FIND a dead zone, or it could not detect a fix that
+    # simply empties the table
+    assert dz["n_real"] == 1 and dz["real_only"] == [_genuine_name()], dz
+    print(f"ok 10b: with zero silent clips both pairings agree exactly "
+          f"(real {dz['n_real']}, sim {dz['n_sim']}, Jaccard {dz['jaccard']:.2f}) "
+          f"and the control still finds a genuine dead zone")
+
+
+def test_level_and_order_do_not_move_when_the_dead_zone_pairing_is_corrected():
+    """
+    The dead-zone correction must NOT leak into the level or order claims. Those
+    compare two arms' CORPUS severity and contain no confidence term at all, so
+    all-clips is the right estimand for them; silently switching them to the
+    spoke subset would discount exactly the clips the reverb destroyed and would
+    shrink the headline gap for a reason no reader could see.
+
+    Asserted against the arithmetic recomputed here from the raw rows, on a
+    fixture that DOES contain silence — so a leak has somewhere to show.
+    """
+    real, sim = build_silence_tables(N_SILENT_PLANT)
+    res = sim2real_report(real, sim, model=MODEL, n_boot=300, seed=0)
+
+    common = sorted({r["clip_id"] for r in real if not r["failed"]}
+                    & {r["clip_id"] for r in sim if not r["failed"]})
+    rw = {c["condition_name"]: c["wer"]
+          for c in aggregate_conditions(real, model=MODEL, clips=common)}
+    sw = {c["condition_name"]: c["wer"]
+          for c in aggregate_conditions(sim, model=MODEL, clips=common)}
+    names = [(p["condition_real"], p["condition_sim"]) for p in res["pairs"]]
+    expect = float(np.mean([sw[s] - rw[r] for r, s in names]))
+
+    assert abs(res["level"]["mean_gap"] - expect) < 1e-12, (
+        res["level"]["mean_gap"], expect)
+    # and NOT the spoke-only arithmetic, which the silent cells make different
+    rs = {c["condition_name"]: c["wer_spoke"]
+          for c in aggregate_conditions(real, model=MODEL, clips=common)}
+    spoke_gap = float(np.mean([sw[s] - rs[r] for r, s in names]))
+    assert abs(spoke_gap - expect) > 0.10, (
+        f"fixture no longer separates the all-clips gap ({expect:+.4f}) from "
+        f"the spoke-only one ({spoke_gap:+.4f}); this test cannot detect a leak")
+    assert abs(res["level"]["mean_gap"] - spoke_gap) > 0.10, (
+        f"LEVEL leaked onto the spoke subset: reported {res['level']['mean_gap']:+.4f}"
+        f" is the spoke arithmetic {spoke_gap:+.4f}, not the corpus one "
+        f"{expect:+.4f}")
+
+    # the pairs carry BOTH, so a reader can see the difference rather than infer it
+    for p in res["pairs"]:
+        assert "wer_spoke_real" in p and "n_silent_real" in p, p
+        assert p["gap"] == p["wer_sim"] - p["wer_real"]
+    print(f"ok 10c: LEVEL stays on corpus WER ({res['level']['mean_gap']:+.4f}, "
+          f"not the spoke-only {spoke_gap:+.4f}); ORDER rho "
+          f"{res['order']['spearman']:.3f} — the dead-zone fix does not leak")
+
+
+def test_a_mute_condition_is_never_a_dead_zone():
+    """
+    A condition that returned NOTHING on every clip has no confidence, so it
+    cannot be *confidently* wrong. It must be counted as its own thing, never
+    read as a quiet 'not a dead zone' — a confidence monitor is blind to exactly
+    these cells, which are the worst in the table.
+    """
+    real, sim = build_silence_tables(N_CLIPS_WIDE)     # silence cells fully mute
+    res = sim2real_report(real, sim, model=MODEL, n_boot=300, seed=0)
+    dz = res["dead_zones"]
+
+    tbl = [c for c in aggregate_conditions(real, model=MODEL) if c["mute"]]
+    assert sorted(c["condition_name"] for c in tbl) == _silent_names(), tbl
+    for c in tbl:
+        assert not np.isfinite(c["mean_conf"]) and not np.isfinite(c["wer_spoke"])
+        assert c["wer_all_clips"] == 1.0
+    assert dz["silence"]["real"]["n_mute"] == len(SNR), dz
+    mute = set(_silent_names())
+    for key in ("agree", "real_only", "sim_only"):
+        assert not (mute & set(dz[key])), (key, dz[key])
+        assert not (mute & set(dz["all_clips_pairing"].get(key, []))), key
+    # a NaN confidence sinks to percentile 0, so a mute cell is not flagged under
+    # EITHER pairing — the point is that it is nonetheless counted, not that it
+    # quietly reads as "fine"
+    assert dz["n_real"] == 1 and dz["real_only"] == [_genuine_name()], dz
+
+    from deadzone.analysis.sim2real import format_sim2real
+    text = format_sim2real(res)
+    assert "mute" in text and "wer_spoke" in text and "SCOPE" in text, text
+    print(f"ok 10d: {dz['silence']['real']['n_mute']} mute condition(s) counted "
+          f"and reported, never flagged as dead zones under either pairing")
+
+
 def test_no_unrestricted_aggregation_path_survives():
     """
     The consumer guard. Every route into a per-condition mean must be restricted.
@@ -709,6 +955,10 @@ if __name__ == "__main__":
     test_too_few_common_clips_raises()
     test_plot_payload()
     test_clip_matching_is_an_enforced_invariant()
+    test_dead_zones_are_flagged_on_the_paired_wer()
+    test_zero_silence_makes_both_dead_zone_pairings_bit_identical()
+    test_level_and_order_do_not_move_when_the_dead_zone_pairing_is_corrected()
+    test_a_mute_condition_is_never_a_dead_zone()
     test_no_unrestricted_aggregation_path_survives()
     print("\nAll sim2real tests passed — D4 pairs on DELIVERED RT60 over the two "
           "arms' COMMON CLIP SET (and says which), recovers a planted level "

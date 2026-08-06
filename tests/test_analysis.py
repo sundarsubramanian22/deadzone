@@ -57,7 +57,8 @@ import numpy as np
 from deadzone import model_compare
 from deadzone.analysis import (
     DuplicateCellError, check_finite, check_unique_cells, failure_summary,
-    load_master_table, parse_edits, split_failures,
+    is_silent_row, load_master_table, n_hyp_words, parse_edits, silence_summary,
+    split_failures,
 )
 from deadzone.analysis import confidence_gap as cg
 from deadzone.analysis import fingerprints as fp
@@ -164,6 +165,102 @@ def build_table_with_failures() -> list[dict]:
     for clip in CLIPS:                                  # a condition with NO data
         rows.append(_failed_row(clip, ALL_FAILED_COND, 1.0, 2.0, "babble"))
     return rows
+
+
+# ===========================================================================
+# The SILENT-CLIP plant (the estimand-mismatch defect)
+# ===========================================================================
+# A clip whose transcript comes back EMPTY scores WER 1.0 with 100% deletions and
+# carries NO per-word confidence, so it is invisible to `mean_conf` while being
+# fully counted in `wer`. Pair the two and the difference is not overconfidence,
+# it is the missing clips.
+#
+# Three conditions, planted so the arithmetic is checkable by hand. All three
+# share the SAME confidence (0.85) and the SAME WER on the clips the model spoke
+# on (0.20 for the first two), so the only thing that varies is silence:
+#
+#   SILENT_PARTIAL   10 clips, 2 silent.  wer_spoke 0.20, wer_all 0.36
+#                    -> gap_spoke +0.05, gap_all_clips +0.21  (inflation +0.16)
+#                    Crosses WER_HI=0.30 ONLY under the mismatched pairing, so it
+#                    is a SILENCE-DRIVEN cell, not a dead zone. This is the exact
+#                    shape of the real #1 published dead zone (+0.025 vs +0.230).
+#   SILENT_CONTROL   10 clips, 0 silent. Identical confidence and identical
+#                    spoke-WER. THE NEGATIVE CONTROL: the two gaps must be equal
+#                    to the bit, inflation exactly 0, and it must be flagged the
+#                    same way by both pairings. If this one moves, the fix is
+#                    reacting to something other than silence.
+#   DEAD_CONTROL     10 clips, 0 silent, wer 0.35 at conf 0.85 -> a REAL dead
+#                    zone under both pairings. Proves the corrected criterion
+#                    still finds confidently-wrong cells rather than emptying the
+#                    table.
+#   MUTE_COND        10 clips, ALL silent. No confidence exists, so no gap exists.
+#                    Must surface as its own category, never be dropped, and never
+#                    be called a dead zone.
+
+SILENT_CLIPS = tuple(f"s{i:02d}" for i in range(10))
+SILENT_PARTIAL = "silent_partial"
+SILENT_CONTROL = "silent_control"
+DEAD_CONTROL = "dead_control"
+MUTE_COND = "mute_everywhere"
+
+PLANTED_CONF = 0.85
+N_SUB_LOW = 8                    # 8/40 = wer 0.20 -> below WER_HI
+N_SUB_DEAD = 14                  # 14/40 = wer 0.35 -> above WER_HI
+N_SILENT_IN_PARTIAL = 2
+
+
+def _spoke_row(clip_id, condition_name, n_sub, conf=PLANTED_CONF):
+    """A clip the model DID transcribe: n_sub substitutions, no deletions."""
+    return {
+        "clip_id": clip_id, "condition_name": condition_name,
+        "rt60": 0.6, "snr_db": 20.0, "noise_type": "babble", "codec": "none",
+        "mic_rolloff": 0.0, "model": MODEL,
+        "transcript": f"transcript for {clip_id}",
+        "wer": n_sub / N_REF,
+        "n_ref": N_REF, "n_sub": n_sub, "n_del": 0, "n_ins": 0,
+        "n_match": N_REF - n_sub,
+        "mean_conf": conf, "utterance_conf": conf,
+        "word_confidences": json.dumps([conf] * (N_REF)),
+        "edits": json.dumps(_edits(n_sub, 0, 0)),
+        "rir_key": "rir_a", "rir_rt60_measured": 0.6, "noise_key": "babble",
+        "failed": False, "error": None, "run_id": "test", "ts": "2026-01-01T00:00:00Z",
+    }
+
+
+def _silent_row(clip_id, condition_name):
+    """
+    A clip the model returned NOTHING for. Note what this row is NOT: it is not a
+    `failed` row. The API answered, the pipeline scored it, the measurement is
+    real — the model simply emitted no words. `transcript` is the empty string,
+    never None, or `is_failed_row` would (correctly) route it to the failure path
+    and this whole defect class would be invisible to the test.
+    """
+    r = _spoke_row(clip_id, condition_name, 0)
+    r.update({"transcript": "", "wer": 1.0,
+              "n_sub": 0, "n_del": N_REF, "n_ins": 0, "n_match": 0,
+              "mean_conf": None, "utterance_conf": None,
+              "word_confidences": "[]",
+              "edits": json.dumps(_edits(0, N_REF, 0))})
+    return r
+
+
+def build_table_with_silence() -> list[dict]:
+    """The base planted grid plus the four silence conditions above."""
+    rows = build_table()
+    for i, clip in enumerate(SILENT_CLIPS):
+        rows.append(_silent_row(clip, SILENT_PARTIAL) if i < N_SILENT_IN_PARTIAL
+                    else _spoke_row(clip, SILENT_PARTIAL, N_SUB_LOW))
+        rows.append(_spoke_row(clip, SILENT_CONTROL, N_SUB_LOW))
+        rows.append(_spoke_row(clip, DEAD_CONTROL, N_SUB_DEAD))
+        rows.append(_silent_row(clip, MUTE_COND))
+    return rows
+
+
+def _cond(rep_or_rows, name):
+    rows = rep_or_rows["per_condition"] if isinstance(rep_or_rows, dict) else rep_or_rows
+    hit = [c for c in rows if c["condition_name"] == name]
+    assert hit, f"condition {name!r} vanished from the table entirely"
+    return hit[0]
 
 
 def planted_dead_zones() -> set[str]:
@@ -765,6 +862,261 @@ def test_check_finite_refuses_a_nan_that_would_reach_a_mean():
           "input passes through")
 
 
+# ===========================================================================
+# 17. THE SILENT-CLIP ESTIMAND MISMATCH — the D1 headline defect
+# ===========================================================================
+# The defect family this guards: `mean_conf` is averaged over the clips that
+# produced words, `wer` over ALL of them. Subtracting one from the other compares
+# two different populations, the arithmetic is clean, the row count is right, and
+# the inflated gap REORDERS the published dead-zone table. No shape change, no
+# NaN, no error — only an assertion on the estimands can catch it.
+
+def test_silent_clips_are_counted_not_absorbed():
+    """n_silent / silent_frac / n_spoke are first-class, and mean_conf's
+    denominator is n_spoke — not n_clips."""
+    rows = build_table_with_silence()
+    ok, bad = split_failures(rows)
+    assert not bad, "a silent clip is a MEASUREMENT, never a failure sentinel"
+
+    sil = silence_summary(ok)
+    assert sil["n_silent"] == N_SILENT_IN_PARTIAL + len(SILENT_CLIPS)   # partial + mute
+    assert sil["fully_silent_conditions"] == [MUTE_COND]
+    assert set(sil["silent_by_condition"]) == {SILENT_PARTIAL, MUTE_COND}
+
+    cond = cg.per_condition_table(ok, model=MODEL)
+    p, c, m = _cond(cond, SILENT_PARTIAL), _cond(cond, SILENT_CONTROL), _cond(cond, MUTE_COND)
+
+    assert p["n_clips"] == 10 and p["n_silent"] == 2 and p["n_spoke"] == 8
+    assert abs(p["silent_frac"] - 0.2) < 1e-12
+    assert c["n_silent"] == 0 and c["n_spoke"] == 10 and c["silent_frac"] == 0.0
+    assert m["n_silent"] == 10 and m["n_spoke"] == 0 and m["silent_frac"] == 1.0
+
+    # the confidence average must be UNCHANGED by the silent clips: they never
+    # entered it. If a silent clip were imputed (to 0, to 0.5, to anything) this
+    # is where it would show.
+    assert abs(p["mean_conf"] - PLANTED_CONF) < 1e-12
+    assert abs(c["mean_conf"] - PLANTED_CONF) < 1e-12
+    assert not np.isfinite(m["mean_conf"]), "a mute cell has no confidence to report"
+
+    # the two accuracies, hand-computed
+    assert abs(p["wer_spoke"] - 0.20) < 1e-12                       # 8/40
+    assert abs(p["wer"] - 0.36) < 1e-12                             # (8*.2 + 2*1)/10
+    assert p["wer_all_clips"] == p["wer"]
+    assert abs(c["wer_spoke"] - c["wer"]) < 1e-12                   # no silence, no split
+    assert not np.isfinite(m["wer_spoke"]) and m["wer"] == 1.0
+
+    # `n_hyp_words` is the shared definition, and it is derived from the same
+    # alignment the WER came from
+    assert n_hyp_words({"n_ref": 40, "n_del": 40, "n_ins": 0}) == 0
+    assert n_hyp_words({"n_ref": 40, "n_del": 40, "n_ins": 3}) == 3   # insertions count
+    assert is_silent_row({"n_ref": 8, "n_del": 8, "n_ins": 0})
+    assert not is_silent_row({"n_ref": 8, "n_del": 8, "n_ins": 1})
+    print(f"OK 17: silent clips counted ({p['n_silent']}/{p['n_clips']} in "
+          f"{SILENT_PARTIAL}, {m['n_silent']}/{m['n_clips']} in {MUTE_COND}); "
+          f"mean_conf denominator is n_spoke={p['n_spoke']}, not n_clips")
+
+
+def test_both_gaps_are_reported_and_differ_by_exactly_the_silence():
+    """THE HEADLINE ASSERTION, with the negative control beside it."""
+    rows = build_table_with_silence()
+    rep = cg.confidence_gap_report(rows, model=MODEL)
+    p, c = _cond(rep, SILENT_PARTIAL), _cond(rep, SILENT_CONTROL)
+
+    # hand arithmetic: conf 0.85 against 1-0.20 and against 1-0.36
+    assert abs(p["gap_spoke"] - 0.05) < 1e-12, p["gap_spoke"]
+    assert abs(p["gap_all_clips"] - 0.21) < 1e-12, p["gap_all_clips"]
+    assert abs(p["gap_inflation"] - 0.16) < 1e-12, p["gap_inflation"]
+    # the mismatched pairing is 4.2x the defensible one on this cell
+    assert p["gap_all_clips"] > 4 * p["gap_spoke"]
+    # and the CANONICAL name points at the defensible quantity
+    assert p["gap"] == p["gap_spoke"] != p["gap_all_clips"]
+
+    # NEGATIVE CONTROL: same confidence, same spoke-WER, no silent clips.
+    # Both pairings must agree exactly — the correction touches nothing else.
+    assert c["gap_spoke"] == c["gap_all_clips"], (c["gap_spoke"], c["gap_all_clips"])
+    assert c["gap_inflation"] == 0.0
+    assert abs(c["gap_spoke"] - p["gap_spoke"]) < 1e-12, (
+        "the two cells were planted with identical confidence and identical "
+        "spoke-WER, so their same-subset gaps must be identical; only the "
+        "all-clips gap may differ")
+    # ...and every zero-silence condition in the base grid is likewise untouched
+    untouched = [d for d in rep["per_condition"]
+                 if d["n_silent"] == 0 and np.isfinite(d["gap_spoke"])]
+    assert len(untouched) > 50
+    assert all(d["gap_spoke"] == d["gap_all_clips"] for d in untouched)
+
+    # the summary carries both distributions, never one alone
+    gs = rep["gap_summary"]
+    assert gs["all_clips_pairing"]["mean"] > gs["mean"], gs
+    assert gs["inflation"]["max"] >= 0.16 - 1e-12
+    assert gs["silence"]["n_conditions_with_silence"] == 2   # partial + mute
+    print(f"OK 18: gap_spoke {p['gap_spoke']:+.3f} vs gap_all_clips "
+          f"{p['gap_all_clips']:+.3f} (inflation {p['gap_inflation']:+.3f}) on a cell "
+          f"with 2/10 silent clips; the 0-silence control moves by exactly "
+          f"{c['gap_inflation']:.1f}")
+
+
+def test_the_mismatched_pairing_reorders_the_table():
+    """The cell the old pairing ranked as a dead zone is reclassified, and a cell
+    with NO silent clips takes the top spot — the real grid's exact outcome."""
+    rows = build_table_with_silence()
+    rep = cg.confidence_gap_report(rows, model=MODEL)
+    dz_names = {d["condition_name"] for d in rep["dead_zones"]}
+    sd_names = {d["condition_name"] for d in rep["silence_driven"]}
+
+    # flagged by the OLD all-clips pairing, NOT by the corrected one
+    p = _cond(rep, SILENT_PARTIAL)
+    assert p["dead_zone_all_clips_pairing"] is True
+    assert p["dead_zone"] is False
+    assert p["category"] == cg.CATEGORY_SILENCE_DRIVEN
+    assert SILENT_PARTIAL in sd_names and SILENT_PARTIAL not in dz_names
+
+    # the genuine dead zone (no silent clips) is still found — the correction
+    # does not simply empty the table
+    d = _cond(rep, DEAD_CONTROL)
+    assert d["category"] == cg.CATEGORY_DEAD_ZONE and DEAD_CONTROL in dz_names
+    assert d["gap_spoke"] == d["gap_all_clips"]
+    assert d["dead_zone"] and d["dead_zone_all_clips_pairing"]
+
+    # ranked by the DEFENSIBLE gap
+    gaps = [as_f(x.get("gap_spoke")) for x in rep["dead_zones"]]
+    assert gaps == sorted(gaps, reverse=True), gaps
+
+    # and the counts say, out loud, how many the old pairing would have claimed
+    cats = rep["categories"]
+    assert cats["n_dead_zones_all_clips_pairing"] > cats["n_dead_zones"]
+    assert (cats["n_dead_zones"] + cats["n_silence_driven"]
+            + cats["n_mute_zones"]) <= cats["n_conditions"]
+    print(f"OK 19: {SILENT_PARTIAL} demoted dead_zone -> silence_driven; "
+          f"{DEAD_CONTROL} (0 silent) stays a dead zone; "
+          f"{cats['n_dead_zones_all_clips_pairing']} conditions under the old "
+          f"pairing vs {cats['n_dead_zones']} under the corrected one")
+
+
+def test_a_fully_silent_condition_is_surfaced_not_dropped():
+    """A condition with no confidence anywhere cannot have a gap. It must still
+    be named — these are the worst conditions measured."""
+    rows = build_table_with_silence()
+    rep = cg.confidence_gap_report(rows, model=MODEL)
+
+    m = _cond(rep, MUTE_COND)
+    assert m["category"] == cg.CATEGORY_MUTE and m["mute"] is True
+    assert not np.isfinite(m["gap_spoke"]) and not np.isfinite(m["gap_all_clips"])
+    assert m["dead_zone"] is False and m["dead_zone_all_clips_pairing"] is False
+    assert MUTE_COND in {z["condition_name"] for z in rep["mute_zones"]}
+    assert MUTE_COND not in {z["condition_name"] for z in rep["dead_zones"]}
+    # NOT a failure: the measurement happened, the model just said nothing
+    assert MUTE_COND not in rep["failures"]["all_failed_conditions"]
+    assert MUTE_COND in rep["silence"]["fully_silent_conditions"]
+    assert rep["categories"]["n_mute_zones"] == 1
+
+    # the DoD sentence must be a sentence, not "confidence nan"
+    s = cg.format_dead_zone_sentence(m, MODEL)
+    assert "nan" not in s.lower(), s
+    assert "MUTE" in s and "EMPTY" in s, s
+
+    # and it must reach the terminal report and the CSV
+    text = cg.format_report(rep)
+    assert "MUTE ZONES" in text and MUTE_COND in text, text
+    assert "SILENCE-DRIVEN" in text and SILENT_PARTIAL in text
+    with tempfile.TemporaryDirectory() as td:
+        path = cg.write_dead_zones_csv(cg.flagged_conditions(rep),
+                                       os.path.join(td, "dz.csv"))
+        got = list(csv.DictReader(open(path, newline="", encoding="utf-8")))
+    by = {r["condition_name"]: r for r in got}
+    assert MUTE_COND in by and by[MUTE_COND]["category"] == cg.CATEGORY_MUTE
+    assert by[SILENT_PARTIAL]["category"] == cg.CATEGORY_SILENCE_DRIVEN
+    assert by[DEAD_CONTROL]["category"] == cg.CATEGORY_DEAD_ZONE
+    # the silent fraction is a first-class COLUMN, per the deliverable
+    assert "silent_frac" in got[0] and "n_silent" in got[0]
+    assert abs(float(by[SILENT_PARTIAL]["silent_frac"]) - 0.2) < 1e-12
+    # both gaps travel; neither can be read without the other
+    assert abs(float(by[SILENT_PARTIAL]["gap_spoke"]) - 0.05) < 1e-12
+    assert abs(float(by[SILENT_PARTIAL]["gap_all_clips"]) - 0.21) < 1e-12
+    print(f"OK 20: {MUTE_COND} surfaced as its own category (10/10 silent, no gap "
+          f"definable), present in the report AND the csv, and never counted as a "
+          f"dead zone or a failure")
+
+
+def test_dropping_mute_rows_does_not_move_anyone_elses_percentile():
+    """`condition_flags` holds mute rows out before calling dead_zone_flags. That
+    is only sound if removing a NaN-confidence row leaves every surviving row's
+    within-model percentile untouched — assert it rather than assume it."""
+    rows = build_table_with_silence()
+    cond = cg.add_gap_metrics(cg.per_condition_table(rows, model=MODEL))
+    full = model_compare.within_model_conf_percentile(cond)
+    keep = [i for i, r in enumerate(cond) if np.isfinite(r["mean_conf"])]
+    assert len(keep) < len(cond), "the fixture must contain a mute condition"
+    sub = model_compare.within_model_conf_percentile([cond[i] for i in keep])
+    assert np.allclose(full[keep], sub, atol=0, rtol=0), "percentiles moved"
+
+    # and the flags are therefore identical to the (impossible) full-table call
+    flags = cg.condition_flags(cond, wer_key="wer_spoke")
+    muted = [i for i in range(len(cond)) if i not in keep]
+    assert flags[muted].sum() == 0, "a mute row must never come back flagged"
+    print(f"OK 21: removing {len(cond) - len(keep)} mute condition(s) leaves all "
+          f"{len(keep)} surviving percentiles bit-identical")
+
+
+def test_plot_payload_plots_the_paired_wer():
+    """The scatter's y-axis is one half of the subtraction whose other half is the
+    x-axis. If they are different estimands the shaded quadrant is a lie."""
+    rows = build_table_with_silence()
+    rep = cg.confidence_gap_report(rows, model=MODEL)
+    pay = cg.plot_payload(rep)
+    pts = {p["condition_name"]: p for p in pay["points"]}
+
+    p = pts[SILENT_PARTIAL]
+    assert p["y_wer"] == p["y_wer_spoke"] == _cond(rep, SILENT_PARTIAL)["wer_spoke"]
+    assert p["y_wer_all_clips"] == _cond(rep, SILENT_PARTIAL)["wer"]
+    assert p["y_wer"] != p["y_wer_all_clips"]
+    assert p["n_silent"] == 2 and abs(p["silent_frac"] - 0.2) < 1e-12
+    assert p["category"] == cg.CATEGORY_SILENCE_DRIVEN and p["silence_driven"] is True
+    assert abs(p["gap_all_clips"] - 0.21) < 1e-12
+
+    # the mute cell is on the grid (with a corpus WER) but has no confidence, so
+    # it is unplaceable in the quadrant rather than silently missing
+    m = pts[MUTE_COND]
+    assert m["mute"] is True and m["y_wer_all_clips"] == 1.0
+    assert not np.isfinite(as_f(m["x_mean_conf"]))
+    qc = pay["quadrant_counts"]
+    assert sum(qc.values()) == len(pay["points"])
+    assert qc["unplaceable_no_confidence"] >= 1
+    assert qc["dead_zone_confident_and_wrong"] == len(rep["dead_zones"]), (
+        "the shaded box and the dead-zone list must contain the same cells")
+    sc = pay["silence_counts"]
+    assert sc["mute_no_words_on_any_clip"] == 1 and sc["silence_driven"] >= 1
+    assert sc["conditions_with_any_silent_clip"] == 2
+    assert MUTE_COND in pay["mute_conditions"]
+    assert "spoke" in pay["axes"]["y"], pay["axes"]
+    json.dumps(pay)
+    print(f"OK 22: the hero scatter plots the PAIRED WER (y {p['y_wer']:.2f} vs "
+          f"corpus {p['y_wer_all_clips']:.2f}); quadrants sum to "
+          f"{len(pay['points'])} points and the box == the dead-zone list")
+
+
+def test_sentence_names_its_own_denominator():
+    """The DoD sentence must never put a subset confidence beside a whole-corpus
+    WER without saying so — that phrasing is what made the defect quotable."""
+    rows = build_table_with_silence()
+    rep = cg.confidence_gap_report(rows, model=MODEL)
+    s = cg.format_dead_zone_sentence(_cond(rep, SILENT_PARTIAL), MODEL)
+    for token in ("rt60 =", "SNR =", "confidence", "WER", "clips", "ref words"):
+        assert token in s, s
+    assert "nan" not in s.lower(), s
+    assert "8 of 10 clips where it emitted words" in s, s
+    assert "0.200" in s and "0.360" in s, s          # both accuracies, both quoted
+    assert "+0.210" in s and "+0.050" in s, s        # both gaps, mismatch rejected
+
+    clean = cg.format_dead_zone_sentence(_cond(rep, DEAD_CONTROL), MODEL)
+    assert "0 clips came back" in clean and "same clips" in clean, clean
+    print(f"OK 23: the DoD sentence states its denominator ->\n      {s}")
+
+
+def as_f(v):
+    return float(v) if v is not None else float("nan")
+
+
 if __name__ == "__main__":
     test_loader_and_schema()
     test_failed_rows_never_averaged()
@@ -782,7 +1134,16 @@ if __name__ == "__main__":
     test_fingerprint_plot_payload()
     test_duplicate_cell_is_refused_by_both_aggregators()
     test_check_finite_refuses_a_nan_that_would_reach_a_mean()
+    test_silent_clips_are_counted_not_absorbed()
+    test_both_gaps_are_reported_and_differ_by_exactly_the_silence()
+    test_the_mismatched_pairing_reorders_the_table()
+    test_a_fully_silent_condition_is_surfaced_not_dropped()
+    test_dropping_mute_rows_does_not_move_anyone_elses_percentile()
+    test_plot_payload_plots_the_paired_wer()
+    test_sentence_names_its_own_denominator()
     print("\nAll analysis tests passed — D1 recovers the planted dead zone (and "
           "only it), D2 recovers the planted reverb/babble fingerprints, a level "
-          "that is merely cleaner than its siblings is never prescribed a fix, and "
-          "failed rows never enter a single average.")
+          "that is merely cleaner than its siblings is never prescribed a fix, "
+          "failed rows never enter a single average, and a confidence is never "
+          "subtracted from an accuracy measured on a different set of clips "
+          "(silent clips counted, both pairings reported, mute conditions named).")
