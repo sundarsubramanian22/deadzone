@@ -1,9 +1,10 @@
 """
 make_demo_audio.py — build the LISTENING + DEMO set.
 
-    ./.venv/bin/python scripts/make_demo_audio.py            # everything
-    ./.venv/bin/python scripts/make_demo_audio.py --force    # rewrite even if present
-    ./.venv/bin/python scripts/make_demo_audio.py --check    # verify, generate nothing
+    ./.venv/bin/python scripts/make_demo_audio.py              # everything
+    ./.venv/bin/python scripts/make_demo_audio.py --force      # rebuild the wavs too
+    ./.venv/bin/python scripts/make_demo_audio.py --force-docs # AND clobber edited docs
+    ./.venv/bin/python scripts/make_demo_audio.py --check      # verify, generate nothing
 
 Offline. No API calls, no key, no network. Pure DSP plus a read of
 `results/master.csv`. A few seconds.
@@ -80,6 +81,18 @@ THREE CONSTRUCTION RULES, EACH LOAD-BEARING
    copies plus the only interviewee-facing sheet; `KEY.md` and the prediction
    stay in the parent directory. The blind order is a FROZEN constant, not a
    shuffle, so it is reviewable and cannot drift between runs.
+
+4. REGENERABLE AUDIO AND UNRECOVERABLE RECORD ARE NOT THE SAME ARTIFACT, and
+   this script used to treat them as if they were. The wavs rebuild from
+   `master.csv` and the asset library in seconds. The markdown does not: two of
+   these documents now carry a pre-registered prediction, its verbatim listener
+   response, the scoring, the verdict (it FAILED) and an analysis of a flaw in
+   the pre-registration's own rubric — none of it derivable from any artifact in
+   the repo. Rewriting all five unconditionally already destroyed one such edit,
+   silently, because a freshly generated file looks exactly as correct as the
+   one it replaced. Every document now goes through `write_doc`, which REFUSES
+   to overwrite a file a human has touched. See THE AUTHORED-DOCUMENT GUARD
+   below.
 """
 from __future__ import annotations
 
@@ -96,10 +109,12 @@ if _REPO_ROOT not in _sys.path:
 
 import argparse
 import csv
+import hashlib
 import json
 import re
 import shutil
 import textwrap
+from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
@@ -388,6 +403,166 @@ def build_manifest(made: dict, rows: dict, stats: dict, assets) -> dict:
 
 
 # --------------------------------------------------------------------------
+# THE AUTHORED-DOCUMENT GUARD
+#
+# Every document below used to be written unconditionally on any build — no
+# skip-if-modified, no warning, no backup. That is fine for the wavs, which are
+# a pure function of `master.csv` and the asset library, and it is catastrophic
+# for the prose, which is where a human writes down the one thing the pipeline
+# cannot produce: what a listener said. It has already cost one such edit.
+#
+# The defect is NOT the overwrite. It is that regenerable output and
+# unrecoverable record were handed to the same writer.
+#
+# The rule follows `write_master()` in scripts/run_experiment.py — refuse to
+# produce the misleading artifact rather than warn about it afterwards:
+#
+#   file absent          -> write.
+#   hash matches record  -> this generator wrote it and nobody has touched it
+#                           since; write.
+#   hash differs         -> a human edited it; REFUSE, and name the flag.
+#   NO recorded hash     -> provenance unknown; REFUSE.
+#
+# That last line is the load-bearing one, and it is deliberately the paranoid
+# reading. A missing baseline is the degenerate input, and SPEC Appendix E.5's
+# rule is to ask what a guard returns for the degenerate input rather than for
+# the good one. If "no record" meant "safe to overwrite", this guard would be
+# wide open on precisely the state the repo is in the first time it runs —
+# every document in the kit already written, and no sidecar yet.
+#
+# `authored` therefore means "not provably this generator's own output", which
+# is a wider set than "a human typed in it". That imprecision is the correct
+# direction to be imprecise in, and the census says so rather than asserting a
+# human edit it cannot actually observe.
+#
+# It also settles how the sidecar is seeded: it ISN'T. Recording today's
+# hand-edited text as "what the generator last wrote" would certify it as
+# generator-owned and the very next default run would erase it — the guard
+# would have been the delivery mechanism for the bug it exists to stop. Not
+# seeding is what protects it, and it protects any other file that predates the
+# guard, or is restored from a backup, for the same reason.
+#
+# Detection is by CONTENT HASH, never mtime. mtime does not survive a checkout,
+# a copy, a `cp` without `-p`, or a restore — all four of which are things that
+# happen to a demo kit that gets handed around.
+# --------------------------------------------------------------------------
+
+# What the generator last wrote, keyed by repo-relative path (every path in this
+# project resolves against the repo root as CWD, SPEC §13). Lives beside the
+# documents it guards so it shares their lifecycle: delete `results/audio/demo/`
+# and the whole set rebuilds from scratch, guard included.
+DOC_HASHES = DEMO_DIR / "generated_docs.json"
+
+ABSENT, GENERATED, AUTHORED = "absent", "generated", "authored"
+
+
+def _sha256(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _doc_key(path: Path) -> str:
+    return Path(path).as_posix()
+
+
+def load_doc_hashes() -> dict[str, str]:
+    """Path -> sha256 of the text this generator last wrote there.
+
+    An unreadable sidecar returns `{}`, which is the same as an absent one, and
+    both then read as unknown provenance — i.e. the failure mode of this
+    function is to protect MORE, never less.
+    """
+    if not DOC_HASHES.is_file():
+        return {}
+    try:
+        rec = json.loads(DOC_HASHES.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    got = rec.get("sha256")
+    return dict(got) if isinstance(got, dict) else {}
+
+
+def _save_doc_hash(key: str, digest: str) -> None:
+    """Record one document, immediately after it is written.
+
+    Per-document rather than once at the end: a build that dies halfway must
+    leave a record that matches what is actually on disk, or the survivors come
+    back as `authored` on the next run and the guard cries wolf.
+    """
+    sha = load_doc_hashes()
+    sha[key] = digest
+    DOC_HASHES.parent.mkdir(parents=True, exist_ok=True)
+    DOC_HASHES.write_text(json.dumps({
+        "written_by": "scripts/make_demo_audio.py",
+        "what_this_is":
+            "SHA-256 of each document AS THIS GENERATOR LAST WROTE IT. Baseline "
+            "for the authored-document guard: a file whose hash no longer "
+            "matches has been edited by a human and will not be overwritten "
+            "without --force-docs. Deleting this file unlocks nothing — an "
+            "absent record reads as unknown provenance, which also refuses.",
+        "sha256": dict(sorted(sha.items())),
+    }, indent=2) + "\n", encoding="utf-8")
+
+
+def doc_status(path: Path, hashes: dict[str, str] | None = None) -> str:
+    """`absent` | `generated` (safe to rewrite) | `authored` (hands off)."""
+    p = Path(path)
+    if not p.is_file():
+        return ABSENT
+    h = load_doc_hashes() if hashes is None else hashes
+    recorded = h.get(_doc_key(p))
+    if recorded is None:
+        return AUTHORED
+    try:
+        current = p.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return AUTHORED
+    return GENERATED if recorded == _sha256(current) else AUTHORED
+
+
+def _refusal(p: Path) -> str:
+    return "\n".join([
+        f"[demo docs] REFUSING to overwrite {p}",
+        "    why   : its contents do not match what this generator last wrote, so it",
+        "            holds edits made by a human. Rewriting it would replace them with",
+        "            template output and say nothing — a regenerated file looks exactly",
+        "            as correct as the one it replaced, which is how this was lost once",
+        "            already (see results/audio/demo/REGENERATION_HAZARD.md).",
+        "    state : the file on disk is UNCHANGED and the rest of the build continued.",
+        "    cost  : it therefore does NOT carry this build's numbers. manifest.json and",
+        "            KEY.md are the generated source of truth for those.",
+        "    fix   : port the hand-written block into this script's template, so a",
+        "            rebuild reproduces it — or, to overwrite it anyway:",
+        "                ./.venv/bin/python scripts/make_demo_audio.py --force-docs",
+        "            which first copies the current file to <name>.superseded-<UTC>.md.",
+    ])
+
+
+def write_doc(path: Path, text: str, *, force_docs: bool = False) -> str:
+    """Write a generator-owned document. Returns `written` or `skipped`.
+
+    `force_docs` defaults to False so that any future caller which forgets the
+    keyword gets the protective behaviour, not the destructive one.
+    """
+    p = Path(path)
+    status = doc_status(p)
+    if status == AUTHORED and not force_docs:
+        print(_refusal(p))
+        return "skipped"
+    if status == AUTHORED:
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        backup = p.with_name(f"{p.stem}.superseded-{stamp}{p.suffix}")
+        shutil.copyfile(p, backup)
+        print(f"[demo docs] --force-docs: OVERWRITING hand-edited {p}\n"
+              f"            previous contents preserved at {backup}\n"
+              f"            NOTHING ELSE IN THIS REPO HOLDS THEM — read that file "
+              f"before deleting it.")
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(text, encoding="utf-8")
+    _save_doc_hash(_doc_key(p), _sha256(text))
+    return "written"
+
+
+# --------------------------------------------------------------------------
 # documents (every number interpolated, none typed)
 # --------------------------------------------------------------------------
 
@@ -429,7 +604,7 @@ def quote(text: str, width: int = 76) -> str:
     return "\n".join(out)
 
 
-def write_prediction(m: dict) -> str:
+def write_prediction(m: dict, *, force_docs: bool = False) -> str:
     s = m["paired_result"]
     p1, p2 = m["pairs"][0], m["pairs"][1]
     txt = f"""# Pre-registered prediction — SEALED
@@ -465,11 +640,11 @@ Written before any listener heard anything. The blind names are frozen in
 The prediction is about a human. The confidence interval is about the model.
 Only one of those two things is a measurement.
 """
-    (DEMO_DIR / "PREREGISTERED_PREDICTION.md").write_text(txt, encoding="utf-8")
+    write_doc(DEMO_DIR / "PREREGISTERED_PREDICTION.md", txt, force_docs=force_docs)
     return txt
 
 
-def write_key(m: dict) -> str:
+def write_key(m: dict, *, force_docs: bool = False) -> str:
     s, A, B = m["paired_result"], m["conditions"]["A"], m["conditions"]["B"]
     lines = [
         "# KEY — presenter only. Do not put this in `blind/`.",
@@ -560,7 +735,7 @@ def write_key(m: dict) -> str:
         "",
     ]
     txt = "\n".join(lines) + "\n"
-    (DEMO_DIR / "KEY.md").write_text(txt, encoding="utf-8")
+    write_doc(DEMO_DIR / "KEY.md", txt, force_docs=force_docs)
     return txt
 
 
@@ -578,7 +753,7 @@ def pair_listing(p: dict) -> list[str]:
     return sorted([p["A"]["blind"], p["B"]["blind"]])
 
 
-def write_blind_sheet(m: dict) -> str:
+def write_blind_sheet(m: dict, *, force_docs: bool = False) -> str:
     pay = m["payoff"]
     rows = "\n".join(
         f"| {p['pair']} | `{a}` and `{b}` |"
@@ -607,11 +782,11 @@ Then, separately: `{first}` and `{second}`. Same question, plus one more —
 
 Write your ranking down before we discuss any of it.
 """
-    (BLIND_DIR / "BLIND_SHEET.md").write_text(txt, encoding="utf-8")
+    write_doc(BLIND_DIR / "BLIND_SHEET.md", txt, force_docs=force_docs)
     return txt
 
 
-def write_demo_script(m: dict) -> str:
+def write_demo_script(m: dict, *, force_docs: bool = False) -> str:
     s = m["paired_result"]
     A, B = m["conditions"]["A"], m["conditions"]["B"]
     p1, p2, p3 = m["pairs"]
@@ -820,12 +995,17 @@ the condition name and the writer is the grid's own `write_degraded_wav`.
 Regenerate with:
 
     ./.venv/bin/python scripts/make_demo_audio.py --force
+
+**If you hand-edit this file, that edit is safe.** The generator hashes what it
+writes and refuses to overwrite anything that no longer matches — it will print
+a refusal naming this path and carry on. Only `--force-docs` overrides that, and
+it copies the current file to `<name>.superseded-<UTC>.md` before it does.
 """
-    (DEMO_DIR / "DEMO_SCRIPT.md").write_text(txt, encoding="utf-8")
+    write_doc(DEMO_DIR / "DEMO_SCRIPT.md", txt, force_docs=force_docs)
     return txt
 
 
-def write_what_to_listen_for(m: dict) -> str:
+def write_what_to_listen_for(m: dict, *, force_docs: bool = False) -> str:
     A, B = m["conditions"]["A"], m["conditions"]["B"]
     pay = m["payoff"]
     txt = f"""# What to listen for
@@ -896,14 +1076,15 @@ clip `{LISTEN_CLIP}`, which nova-3 transcribes at WER 0.000 in four of those six
 conditions — so they demonstrated nothing. The ladder in that directory is fine
 and is regenerated here as `isolation/`.
 """
-    (DEMO_DIR / "WHAT_TO_LISTEN_FOR.md").write_text(txt, encoding="utf-8")
+    write_doc(DEMO_DIR / "WHAT_TO_LISTEN_FOR.md", txt, force_docs=force_docs)
     return txt
 
 
-def mark_old_set_superseded(m: dict) -> None:
+def mark_old_set_superseded(m: dict, *, force_docs: bool = False) -> None:
     if not OLD_LISTEN_DIR.is_dir():
         return
-    (OLD_LISTEN_DIR / "SUPERSEDED.md").write_text(
+    write_doc(
+        OLD_LISTEN_DIR / "SUPERSEDED.md",
         f"# SUPERSEDED by `{DEMO_DIR}/`\n\n"
         f"The `DEADZONE_*.wav` files here are all clip `{LISTEN_CLIP}`, and nova-3 "
         f"transcribes `{LISTEN_CLIP}` at WER 0.000 in four of those six conditions — "
@@ -913,7 +1094,7 @@ def mark_old_set_superseded(m: dict) -> None:
         f"set, built on conditions where the model measurably fails, is in "
         f"`{DEMO_DIR}/` — see its `WHAT_TO_LISTEN_FOR.md` and `DEMO_SCRIPT.md`.\n\n"
         f"    ./.venv/bin/python scripts/make_demo_audio.py\n",
-        encoding="utf-8")
+        force_docs=force_docs)
 
 
 # --------------------------------------------------------------------------
@@ -921,6 +1102,22 @@ def mark_old_set_superseded(m: dict) -> None:
 # --------------------------------------------------------------------------
 
 MANIFEST = DEMO_DIR / "manifest.json"
+
+# Every document this script owns, in the order main() writes them. One list,
+# so `check()` reports on exactly the set the build touches and a document added
+# later cannot be reported on but not guarded, or the reverse.
+DOCS = (DEMO_DIR / "DEMO_SCRIPT.md",
+        DEMO_DIR / "KEY.md",
+        BLIND_DIR / "BLIND_SHEET.md",
+        DEMO_DIR / "PREREGISTERED_PREDICTION.md",
+        DEMO_DIR / "WHAT_TO_LISTEN_FOR.md",
+        OLD_LISTEN_DIR / "SUPERSEDED.md")
+
+
+def doc_report() -> dict[str, str]:
+    """path -> status, over every document the build would write."""
+    h = load_doc_hashes()
+    return {str(p): doc_status(p, h) for p in DOCS}
 
 
 def check() -> int:
@@ -948,20 +1145,39 @@ def check() -> int:
     print(f"    paired diff {s['paired_diff_A_minus_B']:+.4f} "
           f"CI [{s['ci_lo']:+.4f}, {s['ci_hi']:+.4f}] "
           f"({'spans zero' if s['spans_zero'] else 'DOES NOT SPAN ZERO'})")
+
+    # Protected documents are a healthy steady state, not a fault — this is a
+    # census, and --check keeps its exit code. Reported anyway because the whole
+    # point is that a hand-edited document is invisible otherwise.
+    rep = doc_report()
+    protected = [p for p, st in rep.items() if st == AUTHORED]
+    print(f"    docs: {sum(1 for st in rep.values() if st == GENERATED)} "
+          f"generator-owned, {len(protected)} PROTECTED (edited or unrecorded)")
+    for p in protected:
+        print(f"          protected (will NOT be rewritten): {p}")
     return 0
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="Build the listening + demo audio set.")
+    # --force rebuilds the WAVS. It deliberately does NOT unlock the documents:
+    # tests/test_demo.py runs this script with --force against the live repo, so
+    # a --force that clobbered prose would let a green test suite quietly delete
+    # a listening result. Destroying an authored document requires asking for it
+    # by name.
     ap.add_argument("--force", action="store_true",
-                    help="rebuild even if the manifest is already present")
+                    help="rebuild the audio even if the manifest is already present "
+                         "(does NOT overwrite hand-edited documents)")
+    ap.add_argument("--force-docs", action="store_true",
+                    help="ALSO overwrite documents a human has edited; each one is "
+                         "copied to <name>.superseded-<UTC>.md first")
     ap.add_argument("--check", action="store_true",
                     help="verify the existing set, generate nothing")
     a = ap.parse_args()
 
     if a.check:
         return check()
-    if MANIFEST.is_file() and not a.force:
+    if MANIFEST.is_file() and not (a.force or a.force_docs):
         m = json.loads(MANIFEST.read_text())
         if all(Path(f).is_file() for f in m["files"]):
             print(f"up to date ({len(m['files'])} files) — --force to rebuild")
@@ -973,13 +1189,19 @@ def main() -> int:
 
     made = build_audio(assets)
     m = build_manifest(made, rows, stats, assets)
-    write_demo_script(m)
-    write_key(m)
-    write_blind_sheet(m)
-    write_prediction(m)
-    write_what_to_listen_for(m)
-    mark_old_set_superseded(m)
+    fd = a.force_docs
+    write_demo_script(m, force_docs=fd)
+    write_key(m, force_docs=fd)
+    write_blind_sheet(m, force_docs=fd)
+    write_prediction(m, force_docs=fd)
+    write_what_to_listen_for(m, force_docs=fd)
+    mark_old_set_superseded(m, force_docs=fd)
     MANIFEST.write_text(json.dumps(m, indent=2), encoding="utf-8")
+
+    # The census, printed AFTER the file list so it is the last thing on screen.
+    # A refusal that scrolls past is a refusal that did not happen.
+    rep = doc_report()
+    protected = [p for p, st in rep.items() if st == AUTHORED]
 
     print(f"demo set -> {DEMO_DIR}: {len(m['files'])} wavs")
     print(f"  pairs   : {', '.join(p['clip_id'] for p in m['pairs'])}")
@@ -991,6 +1213,15 @@ def main() -> int:
           f"({'spans zero' if stats['spans_zero'] else 'DOES NOT SPAN ZERO'})")
     print(f"  payoff  : {m['payoff']['n_empty']}/{m['payoff']['n_clips']} clips "
           f"empty under {COND_PAYOFF}")
+    print(f"  docs    : {len(DOCS) - len(protected)} written, "
+          f"{len(protected)} PROTECTED (edited or unrecorded — left untouched)")
+    if protected:
+        for p in protected:
+            print(f"            kept as-is: {p}")
+        print("            Those files were NOT regenerated and do not carry this")
+        print("            build's numbers. Port the hand-written blocks into the")
+        print("            templates in scripts/make_demo_audio.py, or rebuild them")
+        print("            with --force-docs (which backs each one up first).")
     return 0
 
 
