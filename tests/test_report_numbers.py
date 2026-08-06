@@ -3065,6 +3065,65 @@ def test_the_limitation_count_is_self_consistent():
           % (claimed, actual))
 
 
+def test_the_masthead_equation_actually_multiplies():
+    """README line 6 states an equation. It must EVALUATE, not just look right.
+
+    It did not. The masthead read `40 utterances x 176 conditions x 3 recognizers
+    = 10,560`, which is 21,120. 10,560 was the correct row count -- only nova-3
+    ran 40 clips; the other two ran a 10-clip subset -- so the product was
+    shorthand that silently assumed a population the study never had. Section 7
+    disclosed the subset; the first line a reader sees did not.
+
+    Nothing checked it, because every pin verifies a figure against an artifact
+    and each of 40, 176, 3 and 10,560 is individually TRUE. The defect lived in
+    the relationship between them, which is the same shape as the estimand bug
+    (SPEC Appendix G): correct quantities, invalid combination.
+
+    So this asserts the arithmetic, and asserts the clip counts come from the
+    master table rather than from the sentence restating itself.
+    """
+    if not os.path.exists(README):
+        raise MissingArtifact(README)
+    text = open(README, encoding="utf-8").read()
+    head = text.split("---", 1)[0]
+
+    m = re.search(r"`(\d+) acoustic conditions`\s*×\s*`(\d+) clip-runs`", head)
+    assert m, ("the masthead no longer states `N acoustic conditions` x `M "
+               "clip-runs`. If it was reworded, re-derive this check against the "
+               "new form -- do NOT delete it: an unchecked equation on line 6 is "
+               "how the 21,120 error shipped.")
+    n_cond, n_runs = int(m.group(1)), int(m.group(2))
+
+    m_tot = re.search(r"\*\*([\d,]+) scored transcriptions\*\*", head)
+    assert m_tot, "the masthead no longer states a total"
+    total = int(m_tot.group(1).replace(",", ""))
+
+    assert n_cond * n_runs == total, (
+        "THE MASTHEAD DOES NOT MULTIPLY: %d x %d = %d, not %d. This is the exact "
+        "defect this test exists for." % (n_cond, n_runs, n_cond * n_runs, total))
+
+    # ...and the operands must be the real ones, not a pair chosen to multiply.
+    # Counted per arm from master.csv, because "60 clip-runs" is only honest if
+    # it is 40 + 10 + 10 and not an arithmetic convenience.
+    n_rows, _n_failed, _n_clips, n_conds = _master_census()
+    per_arm = {}
+    with open("results/master.csv", newline="", encoding="utf-8") as fh:
+        for r in csv.DictReader(fh):
+            per_arm.setdefault(r["model"], set()).add(r["clip_id"])
+    per_arm = {a: len(v) for a, v in per_arm.items()}
+    assert sum(per_arm.values()) == n_runs, (
+        "clip-runs (%d) is not the sum of per-arm clip counts %r" % (n_runs, per_arm))
+    assert n_cond == n_conds, (
+        "the masthead condition count (%d) is not the number of distinct "
+        "conditions in master.csv (%d)" % (n_cond, n_conds))
+    assert total == n_rows, (
+        "the masthead total (%d) is not the master table row count (%d)"
+        % (total, n_rows))
+    print("OK: the masthead equation evaluates -- %d conditions x %d clip-runs "
+          "= %d rows, and the operands come from master.csv"
+          % (n_cond, n_runs, total))
+
+
 def test_the_pin_covers_every_report_document():
     """No prose file in `report/` may quote figures without being pinned.
 

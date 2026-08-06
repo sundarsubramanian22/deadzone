@@ -3,7 +3,7 @@
 **A controlled-degradation rig that finds where an ASR model is *confidently wrong*.**
 Real speech → real rooms → real noise → real codecs, one knob at a time, everything else held still.
 
-`40 utterances` × `176 acoustic conditions` × `3 recognizers` = **10,560 scored transcriptions**
+`176 acoustic conditions` × `60 clip-runs` — 40 clips on nova-3, 10 each on scribe_v2 and whisper-base — = **10,560 scored transcriptions**
 
 > ### Motivation, Ideation
 > A chat with Pranav (Deepgram, Applied AI Verticals) led me to think about STT model confidence, and how it is currently measured today. What stuck with me:
@@ -125,7 +125,7 @@ Corpus floor: clean-condition WER **1.65%** (6 errors / 363 reference words), ev
 
 ```mermaid
 flowchart LR
-  P["3 blind pairs measured<br/>2 played live, 1 in reserve<br/>drenched-but-quiet vs dry-but-buried"] --> H["HUMAN (n=1, unblinded)<br/>a preference in 3 of 3<br/>two confident, one 'a little gap'"]
+  P["3 blind pairs measured<br/>2 played live, 1 in reserve<br/>drenched-but-quiet vs dry-but-buried"] --> H["HUMAN (n=1, unblinded)<br/>a preference in 3 of 3<br/>two confident, one marginal"]
   P --> M["MODEL<br/>WER identical in 3 of 3<br/>0.333 vs 0.333 · 0.222 vs 0.222 · 0.250 vs 0.250"]
   H --> D{"they disagree"}
   M --> D
@@ -141,7 +141,7 @@ flowchart LR
 
 A vs B → **−0.018** paired difference, 95% CI **[−0.065, +0.031]** (spans zero) · **18 of 40** clips score exactly equal
 
-**→ The measurement is the model side: on 18 of 40 clips these two conditions score *identically*, and the paired difference spans zero.** The listening beat is the **hook**, not evidence — one unblinded listener, who called two pairs confidently and the third only "a little gap", and who went the *opposite* way to my sealed prediction in two of three (appendix (b)). What that buys is the question, not the answer: a human ranking and this model's ranking are not the same axis, and I could not check which was right by ear — so I built something that could.
+**→ The measurement is the model side: on 18 of 40 clips these two conditions score *identically*, and the paired difference spans zero.** The listening beat is the **hook**, not evidence — one unblinded listener, who called two pairs confidently and the third only marginally ("both pretty bad"), and who went the *opposite* way to my sealed prediction in two of three (appendix (b)). What that buys is the question, not the answer: a human ranking and this model's ranking are not the same axis, and I could not check which was right by ear — so I built something that could.
 
 ---
 
@@ -225,7 +225,7 @@ AUROC = same aggregate (arithmetic mean) for every arm, `bad := row WER ≥ 0.3`
 ‡ **full run per arm** (nova-3 40 clips, others 10) — see the population box above.
 
 > ⚠️ **This is NOT a "commercial beats open" result — read the columns against each other.**
-> nova-3 leads on **every** statistic. **Scribe and Whisper swap depending on which one you read** — Scribe ahead on ρ (−0.820 vs −0.590), **Whisper ahead on utterance-level AUROC (0.888 vs 0.737)**.
+> nova-3 leads on **every confidence** statistic (not on silent rows or mute conditions — see the table). **Scribe and Whisper swap depending on which one you read** — Scribe ahead on ρ (−0.820 vs −0.590), **Whisper ahead on utterance-level AUROC (0.888 vs 0.737)**.
 > *Scribe has no dead-zone rate in this comparison on purpose:* a dead zone is an **absolute** WER threshold, and Scribe's orthography is a per-call draw — its 7 strict dead zones fall to **0** under the normalizer. They were spelling, not confident error. A statistic that is "within-model" can still be a *level* statistic; that one is.
 > n = 3 arms with only **one** open model, and it is also the only **small** one (74M) → commercial-vs-open, vendor, and size are all confounded.
 
@@ -291,7 +291,7 @@ AUROC = same aggregate (arithmetic mean) for every arm, `bad := row WER ≥ 0.3`
 
 ## 9 · Confidence is compared *within* a model — enforced, not conventional
 
-Three arms return confidence on **three unrelated scales** (clean-condition median differs ~3× across them), so a shared absolute threshold is meaningless — every cross-arm claim goes through `within_model_conf_percentile`.
+Three arms return confidence on **three unrelated scales** (whole-grid median differs ~3× across them), so a shared absolute threshold is meaningless — every cross-arm claim goes through `within_model_conf_percentile`.
 
 **`elevenlabs-scribe` is excluded from cross-model WER** (`model_compare` raises — no flag includes it), and the reason is principled, not convenient: Whisper's orthography offset is a **constant** (+0.090 — characterize once, subtract), but Scribe's is a **per-call draw** — 4 identical calls on byte-identical audio gave different transcripts on **5 of 6** probe clips, up to **0.727 WER on identical input**. Variance, not bias: a constant can be subtracted, a coin flip cannot. The inconvenient part: Scribe scores *better* than nova-3 on raw WER — the reason those numbers are incomparable was found on the arm that would have won.
 
