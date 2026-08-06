@@ -119,6 +119,49 @@ BOOTSTRAP_NOTE = (
     "bounds are supplied alongside as `*_ci_lo` / `*_ci_hi`."
 )
 
+# --- the two gap intervals, and why BOTH are published -----------------------
+#
+# THE DEFECT THIS CONSTANT EXISTS TO PREVENT (found by artifact audit, 2026-08-05):
+# `report/writeup.md` §6.3 and the pre-registration blockquote published the
+# QUADRATURE interval for ST-S1, while `results/sensitivity_report.txt` printed
+# the DIRECT bootstrap interval under the header `gap 95% CI` and
+# `results/sobol.json` stored only the direct one. Two different intervals, one
+# label, sitting under the headline pre-registration verdict. Both forms clear
+# the pre-set 0.020 threshold by >=4.5x so no verdict moved -- but a reader
+# diffing the artifacts had no way to know they were looking at two quantities.
+#
+# So both are computed, both are stored, both are printed, and neither may be
+# named `gap_ci_*` without a `_direct` / `_quadrature` suffix.
+GAP_CI_NOTE = (
+    "TWO 95% intervals are published for the ST-S1 gap and they are NOT "
+    "interchangeable. `*_direct` comes from the SAME clip-bootstrap replicates "
+    "that produced S1 and ST, so the S1/ST covariance is carried exactly: it is "
+    "the CORRECT interval and the tighter one. `*_quadrature` is "
+    "sqrt(S1_conf^2 + ST_conf^2) -- the two half-widths combined AS IF S1 and ST "
+    "were independent. They are not: on this grid the clip-bootstrap correlation "
+    "is strongly POSITIVE (reported per factor as `s1_st_bootstrap_corr`), and "
+    "Var(ST-S1) = Var(ST) + Var(S1) - 2*Cov(S1,ST), so dropping the covariance "
+    "term inflates the width. The exact identity "
+    "`gap_conf_direct^2 == S1_conf^2 + ST_conf^2 - 2*corr*S1_conf*ST_conf` holds "
+    "on every row and is asserted in the tests, which is what makes the "
+    "over-statement auditable from the artifact rather than merely claimed. "
+    "The QUADRATURE form is nonetheless the one the PRE-REGISTERED test uses, "
+    "deliberately and for two reasons: (1) analysis/interactions.py consumes a "
+    "SALib-shaped result, which exposes per-index half-widths but not the "
+    "replicates, so quadrature is the only interval computable there and the "
+    "verdict must not depend on which producer filled the file; (2) an over-wide "
+    "interval makes CONFIRMED harder to reach, never easier, which is the only "
+    "direction we are willing to be wrong in on a registered hypothesis. "
+    "DO NOT 'simplify' this by keeping only the tighter interval: that would "
+    "silently strengthen a pre-registered test after the fact."
+)
+
+# Which interval the pre-registration verdict is read off. Named here so the
+# choice is a published fact rather than an implementation detail of whichever
+# module happened to format the table.
+PREREGISTRATION_CI_FORM = "quadrature"
+
+
 SCREEN_ALIASING_NOTE = (
     "design.SCREEN_CAVEAT (quoted verbatim above) describes the Resolution-III "
     "aliasing of a Plackett-Burman screen: two-factor interactions are confounded "
@@ -488,6 +531,28 @@ def sobol_from_terms(V_terms: Mapping, V_total: np.ndarray, k: int) -> dict:
 _Z95 = 1.959963984540054
 
 
+def _pearson(a: np.ndarray, b: np.ndarray) -> float:
+    """
+    Pearson correlation of two bootstrap-replicate vectors, NaN-safe.
+
+    Returns NaN when either side is CONSTANT rather than 0.0. A constant S1 across
+    replicates means the bootstrap found no variability at all (identical clips),
+    in which case the correlation is undefined -- and 0.0 would read as "S1 and ST
+    are independent", which is the single claim this number exists to refute.
+    """
+    a = np.asarray(a, dtype=float)
+    b = np.asarray(b, dtype=float)
+    ok = np.isfinite(a) & np.isfinite(b)
+    if ok.sum() < 2:
+        return float("nan")
+    a, b = a[ok], b[ok]
+    sa, sb = a.std(ddof=1), b.std(ddof=1)
+    if sa == 0.0 or sb == 0.0:
+        return float("nan")
+    return float(np.mean((a - a.mean()) * (b - b.mean())) * (len(a) / (len(a) - 1))
+                 / (sa * sb))
+
+
 def _cell_means(W: np.ndarray, weights: np.ndarray) -> np.ndarray:
     """
     Weighted clip means -> cell means, for a whole batch of bootstrap replicates.
@@ -579,21 +644,54 @@ def decompose(block: Mapping, *, bootstrap: int = 2000, seed: int = 0,
             S1_lo, S1_hi = np.nanpercentile(S1_b, [lo_q, hi_q], axis=0)
             ST_lo, ST_hi = np.nanpercentile(ST_b, [lo_q, hi_q], axis=0)
 
-    # ST - S1 gap: computed from the SAME replicates, so the S1/ST correlation is
-    # carried properly. (analysis.interactions has to add the two half-widths in
-    # quadrature because SALib does not expose replicates; that over-states the
-    # width. Both are reported — quadrature is conservative for the pre-registered
-    # test, this one is correct.)
+    # ST - S1 gap. BOTH published intervals are computed here; see GAP_CI_NOTE for
+    # why neither may be dropped and why the pre-registered test reads the WIDER
+    # one. (An earlier version of this comment claimed "both are reported" while
+    # only the direct form was ever stored -- which is precisely how the write-up
+    # and the artifact came to publish different numbers under one label.)
     gap_b = ST_b - S1_b
     gap_conf = _Z95 * np.nanstd(gap_b, axis=0, ddof=1)
     gap_lo, gap_hi = np.nanpercentile(gap_b, [lo_q, hi_q], axis=0)
 
+    # QUADRATURE: the two half-widths combined as if S1 and ST were independent.
+    # Identical by construction to analysis.interactions._gap_ci(S1_conf, ST_conf),
+    # which is the only form computable from a SALib-shaped result. A test pins
+    # the two implementations together so they can never drift apart again.
+    #
+    # math.hypot, NOT np.hypot: they disagree in the last ULP on some inputs, and
+    # a 1-ULP difference between the module that WRITES the artifact and the
+    # module that READS it turns "these are the same interval" into "these are
+    # nearly the same interval", which is how this whole family of defects starts.
+    gap_conf_quad = [math.hypot(float(S1_conf[i]), float(ST_conf[i]))
+                     for i in range(k)]
+    gap_pt = [float(ST[i]) - float(S1[i]) for i in range(k)]
+
+    # The measured reason the quadrature form is wider. Stored per factor so the
+    # over-statement is auditable from the artifact via the exact identity
+    #     gap_conf_direct^2 == S1_conf^2 + ST_conf^2 - 2*corr*S1_conf*ST_conf
+    # rather than merely asserted in prose.
+    s1_st_corr = np.array([_pearson(S1_b[:, i], ST_b[:, i]) for i in range(k)])
+
     interaction_gap = sorted(
         ({"factor": factors[i], "S1": float(S1[i]), "ST": float(ST[i]),
-          "gap": float(ST[i] - S1[i]), "S1_conf": float(S1_conf[i]),
+          "gap": gap_pt[i], "S1_conf": float(S1_conf[i]),
           "ST_conf": float(ST_conf[i]),
+          # --- interval A: from the gap's own bootstrap replicates (CORRECT) ---
           "gap_conf_direct": float(gap_conf[i]),
-          "gap_ci_lo_direct": float(gap_lo[i]), "gap_ci_hi_direct": float(gap_hi[i])}
+          "gap_ci_lo_direct": float(gap_lo[i]), "gap_ci_hi_direct": float(gap_hi[i]),
+          # --- interval B: half-widths added in quadrature (CONSERVATIVE; the
+          #     one the pre-registered verdict is read off). Built from the same
+          #     Python floats interactions.interaction_gap_table starts from, so
+          #     the two agree bit-for-bit rather than approximately.
+          "gap_conf_quadrature": gap_conf_quad[i],
+          "gap_ci_lo_quadrature": gap_pt[i] - gap_conf_quad[i],
+          "gap_ci_hi_quadrature": gap_pt[i] + gap_conf_quad[i],
+          # --- why they differ, measured ---
+          "s1_st_bootstrap_corr": float(s1_st_corr[i]),
+          "gap_conf_ratio_quadrature_over_direct": (
+              gap_conf_quad[i] / float(gap_conf[i]) if gap_conf[i] > 0
+              else float("inf") if gap_conf_quad[i] > 0 else float("nan")),
+          "preregistration_ci_form": PREREGISTRATION_CI_FORM}
          for i in range(k)),
         key=lambda d: d["gap"], reverse=True)
 
@@ -640,6 +738,9 @@ def decompose(block: Mapping, *, bootstrap: int = 2000, seed: int = 0,
         "bootstrap_reps": int(bootstrap),
         "bootstrap_unit": "clip",
         "bootstrap_note": BOOTSTRAP_NOTE,
+        "gap_ci_note": GAP_CI_NOTE,
+        "gap_ci_forms": ["direct", "quadrature"],
+        "preregistration_ci_form": PREREGISTRATION_CI_FORM,
         "bootstrap_seed": int(seed),
         "variance_explained_check": float(sum(V_terms.values()) / V_total),
         "partition_max_abs_error": float(partition_err),
@@ -1061,6 +1162,78 @@ def format_measured_counterintuitive(res: Mapping) -> str:
 
 
 # ============================================================================
+# ARTIFACT PROVENANCE — every file this module writes says what it is FOR
+# ============================================================================
+#
+# `results/sobol_5factor.json` was flagged by an artifact audit as an ORPHAN:
+# generated on every run, internally sound (partition sum 1.0000000000000002),
+# and referenced by no analysis module, no dashboard panel, no test and no
+# write-up claim. It is not dead output -- it is the ONLY place `noise_type`
+# receives a variance share, because the primary block holds noise_type fixed at
+# babble in order to be a complete factorial. But "has a purpose" and "states its
+# purpose" are different things, and a numerically-plausible JSON with no stated
+# scope is exactly the kind of file that gets quoted alongside the headline
+# indices by someone who does not know the two blocks measure different grids.
+#
+# So each written payload carries its own provenance header. The two blocks are
+# NOT comparable index-for-index: different factor sets, different level sets,
+# different totals (V_total 0.1266 vs 0.0962), so an S1 from one may never be put
+# in a table beside an S1 from the other.
+
+PRIMARY_BLOCK_DOC = {
+    "block_role": "primary",
+    "purpose": ("R4.5's headline sensitivity: the exact functional-ANOVA "
+                "decomposition of the complete 4x4x3x3 factorial "
+                "(rt60 x snr_db x codec x mic_rolloff) at noise_type=babble. "
+                "Every Sobol number quoted in the write-up comes from here."),
+    "consumed_by": [
+        "deadzone.analysis.interactions (load_sobol_json -> the pre-registration "
+        "verdict and the ST-S1 gap table)",
+        "dashboard/build.py (the sensitivity panel)",
+        "report/writeup.md (the S1/ST table and the pre-registration blockquote)",
+    ],
+    "quotable": True,
+}
+
+SECONDARY_BLOCK_DOC = {
+    "block_role": "secondary (noise_type crossed, coarser elsewhere)",
+    "purpose": ("The ONLY block in which `noise_type` varies, so it is the only "
+                "place that factor can receive a variance share at all. The "
+                "primary block pins noise_type='babble' because that is what "
+                "makes it a COMPLETE factorial; without this secondary "
+                "decomposition noise_type would be silently absent from the "
+                "sensitivity story rather than measured and found small."),
+    "consumed_by": [],
+    "quotable": False,
+    "status": ("REFERENCE ONLY. Regenerated on every run of this module and read "
+               "by NO analysis module, NO dashboard panel, NO test and NO "
+               "write-up claim. Kept because deleting it would remove the only "
+               "evidence about noise_type, not because anything depends on it."),
+    "do_not": ("Do NOT place an index from this file in a table beside one from "
+               "results/sobol.json. The two decompose DIFFERENT grids -- "
+               "different factor sets, different level sets (this block is "
+               "2-level on rt60/snr_db/codec/mic_rolloff), different total "
+               "variance -- so the indices are shares of different denominators "
+               "and are not comparable index-for-index."),
+}
+
+
+def tag_artifact(res: Mapping, doc: Mapping, path: str | None = None) -> dict:
+    """
+    Attach a provenance header to a decomposition payload before it is written.
+
+    Kept separate from `decompose` on purpose: `decompose` computes a variance
+    decomposition and should not know which file it is destined for, while a file
+    on disk with no stated scope is the thing that gets mis-quoted. The header
+    goes FIRST in the dict so it is the first thing visible in the written JSON.
+    """
+    head = {"artifact": path, **{k: v for k, v in doc.items()}}
+    out = dict(head)
+    out.update({k: v for k, v in res.items() if k not in head})
+    return out
+
+
+# ============================================================================
 # SERIALIZATION
 # ============================================================================
 
@@ -1151,13 +1324,39 @@ def format_sensitivity_report(sob: Mapping, screen: Mapping | None = None) -> st
     out += ["-" * 78,
             "R4.5 — SOBOL INDICES (exact; CIs from the clip bootstrap)",
             "-" * 78,
-            f"  {'factor':<13} {'S1':>18} {'ST':>18} {'ST-S1':>9} {'gap 95% CI':>20}"]
+            f"  {'factor':<13} {'S1':>18} {'ST':>18} {'ST-S1':>9} "
+            f"{'gap 95% CI (direct)':>22}"]
     for d in sob["interaction_gap"]:
         i = names.index(d["factor"])
         out.append(
             f"  {d['factor']:<13} {S1[i]:>8.4f}+/-{S1c[i]:<7.4f} "
             f"{ST[i]:>8.4f}+/-{STc[i]:<7.4f} {d['gap']:>9.4f} "
-            f"[{d['gap_ci_lo_direct']:>8.4f},{d['gap_ci_hi_direct']:>8.4f}]")
+            f"  [{d['gap_ci_lo_direct']:>8.4f},{d['gap_ci_hi_direct']:>8.4f}]")
+
+    # BOTH published intervals, side by side and named. Printing only one of them
+    # under a bare `gap 95% CI` header is the defect GAP_CI_NOTE describes.
+    if all("gap_conf_quadrature" in d for d in sob["interaction_gap"]):
+        ivl = lambda lo, hi: f"[{lo:>7.4f}, {hi:>7.4f}]"      # noqa: E731
+        out += ["",
+                "  ST-S1 gap — the TWO published 95% intervals, side by side "
+                "(they are DIFFERENT quantities; read the label, never the "
+                "bare numbers):",
+                f"  {'factor':<13} {'ST-S1':>8} {'direct (correct)':>26} "
+                f"{'quadrature (CONSERVATIVE)':>30} {'corr(S1,ST)':>12} "
+                f"{'x wider':>8}"]
+        for d in sob["interaction_gap"]:
+            ratio = d.get("gap_conf_ratio_quadrature_over_direct", float("nan"))
+            out.append(
+                f"  {d['factor']:<13} {d['gap']:>8.4f} "
+                f"{ivl(d['gap_ci_lo_direct'], d['gap_ci_hi_direct']):>26} "
+                f"{ivl(d['gap_ci_lo_quadrature'], d['gap_ci_hi_quadrature']):>30} "
+                f"{d.get('s1_st_bootstrap_corr', float('nan')):>+12.3f} "
+                f"{ratio:>8.2f}")
+        out += ["",
+                f"  PRE-REGISTERED VERDICT IS READ OFF THE "
+                f"{str(sob.get('preregistration_ci_form', PREREGISTRATION_CI_FORM)).upper()} "
+                f"INTERVAL.",
+                f"  {GAP_CI_NOTE}"]
 
     out += ["", "  Second-order S2 (WHICH pair only — never a magnitude):",
             f"  {'pair':<30} {'S2':>18} {'95% CI':>20}"]
@@ -1204,7 +1403,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     report = format_sensitivity_report(sob, screen)
     print(report)
-    write_sobol_json(sob, args.out)
+    write_sobol_json(tag_artifact(sob, PRIMARY_BLOCK_DOC, args.out), args.out)
     print(f"[wrote] {args.out}")
     with open(args.screen_out, "w", encoding="utf-8") as f:
         json.dump(to_json(screen), f, indent=2)
@@ -1219,9 +1418,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             blk5 = load_factorial(rows, SECONDARY_FACTORS, model=args.model,
                                   levels=sub_levels)
             sob5 = decompose(blk5, bootstrap=args.bootstrap, seed=args.seed)
-            write_sobol_json(sob5, args.out_5factor)
+            write_sobol_json(tag_artifact(sob5, SECONDARY_BLOCK_DOC,
+                                          args.out_5factor), args.out_5factor)
             print("\n" + format_sensitivity_report(sob5))
-            print(f"[wrote] {args.out_5factor}")
+            print(f"[wrote] {args.out_5factor}  "
+                  f"[{SECONDARY_BLOCK_DOC['block_role']}] "
+                  f"{SECONDARY_BLOCK_DOC['status']}")
         except ValueError as e:
             print(f"[5-factor block] skipped: {e}")
 

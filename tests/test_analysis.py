@@ -802,6 +802,85 @@ def test_fingerprint_plot_payload():
           f"signatures, no-fix rows flagged); both payloads JSON-serialize")
 
 
+def test_fingerprints_freeze_to_disk():
+    """
+    D2 must FREEZE, not merely reproduce.
+
+    Every sibling layer writes `results/<layer>.{json,txt}`; D2 printed to stdout
+    and the write-up cited the command instead. The numbers reproduce exactly
+    today, but a report that exists only as a command silently becomes a
+    DIFFERENT report the moment master.csv / recording_manifest.csv /
+    task_specs.json move, under the same published claim — and a git tag freezes
+    only what is on disk.
+
+    THE VIOLATION IS CONSTRUCTED: the same analysis is run twice against two
+    tables that differ by one extra clip, and the artifact is shown to move.
+    THE NEGATIVE CONTROL: re-running against the UNCHANGED table reproduces the
+    file byte-for-byte, so the test is pinned to the input having changed and not
+    to some incidental non-determinism (a timestamp would break this, which is
+    exactly why the payload carries none).
+    """
+    rows = build_table_with_failures()
+
+    payload = fp.build_artifact(rows, manifest_path="/nonexistent.csv",
+                                task_specs_path="/nonexistent.json")
+    assert set(payload) >= {"layer", "artifact", "sources", "models", "note",
+                            "by_model"}, sorted(payload)
+    assert payload["models"] == sorted({r["model"] for r in rows})
+    assert payload["artifact"].endswith("fingerprints.json")
+
+    # the frozen payload carries the SAME numbers the printed report shows
+    live = fp.fingerprint_report(rows, model=MODEL, manifest_path="/nonexistent.csv",
+                                 task_specs_path="/nonexistent.json")
+    frozen = payload["by_model"][MODEL]
+    assert frozen["n_clip_rows_used"] == live["n_clip_rows_used"]
+    assert ([c["condition_name"] for c in frozen["composition"]]
+            == [c["condition_name"] for c in live["composition"]])
+    assert all(abs(a["del_rate"] - b["del_rate"]) < 1e-12
+               for a, b in zip(frozen["composition"], live["composition"]))
+
+    with tempfile.TemporaryDirectory() as td:
+        j = os.path.join(td, "results", "fingerprints.json")
+        t = os.path.join(td, "results", "fingerprints.txt")
+        written = fp.write_artifact(payload, j, t)
+        assert written == [j, t], written
+        first_json = open(j, encoding="utf-8").read()
+        first_txt = open(t, encoding="utf-8").read()
+
+        # it is real JSON and it holds the numbers, not just the prose
+        back = json.loads(first_json)
+        assert (back["by_model"][MODEL]["composition"][0]["del_rate"]
+                == frozen["composition"][0]["del_rate"])
+        # the .txt is the printed report verbatim, both models
+        assert first_txt.rstrip("\n") == fp.format_artifact(payload)
+        assert first_txt.count("D2 failure fingerprints") == len(payload["models"])
+
+        # NEGATIVE CONTROL — unchanged input, byte-identical artifact.
+        fp.write_artifact(fp.build_artifact(rows, manifest_path="/nonexistent.csv",
+                                            task_specs_path="/nonexistent.json"), j, t)
+        assert open(j, encoding="utf-8").read() == first_json, \
+            "the artifact is not deterministic; a timestamp or set ordering leaked in"
+        assert open(t, encoding="utf-8").read() == first_txt
+
+        # THE VIOLATION — one extra clip in the same conditions moves the D2
+        # numbers, and without a frozen file nothing on disk would record that
+        # the published figures came from the earlier table.
+        extra = [dict(r, clip_id="u99") for r in rows if r["clip_id"] == CLIPS[0]]
+        assert extra, f"fixture must contain clip {CLIPS[0]}"
+        moved = fp.build_artifact(rows + extra, manifest_path="/nonexistent.csv",
+                                  task_specs_path="/nonexistent.json")
+        fp.write_artifact(moved, j, t)
+        assert open(j, encoding="utf-8").read() != first_json, \
+            "adding a clip did not move the artifact — the freeze would be vacuous"
+        assert (moved["by_model"][MODEL]["n_clip_rows_used"]
+                > frozen["n_clip_rows_used"])
+
+    print(f"OK 14b: D2 freezes to fingerprints.{{json,txt}} "
+          f"({len(payload['models'])} model(s), "
+          f"{len(frozen['composition'])} conditions); byte-identical on re-run, "
+          f"and it moves when the input table does")
+
+
 # ===========================================================================
 # 15. A DUPLICATE (clip, condition) ROW IS REFUSED BY BOTH AGGREGATORS
 # ===========================================================================
@@ -1132,6 +1211,7 @@ if __name__ == "__main__":
     test_entity_error_beats_wer()
     test_report_artifacts()
     test_fingerprint_plot_payload()
+    test_fingerprints_freeze_to_disk()
     test_duplicate_cell_is_refused_by_both_aggregators()
     test_check_finite_refuses_a_nan_that_would_reach_a_mean()
     test_silent_clips_are_counted_not_absorbed()

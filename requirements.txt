@@ -7,6 +7,14 @@ deepgram-sdk
 SALib
 scikit-learn      # D3: Gaussian-process surrogate for the active-learning leg
 
+# ElevenLabs Scribe arm speaks plain HTTP, not an SDK, so `requests` is a DIRECT
+# dependency of three call sites: audio_pipeline.transcribe_elevenlabs (lazy
+# import), scripts/probe_elevenlabs.py (module-level) and tests/test_adapters.py.
+# It resolved only as a transitive dep of the other pins until now — which works
+# right up until whichever package was dragging it in drops it, at which point
+# the ElevenLabs arm fails at import time on a clean install.
+requests
+
 # Open baseline. Heavy (pulls torch); needed only to RUN transcribe_whisper.
 # Tests mock it, so it is not required to run the suite. Install when you wire
 # in the Whisper leg:  pip install openai-whisper

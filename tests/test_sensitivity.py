@@ -569,6 +569,56 @@ check("normalize_sobol_result works on the live dict",
 
 
 # ===========================================================================
+print("\n[10b] every written payload states what file it is and what it is FOR")
+# ===========================================================================
+#
+# `results/sobol_5factor.json` was flagged by an artifact audit as an ORPHAN:
+# regenerated on every run, internally sound, referenced by no analysis module,
+# no dashboard panel, no test and no write-up claim. It is not dead output -- it
+# is the only block in which `noise_type` varies -- but a numerically-plausible
+# JSON with no stated scope is exactly what gets quoted beside the headline
+# indices by someone who does not know the two files decompose DIFFERENT grids.
+
+from deadzone.analysis.sensitivity import (                       # noqa: E402
+    PRIMARY_BLOCK_DOC, SECONDARY_BLOCK_DOC, tag_artifact,
+)
+
+tagged_p = tag_artifact(res0, PRIMARY_BLOCK_DOC, "results/sobol.json")
+tagged_s = tag_artifact(res0, SECONDARY_BLOCK_DOC, "results/sobol_5factor.json")
+
+check("tag_artifact: names the file it is destined for",
+      tagged_p["artifact"] == "results/sobol.json" and
+      tagged_s["artifact"] == "results/sobol_5factor.json")
+check("tag_artifact: the provenance header comes FIRST in the payload",
+      list(tagged_s)[0] == "artifact" and "block_role" in list(tagged_s)[:3],
+      str(list(tagged_s)[:4]))
+check("tag_artifact: preserves every numeric field untouched",
+      all(k in tagged_p and tagged_p[k] is res0[k] for k in res0),
+      str(sorted(set(res0) - set(tagged_p))))
+check("primary block is marked quotable, secondary is NOT",
+      tagged_p["quotable"] is True and tagged_s["quotable"] is False)
+check("primary block names its real consumers",
+      any("interactions" in c for c in tagged_p["consumed_by"]) and
+      any("writeup" in c for c in tagged_p["consumed_by"]))
+check("secondary block declares itself unconsumed, and says why it is kept",
+      tagged_s["consumed_by"] == [] and "REFERENCE ONLY" in tagged_s["status"] and
+      "noise_type" in tagged_s["purpose"])
+check("secondary block warns against tabling its indices beside the primary's",
+      "do_not" in tagged_s and "sobol.json" in tagged_s["do_not"])
+# NEGATIVE CONTROL: the tag is a header, not a rewrite. A payload that came back
+# with a moved index would mean the provenance step had touched the numbers.
+check("tag_artifact does not mutate the source payload",
+      "artifact" not in res0 and "block_role" not in res0)
+check("tag_artifact: S1/ST/partition survive the tagging bit-for-bit",
+      close(np.asarray(tagged_p["S1"]), np.asarray(res0["S1"]), 0.0) and
+      close(np.asarray(tagged_p["ST"]), np.asarray(res0["ST"]), 0.0) and
+      tagged_p["variance_explained_check"] == res0["variance_explained_check"])
+# and a tagged payload must still round-trip through the consumer that reads it
+check("a tagged payload still normalizes for analysis.interactions",
+      normalize_sobol_result(tagged_p)["names"] == names)
+
+
+# ===========================================================================
 print("\n[11] the *_conf convention is a HALF-WIDTH (interactions.py depends on it)")
 # ===========================================================================
 # analysis.interactions builds gap_lo = gap - conf. If *_conf were a full width or
@@ -583,6 +633,150 @@ check("half-width is ~ (percentile hi - lo)/2 (normal-approx vs percentile)",
       f"conf={np.round(S1_conf,4)} pct-half={np.round(half_from_pct,4)}")
 check("all *_conf are non-negative",
       bool(np.all(S1_conf >= 0) and np.all(np.asarray(res2['ST_conf']) >= 0)))
+
+
+# ===========================================================================
+print("\n[11b] the ST-S1 gap publishes BOTH intervals, under distinguishable names")
+# ===========================================================================
+#
+# THE DEFECT THIS SECTION PINS (artifact audit, 2026-08-05). report/writeup.md
+# published the QUADRATURE gap interval; results/sensitivity_report.txt printed
+# the DIRECT bootstrap interval under the header `gap 95% CI`; results/sobol.json
+# stored only the direct one. Two different intervals, one label, sitting
+# directly beneath the pre-registration verdict. No verdict moved (both forms
+# clear 0.020 by >=4.5x) but a reader diffing the artifacts had no way to tell
+# them apart, and the quadrature form -- the one the registered test is actually
+# read off -- was stored nowhere at all.
+
+from deadzone.analysis.sensitivity import (                       # noqa: E402
+    GAP_CI_NOTE, PREREGISTRATION_CI_FORM, _pearson,
+    format_sensitivity_report,
+)
+from deadzone.analysis.interactions import _gap_ci, interaction_gap_table  # noqa: E402
+
+gaps2 = res2["interaction_gap"]
+
+# (a) THE VIOLATION: no gap interval may be published under an ambiguous name.
+# Every gap CI field must say WHICH of the two it is.
+amb = sorted({k for d in gaps2 for k in d
+              if k.startswith("gap_c") and not
+              (k.endswith("_direct") or k.endswith("_quadrature")
+               or k.endswith("_quadrature_over_direct"))})
+check("gap CI fields all carry a _direct / _quadrature suffix", not amb, str(amb))
+for key in ("gap_conf_direct", "gap_ci_lo_direct", "gap_ci_hi_direct",
+            "gap_conf_quadrature", "gap_ci_lo_quadrature", "gap_ci_hi_quadrature",
+            "s1_st_bootstrap_corr"):
+    check(f"interaction_gap publishes `{key}`", all(key in d for d in gaps2))
+check("payload names which form the pre-registered verdict uses",
+      res2["preregistration_ci_form"] == PREREGISTRATION_CI_FORM and
+      all(d["preregistration_ci_form"] == PREREGISTRATION_CI_FORM for d in gaps2))
+check("payload carries the note explaining why both are kept",
+      res2["gap_ci_note"] == GAP_CI_NOTE and "not interchangeable" in GAP_CI_NOTE.lower())
+
+# (b) CROSS-MODULE AGREEMENT — the actual bug was that the write-up's number came
+# from analysis.interactions and the artifact's from here. Pin them to be the
+# same float, so the two producers can never drift apart again.
+itx = {r["factor"]: r for r in interaction_gap_table(res2)}
+check("quadrature half-width == interactions._gap_ci(S1_conf, ST_conf) EXACTLY",
+      all(d["gap_conf_quadrature"] == _gap_ci(d["S1_conf"], d["ST_conf"])
+          for d in gaps2))
+check("quadrature bounds == interactions' gap_lo / gap_hi EXACTLY",
+      all(d["gap_ci_lo_quadrature"] == itx[d["factor"]]["gap_lo"] and
+          d["gap_ci_hi_quadrature"] == itx[d["factor"]]["gap_hi"] for d in gaps2))
+
+# (c) WHY THEY DIFFER, as an exact identity rather than a claim. From
+# Var(ST-S1) = Var(ST) + Var(S1) - 2*Cov(S1,ST) and conf = Z*sd:
+#     gap_conf_direct^2 == S1_conf^2 + ST_conf^2 - 2*corr*S1_conf*ST_conf
+# The quadrature form is that expression with the covariance term DELETED, which
+# is why it is wider whenever corr > 0 -- and this identity is what makes the
+# over-statement auditable from the published fields alone.
+for gd in gaps2:                     # NB: `d` is a planted effect array above
+    lhs = gd["gap_conf_direct"] ** 2
+    rhs = (gd["S1_conf"] ** 2 + gd["ST_conf"] ** 2
+           - 2.0 * gd["s1_st_bootstrap_corr"] * gd["S1_conf"] * gd["ST_conf"])
+    check(f"variance identity holds for {gd['factor']}",
+          abs(lhs - rhs) <= 1e-9 * max(lhs, 1e-12), f"{lhs:.6e} vs {rhs:.6e}")
+check("S1 and ST are POSITIVELY correlated across replicates (the stated cause)",
+      all(d["s1_st_bootstrap_corr"] > 0 for d in gaps2),
+      str([round(d["s1_st_bootstrap_corr"], 3) for d in gaps2]))
+check("so quadrature is WIDER than direct on every factor",
+      all(d["gap_conf_quadrature"] > d["gap_conf_direct"] for d in gaps2),
+      str([round(d["gap_conf_ratio_quadrature_over_direct"], 3) for d in gaps2]))
+check("the width ratio is reported and matches the two half-widths",
+      all(abs(d["gap_conf_ratio_quadrature_over_direct"]
+              - d["gap_conf_quadrature"] / d["gap_conf_direct"]) < 1e-12
+          for d in gaps2))
+
+# (d) NEGATIVE CONTROL, and it is the sharpest evidence the two are genuinely
+# different quantities rather than one rescaled. Build a block that is ADDITIVE
+# in every clip -- per-clip independent scaling of each additive component -- so
+# every bootstrap replicate is still additive and therefore has ST == S1 exactly.
+# The gap is provably, exactly zero with zero uncertainty, yet quadrature returns
+# a WIDE non-zero interval around it. corr must come out at exactly +1.
+rngA = np.random.default_rng(21)
+comp = [a[:, None, None, None], b[None, :, None, None],
+        c[None, None, :, None], d[None, None, None, :]]
+W_add = np.zeros((40,) + Yadd.shape, dtype=float)
+for ci in range(40):
+    for comp_arr in comp:
+        W_add[ci] = W_add[ci] + rngA.uniform(0.5, 1.5) * comp_arr
+blk_pure_add = dict(make_block(Yadd, names, levels, n_clips=40), W=W_add)
+res_pa = decompose(blk_pure_add, bootstrap=300, seed=4)
+gpa = res_pa["interaction_gap"]
+check("neg control: a per-clip-additive block has ST == S1 exactly",
+      close(np.asarray(res_pa["ST"]), np.asarray(res_pa["S1"]), 1e-12))
+check("neg control: corr(S1, ST) is exactly +1 there",
+      all(abs(g["s1_st_bootstrap_corr"] - 1.0) < 1e-12 for g in gpa),
+      str([g["s1_st_bootstrap_corr"] for g in gpa]))
+check("neg control: the DIRECT interval is exactly zero-width (no interaction)",
+      all(g["gap_conf_direct"] < 1e-12 for g in gpa),
+      str([g["gap_conf_direct"] for g in gpa]))
+check("neg control: the QUADRATURE interval is NOT zero-width there",
+      any(g["gap_conf_quadrature"] > 1e-6 for g in gpa),
+      str([round(g["gap_conf_quadrature"], 6) for g in gpa]))
+check("neg control: the identity still holds at corr == 1",
+      all(abs(g["gap_conf_direct"] ** 2
+              - (g["S1_conf"] ** 2 + g["ST_conf"] ** 2
+                 - 2.0 * g["s1_st_bootstrap_corr"] * g["S1_conf"] * g["ST_conf"]))
+          < 1e-12 for g in gpa))
+# ...and the bootstrap really did have something to vary, so "zero-width direct"
+# is a fact about the gap and not about a degenerate resample.
+check("neg control: S1 itself DID vary across replicates (not a dead bootstrap)",
+      float(np.max(np.asarray(res_pa["S1_conf"]))) > 1e-6,
+      f"max S1_conf={float(np.max(np.asarray(res_pa['S1_conf']))):.2e}")
+
+# (e) _pearson returns NaN, never 0.0, for a constant replicate vector: 0.0 would
+# read as "S1 and ST are independent", the one claim this number exists to refute.
+check("_pearson: a constant vector gives NaN, not 0.0",
+      math.isnan(_pearson(np.ones(50), np.arange(50.0))))
+check("_pearson: matches numpy on a normal case",
+      abs(_pearson(np.arange(50.0), np.arange(50.0) ** 1.3)
+          - float(np.corrcoef(np.arange(50.0), np.arange(50.0) ** 1.3)[0, 1])) < 1e-12)
+# res0 has IDENTICAL clips, so the bootstrap is degenerate: every replicate is
+# the same experiment and both half-widths collapse to ~0. The requirement is not
+# a particular corr -- it is that a degenerate bootstrap never fabricates a WIDE
+# interval, and never crashes on the 0/0 ratio.
+check("degenerate bootstrap: both gap intervals collapse to ~0 width",
+      all(gd["gap_conf_direct"] < 1e-12 and gd["gap_conf_quadrature"] < 1e-12
+          for gd in res0["interaction_gap"]),
+      str([(gd["gap_conf_direct"], gd["gap_conf_quadrature"])
+           for gd in res0["interaction_gap"]]))
+check("degenerate bootstrap: the width ratio is inf/NaN, never a plausible number",
+      all(not math.isfinite(gd["gap_conf_ratio_quadrature_over_direct"])
+          or gd["gap_conf_quadrature"] < 1e-12
+          for gd in res0["interaction_gap"]))
+
+# (f) the printed report must show BOTH, labelled. A number printed under a bare
+# `gap 95% CI` header is exactly what shipped before.
+rep_txt = format_sensitivity_report(res2)
+check("report labels the first interval as (direct)", "gap 95% CI (direct)" in rep_txt)
+check("report prints the side-by-side block with both labels",
+      "direct (correct)" in rep_txt and "quadrature (CONSERVATIVE)" in rep_txt)
+check("report names which interval the pre-registration uses",
+      "PRE-REGISTERED VERDICT IS READ OFF THE QUADRATURE INTERVAL" in rep_txt)
+check("report no longer prints a bare, unqualified `gap 95% CI` header",
+      "gap 95% CI\n" not in rep_txt and not any(
+          line.rstrip().endswith("gap 95% CI") for line in rep_txt.splitlines()))
 
 
 # ===========================================================================

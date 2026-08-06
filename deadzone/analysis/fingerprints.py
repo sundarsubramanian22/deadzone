@@ -855,6 +855,82 @@ def format_report(report: dict) -> str:
 
 
 # ===========================================================================
+# THE PERSISTED ARTIFACT
+# ===========================================================================
+#
+# WHY D2 GETS A FILE. Every other analysis layer freezes itself to
+# `results/<layer>.{json,txt}` — calibration, model_arms, sim2real, l3_decoupling.
+# D2 did not: it printed to stdout and the write-up cited the COMMAND instead of
+# an artifact. Every D2 number reproduces exactly today, but "reproduces" and
+# "frozen" are different properties. The report is a pure function of
+# `results/master.csv` + `recording_manifest.csv` + `task_specs.json`, so if any
+# of those three moves — a re-run appending rows, a manifest transcript
+# correction, a new entity slot — every fingerprint silently becomes a different
+# number under the same claim, and a `grid-v1` tag would not have captured what
+# was actually published. The tag can only freeze what is on disk.
+
+OUT_JSON = "results/fingerprints.json"
+OUT_TXT = "results/fingerprints.txt"
+
+ARTIFACT_NOTE = (
+    "D2 is a pure function of the three sources listed above and spends no API "
+    "calls, so it is cheap to re-run — but it is frozen here because the WRITE-UP "
+    "quotes these numbers. If master.csv, recording_manifest.csv or "
+    "task_specs.json changes, re-running produces different fingerprints under "
+    "the same claims; this file is what a git tag actually captures."
+)
+
+
+def build_artifact(rows: Sequence[dict], models: Sequence[str] | None = None,
+                   manifest_path: str = "recording_manifest.csv",
+                   task_specs_path: str = "task_specs.json") -> dict:
+    """The whole D2 layer, every model, in one JSON-serializable payload."""
+    names = list(models) if models else sorted(split_by_model(rows))
+    by_model = {m: fingerprint_report(rows, model=m, manifest_path=manifest_path,
+                                      task_specs_path=task_specs_path)
+                for m in names}
+    return {
+        "layer": "D2 — typed failure fingerprints (SPEC §5.2, A.R5.3)",
+        "artifact": OUT_JSON,
+        "sources": {"table": None,              # filled by write_artifact's caller
+                    "manifest": manifest_path,
+                    "task_specs": task_specs_path},
+        "models": names,
+        "note": ARTIFACT_NOTE,
+        "insertion_caveat": INSERTION_CAVEAT,
+        "by_model": by_model,
+    }
+
+
+def format_artifact(payload: dict) -> str:
+    """The printed report for every model, verbatim — the `.txt` sibling."""
+    blocks = [format_report(rep) for rep in payload["by_model"].values()]
+    return "\n\n".join(blocks)
+
+
+def write_artifact(payload: dict, out_json: str | None = OUT_JSON,
+                   out_txt: str | None = OUT_TXT) -> list[str]:
+    """Freeze the payload to disk. Returns the paths actually written."""
+    written: list[str] = []
+    for path, render in ((out_json, None), (out_txt, format_artifact)):
+        if not path:
+            continue
+        d = os.path.dirname(os.path.abspath(path))
+        if d:
+            os.makedirs(d, exist_ok=True)
+        with open(path, "w", encoding="utf-8") as fh:
+            if render is None:
+                # `default=float` mirrors analysis/calibration_report.py: a numpy
+                # scalar that slips through becomes a plain float rather than
+                # raising at dump time and losing the whole artifact.
+                json.dump(payload, fh, indent=2, default=float)
+            else:
+                fh.write(render(payload) + "\n")
+        written.append(path)
+    return written
+
+
+# ===========================================================================
 # CLI
 # ===========================================================================
 
@@ -871,15 +947,26 @@ def main(argv: Sequence[str] | None = None) -> int:
     ap.add_argument("--task-specs", default="task_specs.json")
     ap.add_argument("--out", default=None,
                     help="optional CSV of the per-condition edit composition")
+    ap.add_argument("--out-json", default=OUT_JSON,
+                    help="frozen D2 payload (pass '' to skip)")
+    ap.add_argument("--out-txt", default=OUT_TXT,
+                    help="the printed report, verbatim (pass '' to skip)")
     args = ap.parse_args(argv)
 
     rows = load_master_table(args.table)
+    payload = build_artifact(rows, [args.model] if args.model else None,
+                             manifest_path=args.manifest,
+                             task_specs_path=args.task_specs)
+    payload["sources"]["table"] = args.table
     comp: list[dict] = []
-    for m in ([args.model] if args.model else sorted(split_by_model(rows))):
-        rep = fingerprint_report(rows, model=m, manifest_path=args.manifest,
-                                 task_specs_path=args.task_specs)
+    for rep in payload["by_model"].values():
         print(format_report(rep), "\n")
         comp.extend(rep["composition"])
+
+    for path in write_artifact(payload, args.out_json or None,
+                               args.out_txt or None):
+        print(f"wrote {path}")
+
     if args.out and comp:
         os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
         with open(args.out, "w", newline="", encoding="utf-8") as fh:
