@@ -3,6 +3,7 @@
  "figures": {
   "confidence-vs-error.svg": {
    "conf_hi_raw": 0.8062573170178913,
+   "conf_pct_hi": 0.6,
    "dead_zones": [
     {
      "condition_name": "rt60-0.45_snr-0_engine_g726_roll-0",
@@ -28,6 +29,13 @@
    "population": "nova-3, 40 clips, 176 conditions",
    "spearman": -0.9795335885833624,
    "spearman_n": 169,
+   "threshold_fragility": {
+    "count_at_default": 2,
+    "max": 86,
+    "min": 0,
+    "n_grid_points": 63,
+    "verdict": null
+   },
    "wer_hi": 0.3
   },
   "fingerprints.svg": {
@@ -225,6 +233,7 @@
  "sources": [
   "results/master.csv",
   "results/fingerprints.json",
+  "results/dead_zone_sensitivity.json",
   "recording_manifest.csv"
  ],
  "thresholds": {
