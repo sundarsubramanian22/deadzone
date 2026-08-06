@@ -1,0 +1,360 @@
+# Deep-dive runbook — 60 min with a Deepgram engineer
+
+Audience: **one software engineer on Deepgram Labs** — prototypes, agents,
+cutting-edge voice AI — and the model under test is their product.
+
+- **Do not explain WER, SNR, RT60, or what a RIR is.** They know. Explaining
+  basics is the fastest way to lose an expert's attention.
+- **The subject under test is their product.** The framing is *"I built an
+  instrument that finds where any streaming ASR fails silently, and here is what
+  it found"* — never *"your model is bad."* The instrument is the deliverable;
+  Nova-3 is the first thing measured with it.
+- **The data is genuinely favourable to them where it matters.** Nova-3's
+  confidence tracks its own error rate at spearman **−0.980**, and against
+  Whisper it is not close (§4.4). Lead the model comparison with that: it is
+  true, it is the strongest result in the study, and it is theirs.
+- **They asked about product decisions.** Budget real time for what a deployment
+  should *do* with these findings.
+
+> **Two dead-zone rates — say which is which.** D1 runs the full 40-clip corpus:
+> **2 of 176 (1.14 %)**. L1 restricts *both* arms to the 10 clips Whisper also
+> ran: **1 of 176 (0.57 %)**. Quote the matched one whenever Whisper is on the
+> page.
+
+---
+
+## The spine (~33 min), leaving ~25 for the conversation
+
+An hour with one engineer is a conversation that gets interrupted, not a talk.
+Build the spine with deep branches, and let them steer.
+
+### 1. The reframe (2 min, no slides, no screen)
+
+One sentence: *aggregate WER hides where and how a model fails, so I stopped
+asking "how much does it break" and asked "does it know it's breaking" —
+because for a streaming voice agent, a confidently wrong transcript is far more
+dangerous than a visibly uncertain one. Confidence is what decides whether the
+system commits or asks the user to repeat.*
+
+Then the honest positioning immediately, before they wonder: **this genre is
+well-trodden** — WildASR, Speech Robustness Bench, "When Denoising Hinders".
+Nothing in the method is novel. The contribution is the lens, the typed
+fingerprints, and testing a commercial model that exposes per-word confidence
+where the literature uses Whisper/Conformer/wav2vec.
+
+Saying this *first, unprompted* is worth more than any result. An expert places
+the work in its literature within five minutes whether you do it or not.
+
+### 2. The visceral demo (6 min) — DO THIS EARLY
+
+Audio first, while attention is highest. Everything is in `results/audio/demo/`;
+hand over **`blind/` only** (8 neutral filenames + `BLIND_SHEET.md`) and run
+from `DEMO_SCRIPT.md`. The working filenames in the parent directory say
+`reverb` and `babble` — a listener who sees them has been told the answer.
+
+**Beat 1 — the ranking, as a sealed prediction.** Show that
+`PREREGISTERED_PREDICTION.md` exists and **leave it closed** — stating a
+prediction aloud before someone judges is a demand characteristic, and this
+project's whole subject is not fooling yourself with a number you wanted. Say
+only *"I've written down what I think you'll say."* Play pair 1
+(`blind_03`/`blind_07`, `u40`) and pair 2 (`blind_06`/`blind_01`, `u21`), let
+him finish ranking, then open the file and reveal:
+
+- `rt60 1.0 / SNR 20 dB` — Shower IR, DRR **−10.02 dB**, but *quiet* → **0.1123**
+- `rt60 0.2 / SNR 0 dB` — Restaurant IR, DRR **+16.90 dB**, speech buried → **0.1301**
+- paired over the same 40 clips: **−0.0178, 95 % CI [−0.0654, +0.0310]** —
+  10,000-resample paired bootstrap over clips, spans zero.
+
+On `u40`, `u26`, `u21` and `u10` the two score **exactly** equal per clip — at
+0.333, 0.250, 0.222, 0.125, so **not** because it got both right. It got both
+wrong, by the same amount, in different places; the transcripts in
+`DEMO_SCRIPT.md` show that better than the scalar does.
+
+Mechanism, in their vocabulary: humans get the precedence effect and a lifetime
+of room adaptation, so reverb is close to free for us; competing speech causes
+informational masking, which is brutal for us. The model has neither prior.
+
+**Label it honestly, out loud:** the human half is n = 1 and unblinded — an
+intuition pump, not a measurement. The *measured* half is the paired model-side
+result and its CI, and it reads the same whichever way he ranks. Blurring those
+is the only way this beat can hurt you here.
+
+**The takeaway is a product claim, and it is the point:** *you cannot QA a voice
+agent by listening to it.* "Sounds fine to me" is not evidence the ASR works.
+
+**Beat 2 — the payoff.** Play `blind_02` (clean control) then `blind_05`: `u03`
+under `rt60-0.7 / snr-20 / babble / opus-lowrate / roll-1`. The SNR is **20 dB**
+— it is *quiet*; the damage is reverb + codec + mic rolloff. He can hear a
+person speaking clearly. The model returned an **empty string**: WER 1.000, all
+11 reference words deleted, and **10 of 40 clips returned nothing at all** here.
+Hold this clip — it comes back in §5, because this exact condition is what the
+defect was hiding behind.
+
+### 3. The instrument (4 min)
+
+Where an ASR engineer actually engages, because they have been bitten by these.
+
+- **SNR on active-speech energy only**, not whole-file power — otherwise silence
+  deflates the denominator and your "10 dB" mix is not 10 dB.
+- **After RIR convolution: trim the direct-path delay** (or every WER inherits a
+  pure alignment artifact) **and renormalise over the input's active region**.
+  The anecdote: the reverb tail leaks energy into the silent regions and
+  de-calibrates every downstream SNR. Clean-looking garbage, no error message,
+  caught by the test suite and by nothing else.
+- **Typed edits, not scalar WER** — sub/del/ins is what makes fingerprints
+  possible at all.
+- **Real ingredients, controlled assembly**: measured RIRs (MIT survey), real
+  noise (DEMAND). Only the combination is synthetic.
+
+Have the composition order and its physical justification ready as a branch.
+
+### 4. Findings, on the dashboard (9 min)
+
+Offline, `file://`, wifi off. Order matters:
+
+1. **The silent-failure map, in three categories.** Not one bucket: **dead zone**
+   (spoke, confident, wrong) — **2 of 176**; **silence-driven** (looks like one
+   only if you mis-pair the estimands) — **4**; **mute zone** (empty transcript
+   on *every* clip) — **7**. A mute zone is not a dead zone: confidently wrong
+   and entirely absent are different mechanisms with different fixes, and **a
+   confidence monitor cannot see a mute zone at all**. The taxonomy came out of
+   §5's correction — introduce it here, pay it off there.
+   Headline, no asterisk: *at `rt60 0.45 s, SNR 0 dB, engine, g726, roll 0`,
+   nova-3 returns mean word confidence **0.829** at WER **0.306** — **0 of 40
+   clips came back empty**, so both averages are over the same clips.* It sits in
+   **engine** noise, where confidence otherwise tracks WER at ρ = −0.99: a point
+   failure, not a bad region.
+2. **DRR, not RT60** — the best mechanistic result. The `rt60` axis is
+   non-monotonic (0.2026 → 0.6359 → 0.4495 → 0.7581) because each level is
+   delivered by the *nearest measured RIR*, i.e. a different real room.
+   `spearman(DRR, WER) = −1.000` against `spearman(RT60, WER) = +0.800`.
+   **Reverb benchmarks parameterised by RT60 alone will mis-rank conditions.**
+   Directly useful to anyone building an ASR eval set, which is them.
+3. **Fingerprints → fixes.** Reverb and low SNR → *deletions*; g726 and road
+   noise → *substitutions*; babble → insertions that are 92 % foreign tokens,
+   the model transcribing background speakers, a different mechanism from
+   acoustic confusion. Proper nouns destroyed at 0.646 vs 0.462 for function
+   words. Each signature implies a fix: keyword boosting, dereverberation,
+   entity-aware decoding.
+4. **Model comparison.** Lead with Nova-3 winning, decisively: dead-zone rate
+   **0.57 % (1/176) vs 39.20 % (69/176)**, confidence-vs-WER **−0.970 (n = 164)
+   vs −0.590 (n = 171)**, insertions **0.021 vs 0.197** of reference words. Then
+   Whisper's hallucination mode as the interesting part: 3 reference words became
+   49, and WER exceeds 1.0 in two whole factor regions because insertions are
+   unbounded. *WER understates that failure* — it caps damage at one error per
+   reference word, while a 49-word hallucination handed to a downstream LLM is
+   unbounded harm.
+   **Best detail: §5's correction moves the two arms in *opposite* directions.**
+   Restricting to the clips each model actually spoke on **lowers** nova-3's WER
+   (0.433 → **0.307**) but **raises** Whisper's (0.996 → **1.128**) — its silent
+   clips score exactly 1.0, so dropping them removes its *cheapest* rows and
+   leaves the ones that hallucinate past 1.0. One model goes quiet under stress;
+   the other invents.
+
+### 5. Judgment — the section that decides the interview (8 min)
+
+Everything above is competence. This is the part that is hard to fake, and the
+first item is the strongest thing you say all hour.
+
+#### I found a defect in my own headline, corrected it before showing you, and the fix produced a better taxonomy than the number it replaced
+
+**The bug.** Per-condition `mean_conf` was averaged only over the clips that
+produced words. Per-condition `wer` was averaged over *all* clips — including
+ones that returned an **empty transcript**, contributing WER 1.0 and no
+confidence at all. Subtracting them **mixed two estimands**. Clean arithmetic,
+right row count, no NaN, no exception. The only thing that catches it is
+asserting *which population each average is over*.
+
+**How it was found — tell this part.** It was the listening pass, the last
+unchecked item in the spec. The dead-zone example clips **sounded intelligible**,
+which did not fit a story about being confidently wrong, which led to opening
+the per-clip rows. **No test caught it. The audio did.** In a project whose
+thesis is that a scalar can look fine while being wrong, that is the thesis
+landing on its own author.
+
+| | before (mixed) | after (same subset) |
+|---|---|---|
+| dead zones | 6 of 176 (3.41 %) | **2 of 176 (1.14 %)** |
+| spearman(conf, WER) | −0.957 | **−0.980** paired / **−0.952** all-clips, both n = 169 |
+| mean confidence gap | +0.256 | **+0.147** |
+| overconfident conditions | 92 % | **91 % (154/169)** |
+
+The old **−0.957** was computed over all 176 conditions while reporting n = 169.
+The 7 mute conditions sit at percentile 0 with WER 1.0 — **seven fabricated
+points parked at the ideal corner of a negative correlation.** Removing them
+makes the correlation *stronger*, which is the tell that they were never
+measurements.
+
+**The old #1 dead zone is the payoff clip from §2** — `rt60 0.7 / snr 20 /
+babble / opus-lowrate / roll 1`. Now classified `silence_driven`: 10 of 40 clips
+silent, gap collapsing from **+0.230 to +0.025**. On the 30 clips it *did* speak
+on it was **81.8 % accurate at 0.843 confidence — well calibrated.** Still
+dangerous — a quarter of utterances vanishing is severe — but it is a **silence
+failure, not a confidently-wrong one**, and the fix is different. 2,210 of 7,040
+rows (**31.4 %**) are silent; 116 of the 169 conditions the model spoke in were
+affected by the mis-pairing.
+
+**The payoff:** the correction did not just shrink a number, it produced §4's
+taxonomy — and `mute_zone`, the category a confidence monitor is structurally
+blind to, exists only because of it. **Lead with this if the conversation is
+going well.** Volunteering a correction to your own headline is the strongest
+signal available, and much stronger from you than found by them.
+
+#### The rest
+
+- **The active-learning result is a null.** Straddle acquisition did not beat
+  random: the target was reached by 2/8 active seeds and 4/8 random within a
+  45-evaluation budget, and across 4 train/test splits the winner *flips*
+  (active won 2/4 splits, 13/32 paired runs). No seed was confirmed end-to-end
+  against the live API. The control matters: the same machinery *does* beat
+  random on planted synthetic structure, so this is a method meeting a surface
+  with no exploitable boundary, not a broken implementation. **Report the
+  budget, not a ratio.**
+- **The pre-registration was CONFIRMED**, registered before any real audio
+  existed (`d8ddd4f`, 2026-07-27) with a decision rule fixed in advance:
+  ST−S1 = 0.128 (`rt60`), 0.112 (`snr_db`), `rt60 × snr_db` ranks 1/6 in S2. The
+  quoted CI is ~2.5× wider than necessary — it adds S1 and ST in quadrature while
+  their bootstrap correlation is +0.86, conservative in the only direction that
+  matters for a pre-registered test.
+- **The sim-vs-real gap survived the correction untouched, and say so.** Level
+  and order carry **no confidence term**, so both are bit-identical before and
+  after: synthetic RIRs underestimate WER by **12.1 points [−15.0, −9.6]** but
+  rank conditions well (**Spearman 0.873**). Dead-zone counts did move — real
+  2 → 1, sim 1 → 0 — and **Jaccard is still 0.00**. Cross-model Jaccard is *also*
+  0.00. Two independent senses in which **you cannot borrow someone else's
+  dead-zone map**.
+
+### 6. Product implications (4 min) — they asked for this explicitly
+
+- **Confidence needs recalibration, and it is cheap.** A feature-conditioned
+  calibrator cuts ECE from **0.051 to 0.008** on held-out conditions
+  (temperature scaling alone gets 0.035). Concretely: above `rt60 = 0.7`,
+  discount reported confidence by ~0.07; above `mic_rolloff = 0.5`, by ~0.06.
+- **Confidence has a structural blind spot, and it now has a name.** Deletions
+  are 35.1 % of reference words and 69.3 % of all errors, and carry no hypothesis
+  token, so no confidence. A perfectly calibrated confidence converges on
+  **emitted-word accuracy 0.767**, not **reference recovery 0.513** — anything
+  thresholding on mean confidence is reading the wrong quantity by 0.254. The
+  limit case is the **mute zone**: the calibrator is fit on 169 conditions and
+  is **silent about the worst 7**. **Pair confidence with an utterance-level
+  "did I get anything" check.**
+- **Entity error rate diverges from WER** (0.633 vs 0.511), proper nouns worst
+  hit. WER is the wrong acceptance metric for a slot-filling agent.
+- **Turn-taking is unmeasured and probably matters more** — see the Labs section
+  below; that is where this one goes if he takes it.
+
+---
+
+## Branches to have loaded, not presented
+
+- **Why no live voice agent?** The measurement rig was the priority; a live
+  three-vendor realtime system is the highest demo risk in the project.
+  `agent_eval.py` is built and synthetic-validated — task/entity metrics and a
+  turn-taking analyzer over a typed event stream — a drop-in once there is an
+  agent to score. Have the file open.
+- **Why G.726 and not AMR-NB?** Stock ffmpeg is AMR decode-only. The split paid
+  off anyway: g726 produces substitutions, opus-lowrate deletions — two
+  mechanisms from one factor.
+- **Why 40 clips?** Precision is governed by reference word count, not clip
+  count. ~340 ref words per condition puts the SE on a 0.20 WER at ~2.2 points;
+  15 clips gives 3.5 and neighbouring cells overlap.
+- **`results/audio/demo/isolation/`** — the factor ladder, `00_RAW_original` to
+  `10_destroyed`, one degradation at a time.
+- **The scratch notebook** — master table loaded, for "does that hold for engine
+  noise too?"
+
+## Demo hygiene
+
+- **Wifi off, no API key, one command per demo.** Everything cached. Rehearse
+  the full path once on the actual machine, projector attached, and
+  screen-record a successful run as a fallback.
+- Timings: reframe 2 · audio 6 · instrument 4 · dashboard 9 · judgment 8 ·
+  product 4 = **33 min**, leaving ~25 for the conversation, which is where the
+  hiring signal actually lives.
+- Running long? Cut §3 to two bullets and §4 item 3. **Never cut §5's first
+  item.**
+
+---
+
+## Calibrating for a Labs SWE specifically
+
+### Get ahead of the streaming framing. He will catch it.
+
+The project says "streaming ASR" throughout, but **the grid ran on the
+pre-recorded endpoint, not `listen.live`.** Say so before he asks:
+
+> "Everything in the grid is pre-recorded. That is the honest label. The
+> confidence signal and the acoustic failure modes carry over, but anything
+> about endpointing or turn-taking genuinely requires the live socket — which is
+> exactly why that is the named next step rather than something I'm claiming."
+
+Volunteered, this is a scoping decision. Discovered by him, it looks like you
+did not know the difference. Same fact, opposite read.
+
+### Turn-taking is his team's problem, and the most Labs-relevant thing here
+
+The one finding the project *doesn't* have is the one he will care about most:
+does degradation break endpointing before it breaks transcription? Have the
+design ready — it shows you would do it correctly:
+
+- **Inject the degraded WAV bytes into the live socket, chunked and paced to
+  realtime.** Reproducible, no audio hardware, still exercises the real
+  streaming and endpointing path.
+- **Never play audio through speakers into a mic for measurement.** That
+  re-introduces uncontrolled room acoustics *on top of* the simulated ones and
+  destroys the counterfactual-isolation premise the whole rig rests on. A party
+  trick, not a measurement.
+- `utterance_end_ms` is **a parameter you chose**, not a property you
+  discovered — and the ~0.5 s of trailing room tone in every clip may itself
+  trip the endpointer, so it has to be set deliberately and reported.
+
+### Connect empty transcripts to an agent failure — the mute zone is the evidence
+
+The strongest *product* observation available, and after the correction it is no
+longer an anecdote: it is a **measured category** with 7 conditions in it, plus
+the §2 payoff clip where 10 of 40 clips vanished at **20 dB SNR**.
+
+> "An agent receiving an empty transcript cannot distinguish *'the user said
+> nothing'* from *'the user spoke and we failed.'* Those require opposite
+> behaviours — keep waiting versus ask them to repeat. And confidence cannot
+> help you at all here, because there are no words to attach a confidence to.
+> That's why I split mute zones out rather than counting them as dead zones: a
+> confidence-based monitor isn't merely bad at them, it's structurally blind to
+> them. It's a hole a voice agent falls into silently."
+
+### Be ready for "do you know what our confidence actually is?"
+
+He may know precisely what the value represents. Do not bluff. The honest answer
+is also the strongest one:
+
+> "From outside it is a black box. I treat it as an *ordinal* signal within a
+> single model — never comparable across vendors, which is why every cross-model
+> claim goes through within-model percentiles. L2 asks whether a thin learned
+> layer can turn it into a calibrated probability, and it can: ECE 0.051 to
+> 0.008. If you can tell me what it actually represents, that changes what the
+> calibrator should be conditioning on."
+
+Ending on a question is good here. Labs engineers like being asked.
+
+**One caution:** "vendor confidence is not a calibrated probability" is the
+*premise* of that layer, not a criticism of their product. Say it that way.
+
+### On novelty
+
+Labs values ambition, and the positioning rule says claim none. Not in tension:
+claim no novelty of **method**, be ambitious about **what you would build next**
+— the live agent leg, DRR-parameterised reverb axes, and what field data would
+earn that simulation cannot.
+
+---
+
+## The three things to be sure you say
+
+1. *"This genre is well-trodden and nothing in the method is novel."* — first
+   five minutes, unprompted.
+2. *"The active-learning leg is a null, and here is the control proving the
+   method works on a surface that has structure."*
+3. *"My headline was inflated because I paired two different populations. I
+   found it by listening to the audio, not by running a test, and the fix
+   produced a category — the mute zone — that a confidence monitor cannot see at
+   all."*
