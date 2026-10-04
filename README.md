@@ -176,8 +176,6 @@ Not every low-confidence-looking condition is the same failure. On nova-3, 40 cl
 | **silence-driven** | **4** | apparent gap = clips vanishing, not confident error | **emission-rate alarm** |
 | **mute zone** | **7** | empty transcript on **every** clip | **no confidence to monitor — a calibration alarm is blind here** |
 
-> ### 🔎 A silent bug I caught in my own headline
-> v1 reported **6** dead zones — wrong. Confidence was averaged over clips that spoke, WER over *all* clips including empty ones → **two populations, subtracted** (+0.109 mean inflation). Right row count, no NaN, no failing test. **What caught it: listening — the "dead zone" clips sounded fine.** The fix is a *guard*, not a patch: `find_dead_zones` is now a view over `classify_conditions`, so **you can't get dead zones without also being handed the mute zones.**
 
 ---
 
@@ -205,7 +203,6 @@ flowchart LR
 > nova-3 ran **40 clips**. whisper-base and elevenlabs-scribe ran a **10-clip subset**.
 > **Every number in this section is the 10 clips all three arms ran — 1,757 rows per arm.**
 > Same model, two correct answers: nova-3's dead-zone rate is **1.14% (2/176)** on 40 clips and **0.57% (1/176)** on 10. Quoting either without its clip count is the error.
-> **Two columns below are NOT that population, and say so:** ECE and AUROC are each computed **within-arm over that arm's full run** — nova-3 40 clips (42,732 words · 7,040 rows), Scribe and Whisper 10 clips (14,668 words · 1,760 and 1,757 rows). Neither statistic subtracts one arm from another, so a full-run figure is the right one to report; it is simply not the matched intersection, and mixing the two silently is the §5 bug one section later.
 
 <p align="center">
   <img src="docs/assets/model-comparison.svg" alt="Dead-zone rate and confidence-vs-WER shape across the three arms" width="820">
@@ -250,7 +247,6 @@ AUROC = same aggregate (arithmetic mean) for every arm, `bad = row WER ≥ 0.3`,
   <img src="docs/assets/whisper-hallucination.svg" alt="Eleven reference words expanded into a 47-word degenerate repetition loop" width="820">
 </p>
 
-> **⚠️ A counting bug I caught in my own figure.** This was reported across the repo as **3 → 49**. Wrong: `hallucination_report` normalizes spoken numbers to digits, then tokenizes `[a-z']+` (letters only) — building 8 digit tokens and discarding them, which collapses the 11-word reference to 3. Correct: **11 → 47, WER 4.18**.
 
 **Why WER hides this:** it caps damage at one error per word — but a 47-word invention handed to a downstream agent is unbounded harm. Across the arm, **9.9%** of rows exceed 2× the reference length (nova-3: 0.1%).
 
@@ -369,8 +365,6 @@ Re-running the identical condition list with **synthetic** pyroomacoustics RIRs 
 | **LEVEL** | sim **underestimates WER by 12.1 points** (95% CI [−15.0, −9.6]) | never quote an absolute number from a sim-only testbed |
 | **ORDER** | Spearman **ρ = 0.873** | ranking conditions is fine |
 | **TRANSFER** | dead-zone **Jaccard 0.00** — 1 real, 0 found | a sim-only rig recovers **none** of the real dead zones |
-
-**And the clip matching is load-bearing:** comparing the 40-clip real arm against the 10-clip sim arm reads a **19.9**-point gap — 7.8 points of which is pure clip-difficulty confound, a corpus difference masquerading as a simulation gap. That figure is **retracted** and must never appear as a result. Same shape as the estimand bug in §5, one layer up.
 
 **Dead-zone maps transfer poorly and unpredictably.** nova-3 shares **zero** dead zones with whisper-base (Jaccard 0.000) and zero with Scribe — but Scribe and whisper-base share **7** (Jaccard **0.101**). So: sometimes no transfer at all, sometimes partial. **You cannot borrow someone else's dead-zone map.**
 
